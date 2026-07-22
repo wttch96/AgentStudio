@@ -4,14 +4,16 @@
 
 Agent Studio 是一个仅限本机访问的软件工程 Agent 工作台。系统采用一个主脑、三个执行 Agent 的简化结构：
 
-- **DeepSeek 主脑**：理解目标、做架构判断、生成任务 DAG、决定依赖关系，并在执行结束后验收和汇总结果。
-- **Claude frontend-agent**：负责 Vue 前端实现、前端测试和构建检查。
-- **Claude backend-agent**：负责 Flask/Python 后端、LangGraph 编排相关实现、后端测试和静态检查。
+- **DeepSeek 主脑**：读取项目发现结果、选择真实项目、定义共享接口或协议契约、生成实施 DAG，并在执行结束后验收和汇总结果。
+- **Claude frontend-agent**：在所选工作空间中发现并处理 Web 前端项目、测试和构建检查。
+- **Claude backend-agent**：在所选工作空间中发现并处理普通业务后端、API、持久化与项目测试。
 - **Claude netty-agent**：负责 Java Netty 数据接收、拆包解析、编码发送和传输层测试。
 
 LangGraph 不参与模型层面的“思考”，只负责可靠执行 DeepSeek 生成的 DAG；Claude Agent 不负责全局调度，只在分配到的节点内自主读取代码、修改文件和运行工具。
 
-规划前，后端会向 DeepSeek 提供当前工作目录最多两层的路径名称，帮助它识别真实的 frontend、backend 和 Netty 子项目，不读取文件内容或 `.env`。规划后还会执行确定性领域校验：用户明确提到“前后端”时，DAG 必须同时包含 frontend-agent 与 backend-agent；明确排除某个领域时，对应节点会被移除。这样模型提示词负责语义拆解，代码约束负责保证用户明确指定的 Agent 不会漏调。
+普通任务采用两阶段图。第一阶段由相关 Claude Agent 在用户选择的整个工作空间内只读搜索构建清单、源码入口、现有 API/协议和候选项目路径；第二阶段才由 DeepSeek 读取这些过滤结果，选择实际项目、生成共享契约与实施 DAG。后端提供的两层路径索引只作为补充，不再充当项目识别的主要依据，也不会读取 `.env` 内容。
+
+主脑的规划决策提示词和最终验收提示词可在配置中心编辑。版本库默认模板位于 `config/brain.default.json`，页面保存后的覆盖配置持久化到本机 `backend/instance/brain.json`。Agent 白名单、JSON Schema、相对工作空间路径等控制协议由代码固定追加，避免误编辑导致 LangGraph 接收不可执行计划。
 
 ## 一键启动
 
@@ -122,7 +124,13 @@ config/claude-settings.cc-switch.example.json
 
 ## 页面配置中心
 
-工作台右上角提供“配置中心”，无需手工打开文件即可维护 Agent、Skill 和默认工作目录。
+工作台右上角提供“配置中心”，无需手工打开文件即可维护主脑、Agent、Skill、默认工作目录和调度限制。
+
+### 主脑配置
+
+“主脑配置”可编辑两个 DeepSeek 提示词：规划与决策提示词负责根据项目发现结果选择真实项目、定义共享契约并拆分实施 DAG；最终验收提示词负责核对所选项目、契约、代码修改和测试结果。首次使用会读取 `config/brain.default.json`；页面中的“加载默认配置”可以随时把模板重新填入编辑器，确认保存后写入本机 `backend/instance/brain.json`，从下一次 DeepSeek 调用开始生效。
+
+三个 Agent 的固定白名单、`TaskDag` JSON Schema、相对工作空间路径和禁止重复发现节点等控制协议不会暴露给页面修改，而是由后端追加到规划提示词后，防止误配置破坏图结构。
 
 ### Agent 配置
 
@@ -192,6 +200,7 @@ flowchart TD
     API["Flask REST / SSE"]
     RUN["RunManager 后台运行"]
     BRAIN["DeepSeek 主脑"]
+    BRAIN_CONFIG["可编辑主脑提示词"]
     GRAPH["LangGraph DAG 执行器"]
     FRONT["Claude frontend-agent"]
     BACK["Claude backend-agent"]
@@ -205,10 +214,11 @@ flowchart TD
     UI -->|"创建、取消、查询"| API
     API --> RUN
     RUN --> GRAPH
-    GRAPH -->|"规划与最终验收"| BRAIN
-    BRAIN -->|"结构化 TaskDag"| GRAPH
+    GRAPH -->|"发现结果、规划与最终验收"| BRAIN
+    BRAIN_CONFIG --> BRAIN
+    BRAIN -->|"共享契约 + 结构化 TaskDag"| GRAPH
     GRAPH -->|"前端节点"| FRONT
-    GRAPH -->|"Flask/Python 节点"| BACK
+    GRAPH -->|"业务后端节点"| BACK
     GRAPH -->|"Netty 传输节点"| NETTY
     DEFINITIONS --> FRONT
     DEFINITIONS --> BACK
@@ -246,11 +256,12 @@ RunManager._execute
     └── graph.invoke(...)
 ```
 
-图包含五类节点：
+图包含六类节点：
 
 | 节点 | 作用 |
 | --- | --- |
-| `plan` | 调用 DeepSeek 主脑生成并校验 `TaskDag` |
+| `plan` | 为普通任务生成只读项目发现 DAG；直接命令则装载预设 DAG |
+| `replan_after_discovery` | 汇流发现结果，调用 DeepSeek 选择项目、定义契约并生成实施 DAG |
 | `scheduler` | 根据已完成结果判断下一批就绪任务 |
 | `worker` | 调用 frontend、backend 或 netty Claude Agent |
 | `barrier` | 等待当前 super-step 的全部 worker 返回并汇流结果 |
@@ -261,10 +272,10 @@ RunManager._execute
 这种用法提供了：
 
 - 动态任务数量与动态依赖。
-- 前端、Flask 后端和 Netty 节点的并行执行。
+- Web 前端、普通业务后端和 Netty 节点的并行执行。
 - 每轮结果汇合后再继续调度。
 - `max_concurrency` 并发限制。
-- 明确的 plan → schedule → work → synthesize 生命周期。
+- 明确的 discover → replan/contract → implement → synthesize 生命周期。
 
 当前 SQLite 保存的是应用运行和前端事件；尚未接入 LangGraph 持久化 checkpointer。需要节点级断点恢复时，可以在现有 `compile()` 位置增加 SQLite 或 PostgreSQL checkpointer。
 
@@ -272,14 +283,15 @@ RunManager._execute
 
 1. Vue 调用 `POST /api/runs` 提交用户目标。
 2. Flask 创建运行记录，`RunManager` 在后台线程启动 LangGraph。
-3. LangGraph 的 `plan` 节点调用 DeepSeek 主脑。
-4. DeepSeek 返回经过 Pydantic 校验的 `TaskDag`，任务只能交给 `frontend-agent`、`backend-agent` 或 `netty-agent`。
-5. `scheduler` 找出依赖已经满足的节点，并通过 LangGraph `Send` 并行分发。
-6. `worker` 读取对应的 Agent Markdown，通过 Claude Agent SDK 启动专业 Agent。
-7. Claude Agent 在自己的职责范围内自主调用 Read、Edit、Bash 等工具，并把消息、工具和 Skill 事件写入 SQLite。
-8. 并行节点完成后，LangGraph reducer 合并结果并继续检查下一批依赖。
-9. 所有可执行节点结束后，DeepSeek 主脑再次读取计划和执行结果，进行最终验收与汇总。
-10. Vue 通过 SSE 按序接收事件，展示 DAG、Agent 状态、工具调用和最终结果。
+3. `plan` 创建与目标相关的只读项目发现节点。
+4. `scheduler` 通过 LangGraph `Send` 并行启动专业 Agent，在整个工作空间中搜索并过滤候选项目。
+5. 发现波次经过 `barrier` 汇流，`replan_after_discovery` 将全部结果交给 DeepSeek。
+6. DeepSeek 选择真实项目，生成 `coordination_contract` 与经过 Pydantic 校验的实施 `TaskDag`。
+7. 实施节点都收到同一份契约和发现结果；没有真实代码依赖的前后端节点在同一波次并行编码。
+8. `worker` 读取对应 Agent Markdown，通过 Claude Agent SDK 自主调用 Read、Edit、Bash 和 Skill，并记录事件。
+9. 每个专业 Agent 在被选项目中完成实现、测试与自检，不能写出主脑给定的 `write_scope`。
+10. 所有实施波次汇流后，DeepSeek 读取发现结果、契约和执行结果进行最终验收。
+11. Vue 通过 SSE 展示发现、契约、DAG、Agent 调用和最终结果。
 
 ### 为什么只保留三个 Claude Agent
 
@@ -287,7 +299,7 @@ RunManager._execute
 
 - 架构判断和任务依赖由 DeepSeek 主脑负责。
 - 前端测试和构建检查由 `frontend-agent` 自己完成。
-- Flask/Python 后端测试和静态检查由 `backend-agent` 自己完成。
+- 普通业务后端测试和静态检查由 `backend-agent` 自己完成。
 - Netty 协议、收发链路和传输层测试由 `netty-agent` 自己完成。
 - 跨任务验收和结果审查由 DeepSeek 主脑在汇总阶段完成。
 
@@ -298,20 +310,23 @@ RunManager._execute
 ```mermaid
 flowchart TD
     USER["用户提交目标"] --> CREATE["Flask 创建 Run"]
-    CREATE --> PLAN["DeepSeek 主脑分析与生成 TaskDag"]
-    PLAN --> VALIDATE{"Pydantic DAG 校验"}
+    CREATE --> DISCOVER["LangGraph 创建只读项目发现 DAG"]
+    DISCOVER --> FRONT_FIND["frontend-agent 搜索前端候选"]
+    DISCOVER --> BACK_FIND["backend-agent 搜索后端候选"]
+    DISCOVER --> NETTY_FIND["netty-agent 搜索 Netty 候选"]
+    FRONT_FIND --> FILTER_JOIN["发现结果汇流"]
+    BACK_FIND --> FILTER_JOIN
+    NETTY_FIND --> FILTER_JOIN
+    FILTER_JOIN --> BRAIN["DeepSeek 选择真实项目并定义共享契约"]
+    BRAIN --> VALIDATE{"实施 TaskDag 校验"}
     VALIDATE -->|"失败"| FAIL["记录 run.failed"]
-    VALIDATE -->|"通过"| READY["LangGraph scheduler 查找就绪节点"]
-
-    READY --> ROUTE{"按任务类型路由"}
-    ROUTE -->|"Vue / TypeScript"| FRONT["frontend-agent"]
-    ROUTE -->|"Flask / Python"| BACK["backend-agent"]
-    ROUTE -->|"Netty 收发 / 协议"| NETTY["netty-agent"]
-
-    FRONT --> TOOLS["自主调用 Tool / Skill"]
-    BACK --> TOOLS
-    NETTY --> TOOLS
-    TOOLS --> RESULT["合并 AgentResult"]
+    VALIDATE -->|"通过"| READY["LangGraph scheduler 查找实施节点"]
+    READY --> FRONT["frontend-agent 按契约编码"]
+    READY --> BACK["backend-agent 按契约编码"]
+    READY --> NETTY["netty-agent 按协议编码"]
+    FRONT --> RESULT["实施结果汇流"]
+    BACK --> RESULT
+    NETTY --> RESULT
     RESULT --> MORE{"仍有依赖已满足的节点？"}
     MORE -->|"是"| READY
     MORE -->|"否"| REVIEW["DeepSeek 主脑最终验收与汇总"]
@@ -335,11 +350,12 @@ backend/app/
 ├── events/
 │   └── publisher.py          所有运行事件的统一入口
 ├── orchestration/
-│   └── graph.py              LangGraph plan/scheduler/worker/synthesize
+│   └── graph.py              LangGraph discover/replan/worker/synthesize
 ├── planning/
 │   └── deepseek_planner.py   DeepSeek 规划和最终验收
 ├── services/
 │   ├── container.py          显式依赖组装
+│   ├── brain_settings.py     主脑提示词默认值与本地持久化
 │   └── run_manager.py        后台线程、取消信号和运行生命周期
 └── storage/
     └── sqlite_store.py       运行历史与有序事件持久化
@@ -409,12 +425,13 @@ skills:
 
 [`agents/frontend-agent.md`](../agents/frontend-agent.md) 负责：
 
-- Vue 3、TypeScript、Vite 和前端组件实现。
-- 前端 API 类型、SSE 状态和交互体验。
+- 递归搜索构建清单、框架配置、请求层和源码入口，过滤候选 Web 前端项目。
+- 沿用被选项目已有的 Vue、React、Angular 或其他前端技术栈。
+- 根据共享契约实现 API 类型、请求层和交互体验。
 - 加载态、空状态、错误态、取消与断线恢复。
 - 可访问性、窄屏布局和键盘操作。
 - 前端测试、TypeScript 检查和生产构建。
-- 默认只修改 `frontend/`，不能擅自修改后端协议。
+- 只修改 DeepSeek 从发现结果中给出的精确 `write_scope`，不能擅自修改共享契约。
 
 它适合接收“实现页面”“修改交互”“消费某个 API”“修复前端构建”等节点。
 
@@ -422,12 +439,12 @@ skills:
 
 [`agents/backend-agent.md`](../agents/backend-agent.md) 负责：
 
-- Flask API、领域模型、持久化和服务层实现。
-- LangGraph 节点、调度状态和模型适配器实现。
-- DeepSeek、Claude Agent SDK 以及统一事件协议的后端接入。
+- 递归搜索 Maven/Gradle、Python、Go、Node 等构建清单、服务入口和现有 API，过滤候选业务后端项目。
+- 沿用被选项目已有语言、框架、领域分层、持久化方式与构建工具。
+- 根据共享契约实现 API，并同步项目已有的 OpenAPI 或等效接口文档。
 - 密钥隔离、回环地址限制和错误处理。
 - 后端测试、Ruff 静态检查和运行验证。
-- 默认只修改 `backend/`，不能擅自改变前端行为。
+- 只修改 DeepSeek 从发现结果中给出的精确 `write_scope`，不能静默改变契约字段。
 
 它适合接收“增加 API”“调整 DAG”“修改数据库”“接入工具”“修复后端测试”等节点。
 
@@ -443,9 +460,9 @@ skills:
 - 畸形报文、超长帧、超时、断连和未知消息类型的错误处理。
 - 使用 `EmbeddedChannel` 进行解码器、编码器和 Handler 边界测试。
 - Maven/Gradle 测试和静态检查。
-- 默认只修改 `netty/` 或任务明确指定的 Java Netty 模块。
+- 先搜索并过滤真实 Netty 模块，再只修改主脑给出的 `write_scope`。
 
-它适合接收“实现 TCP 数据接入”“解析设备协议”“处理粘包拆包”“编码并发送响应”“增加心跳重连”等节点。普通 Flask/Python 业务接口仍应交给 `backend-agent`。
+它适合接收“实现 TCP 数据接入”“解析设备协议”“处理粘包拆包”“编码并发送响应”“增加心跳重连”等节点。普通 HTTP/业务服务接口仍应交给 `backend-agent`。
 
 ## Agent 与 Skill 的声明位置
 
@@ -515,39 +532,40 @@ DeepSeek 主脑输出类似：
 ```json
 {
   "summary": "实现一个前后端任务管理功能",
+  "coordination_contract": "POST /api/tasks；请求 name:string；成功返回 {id,name,status}；校验失败返回 400。前后端共同使用该字段定义。",
   "tasks": [
     {
       "id": "backend-api",
       "title": "实现任务 API 并运行后端测试",
-      "objective": "实现创建和查询任务的 Flask API",
+      "objective": "在 services/task-api 中按共享契约实现创建任务 API，并更新现有 OpenAPI 文档",
       "agent": "backend-agent",
-      "depends_on": [],
-      "write_scope": ["backend/"]
+      "depends_on": ["workspace-discovery-frontend", "workspace-discovery-backend"],
+      "write_scope": ["services/task-api/"]
     },
     {
       "id": "frontend-ui",
       "title": "实现任务页面并完成构建检查",
-      "objective": "实现任务列表和创建交互",
+      "objective": "在 apps/admin-web 中按共享契约实现任务列表和创建交互",
       "agent": "frontend-agent",
-      "depends_on": ["backend-api"],
-      "write_scope": ["frontend/"]
+      "depends_on": ["workspace-discovery-frontend", "workspace-discovery-backend"],
+      "write_scope": ["apps/admin-web/"]
     }
   ]
 }
 ```
 
-Pydantic 会拒绝重复 ID、未知依赖、自依赖、循环依赖和未知 Agent。LangGraph 的控制图是固定的，变化的是 `TaskDag` 数据，不会根据模型输出动态执行任意 Python 代码。
+示例中的两个实施节点共享契约和发现依赖，但不互相依赖，因此会并行编码。Pydantic 会拒绝重复 ID、未知依赖、自依赖、循环依赖和未知 Agent。LangGraph 的控制图是固定的，变化的是 `TaskDag` 数据，不会根据模型输出动态执行任意 Python 代码。
 
 ## 统一事件
 
 后端会生成以下主要事件：
 
 - `run.started`、`run.completed`、`run.failed`、`run.cancelled`
-- `planner.started`、`planner.bypassed`、`plan.created`
+- `workspace.discovery_started`、`planner.started`、`planner.bypassed`、`plan.created`
 - `wave.started`、`wave.completed`
 - `agent.started`、`agent.message`、`agent.completed`、`agent.failed`
 - `tool.started`、`skill.loaded`、`agent.usage`
-- `brain.synthesizing`、`run.summary`
+- `brain.contract_created`、`brain.synthesizing`、`run.summary`
 
 事件在 SQLite 中按每个运行的 `sequence` 单调递增。SSE 断线后，前端可以带上最后一个序号继续接收，避免重复显示。
 
@@ -579,6 +597,9 @@ DeepSeek 规划尚未返回时，时间线会持续显示已等待秒数，并�
 | `GET` | `/api/workspace/directories` | 浏览指定目录下的子文件夹 |
 | `GET` | `/api/scheduler` | 读取持久化的 LangGraph 调度配置 |
 | `PUT` | `/api/scheduler` | 校验并保存调度配置 |
+| `GET` | `/api/brain` | 读取 DeepSeek 主脑规划与验收提示词 |
+| `GET` | `/api/brain/default` | 读取版本库中的默认主脑模板 |
+| `PUT` | `/api/brain` | 校验并保存主脑提示词到本机 |
 | `GET` | `/api/deepseek/balance` | 读取 DeepSeek 余额；加 `?refresh=1` 可跳过缓存 |
 | `GET` | `/api/deepseek/usage` | 读取本机 SQLite 累计的 token 与费用估算 |
 | `DELETE` | `/api/runs/<run_id>` | 删除已结束的运行及其全部事件 |
@@ -590,13 +611,13 @@ DeepSeek 规划尚未返回时，时间线会持续显示已等待秒数，并�
 ```text
 .
 ├── backend/                  Flask、LangGraph、模型接入和 SQLite
-│   └── instance/             SQLite 与工作目录配置（运行时生成、已忽略）
+│   └── instance/             SQLite、工作目录与主脑配置（运行时生成、已忽略）
 ├── frontend/                 Vue 3 工作台
 ├── agents/                   三个 Claude Agent Markdown
 ├── .claude/skills/           可选的项目级 Claude Skills
 ├── scripts/                  本地启动和停止实现
 ├── .env.example              DeepSeek 与 CC Switch 配置示例
-├── config/                   Claude Code 配置片段示例
+├── config/                   默认主脑与 Claude Code 配置示例
 ├── start.sh                  一键启动入口
 └── stop.sh                   一键停止入口
 ```

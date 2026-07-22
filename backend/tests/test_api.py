@@ -131,6 +131,33 @@ def test_scheduler_configuration_is_validated_and_persisted(client):
     assert invalid.status_code == 400
 
 
+def test_brain_prompts_are_editable_and_persisted_locally(client):
+    current = client.get("/api/brain")
+    assert current.status_code == 200
+    assert "工作空间" in current.json["planning_prompt"]
+    assert "最终验收" in current.json["summary_prompt"]
+    default = client.get("/api/brain/default")
+    assert default.status_code == 200
+    assert default.json == current.json
+
+    payload = {
+        "planning_prompt": "优先根据项目发现证据选择真实项目，再定义共享接口契约并拆分实施任务。" * 2,
+        "summary_prompt": "汇总实际选择的项目、契约、改动、测试和遗留风险，不得编造结果。",
+    }
+    updated = client.put("/api/brain", json=payload)
+    assert updated.status_code == 200
+    assert updated.json == payload
+    assert client.get("/api/brain").json == payload
+    assert client.get("/api/brain/default").json == default.json
+
+    config_path = client.application.extensions["services"].brain.config_path
+    assert config_path.exists()
+    assert "共享接口契约" in config_path.read_text(encoding="utf-8")
+
+    invalid = client.put("/api/brain", json={**payload, "planning_prompt": "太短"})
+    assert invalid.status_code == 400
+
+
 def test_demo_run_completes(client):
     response = client.post("/api/runs", json={"objective": "创建一个本地任务面板"})
     assert response.status_code == 202
@@ -147,7 +174,14 @@ def test_demo_run_completes(client):
     assert run["workspace_root"] == client.get("/api/workspace").json["path"]
     event_types = {event["type"] for event in run["events"]}
     assert {"plan.created", "agent.started", "brain.synthesizing", "run.completed"} <= event_types
-    plan_event = next(event for event in run["events"] if event["type"] == "plan.created")
+    plan_events = [event for event in run["events"] if event["type"] == "plan.created"]
+    assert [event["payload"]["stage"] for event in plan_events] == [
+        "discovery",
+        "execution",
+    ]
+    plan_event = plan_events[-1]
+    assert plan_event["payload"]["coordination_contract"]
+    assert len(plan_event["payload"]["tasks"]) == 6
     planned_agents = {task["agent"] for task in plan_event["payload"]["tasks"]}
     assert planned_agents == {"frontend-agent", "backend-agent", "netty-agent"}
 

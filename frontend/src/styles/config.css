@@ -38,7 +38,7 @@
 .config-header > button { display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: 14px; background: rgba(118,118,128,.24); color: var(--secondary); cursor: pointer; font-size: 1.25rem; line-height: 1; }
 .config-header > button:hover { background: rgba(118,118,128,.4); color: var(--label); }
 
-.config-tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; margin: 0 22px; padding: 2px; border-radius: 9px; background: rgba(118,118,128,.2); }
+.config-tabs { display: grid; grid-template-columns: repeat(5, 1fr); gap: 2px; margin: 0 22px; padding: 2px; border-radius: 9px; background: rgba(118,118,128,.2); }
 .config-tabs button { border: 0; border-radius: 7px; padding: 7px 12px; background: transparent; color: var(--secondary); cursor: pointer; font-size: .625rem; font-weight: 550; }
 .config-tabs button.active { background: #636366; box-shadow: 0 1px 4px rgba(0,0,0,.3); color: #fff; }
 
@@ -85,6 +85,15 @@
 .directory-list small { overflow: hidden; color: var(--tertiary); font-size: .5rem; text-overflow: ellipsis; white-space: nowrap; }
 
 .scheduler-intro { display: flex; align-items: center; gap: 11px; padding: 13px; border-radius: 12px; background: rgba(191,90,242,.1); }
+.brain-intro { display: flex; align-items: center; gap: 11px; padding: 13px; border-radius: 12px; background: rgba(10,132,255,.1); }
+.brain-intro > div { display: flex; flex-direction: column; gap: 4px; }
+.brain-intro > div { min-width: 0; flex: 1; }
+.brain-intro strong { font-size: .6875rem; font-weight: 620; }
+.brain-intro p { margin: 0; color: var(--secondary); font-size: .5625rem; line-height: 1.5; }
+.brain-intro > button { flex: 0 0 auto; border: 0; border-radius: 8px; padding: 7px 9px; background: var(--blue-soft); color: #64d2ff; cursor: pointer; font-size: .5rem; font-weight: 600; }
+.brain-intro > button:hover { background: rgba(10,132,255,.25); }
+.brain-intro > button:disabled { opacity: .4; cursor: wait; }
+.brain-prompt { min-height: 150px; }
 .scheduler-intro > div { display: flex; flex-direction: column; gap: 4px; }
 .scheduler-intro strong { font-size: .6875rem; font-weight: 620; }
 .scheduler-intro p { margin: 0; color: var(--secondary); font-size: .5625rem; }

@@ -11,6 +11,7 @@ from app.events.publisher import EventPublisher
 from app.planning.deepseek_planner import DeepSeekPlanner
 from app.services.deepseek_balance import DeepSeekBalanceService
 from app.services.deepseek_usage import DeepSeekUsageService
+from app.services.brain_settings import BrainSettings
 from app.services.run_manager import RunManager
 from app.services.scheduler_settings import SchedulerSettings
 from app.services.workspace_settings import WorkspaceSettings
@@ -26,6 +27,7 @@ class ServiceContainer:
     skills: SkillRegistry
     workspace: WorkspaceSettings
     scheduler: SchedulerSettings
+    brain: BrainSettings
     deepseek_balance: DeepSeekBalanceService
     deepseek_usage: DeepSeekUsageService
     planner: DeepSeekPlanner
@@ -52,9 +54,13 @@ class ServiceContainer:
                 agent_timeout_seconds=settings.agent_timeout_seconds,
             ),
         )
+        brain = BrainSettings(
+            settings.instance_dir / "brain.json",
+            settings.workspace_root / "config" / "brain.default.json",
+        )
         deepseek_balance = DeepSeekBalanceService(settings)
         deepseek_usage = DeepSeekUsageService(settings, store)
-        planner = DeepSeekPlanner(settings, deepseek_usage)
+        planner = DeepSeekPlanner(settings, deepseek_usage, brain)
         executor = ClaudeAgentExecutor(settings, registry, events)
         runs = RunManager(
             store,
@@ -72,6 +78,7 @@ class ServiceContainer:
             skills,
             workspace,
             scheduler,
+            brain,
             deepseek_balance,
             deepseek_usage,
             planner,

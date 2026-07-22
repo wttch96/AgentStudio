@@ -1,21 +1,23 @@
 # Agent Studio
 
-Agent Studio 是一个仅在本机运行的软件工程 Agent 工作台。你只需要描述目标，DeepSeek 会生成任务 DAG，LangGraph 负责并行调度和汇流，Claude 专业 Agent 则读取项目、调用工具、加载 Skill 并完成实际工作。
+Agent Studio 是一个仅在本机运行的多项目软件工程 Agent 工作台。你先选择一个包含待改造项目的工作空间，再描述目标；Claude 专业 Agent 会搜索并过滤真实项目，DeepSeek 主脑根据发现结果选择项目、定义跨项目契约并生成实施 DAG，LangGraph 负责分流、并行执行和汇流。
 
 项目内置三个可配置的执行 Agent：
 
-- `frontend-agent`：Vue、TypeScript、页面交互和前端构建。
-- `backend-agent`：Flask、Python、LangGraph 编排和后端测试。
+- `frontend-agent`：发现并处理工作空间中的 Web 前端项目，不限定固定目录或框架。
+- `backend-agent`：发现并处理工作空间中的业务后端、API 和持久化项目。
 - `netty-agent`：Netty 数据接收、协议解析、编码发送和传输测试。
 
 > 项目强制绑定 `127.0.0.1`，配置、任务记录、Token 统计和工作目录信息都保存在本机。
 
 ## 主要功能
 
-### 自动规划和并行执行
+### 项目发现、契约规划和并行执行
 
-- DeepSeek 根据目标和工作区结构生成经过校验的任务 DAG。
-- LangGraph 按依赖关系把可并行节点同时分发给 Claude Agent。
+- 相关专业 Agent 先在所选工作空间中递归搜索构建清单、源码入口和已有接口，过滤候选项目；不会假定项目叫 `frontend/`、`backend/` 或 `netty/`。
+- 发现结果汇流后，DeepSeek 选择实际项目并生成共享 HTTP API 或二进制协议契约。
+- DeepSeek 再生成经过校验的实施 DAG，任务携带真实项目相对路径和精确 `write_scope`。
+- LangGraph 按依赖关系把可并行节点同时分发给 Claude Agent；契约明确后，前后端可以同步编码而不必互相等待。
 - 每一批 Agent 完成后经过显式 barrier 汇流，再执行下游节点。
 - DeepSeek 在普通任务结束时读取全部执行结果并做最终验收。
 
@@ -23,6 +25,7 @@ Agent Studio 是一个仅在本机运行的软件工程 Agent 工作台。你只
 
 - 实时显示规划、分流、Agent 启动、工具调用、Skill 加载、汇流和最终输出。
 - 多个 Agent 在独立泳道中并行展示。
+- 页面直接展示 DeepSeek 生成的共享接口/协议契约。
 - 每条 Agent 泳道可以独立折叠，折叠后保留任务标题和运行状态。
 - 连续的同名工具调用自动合并，展开后仍能查看每次调用参数。
 - 正在工作的 Agent 会在右侧状态栏持续闪烁，完成或失败后自动停止。
@@ -57,13 +60,14 @@ Agent Studio 是一个仅在本机运行的软件工程 Agent 工作台。你只
 
 无需手工编辑项目文件，即可在页面内管理：
 
+- DeepSeek 主脑的规划决策提示词和最终验收提示词。
 - Agent 的用途、系统提示词、工具权限和关联 Skill。
 - Skill 的创建、内容修改和 Agent 分配。
 - 默认工作目录的浏览、选择和持久化。
 - LangGraph 最大并行数和图递归上限。
 - Claude Agent 最大交互轮次和单节点超时时间。
 
-Agent 与 Skill 的配置分别写入 `agents/*.md` 和 `.claude/skills/*/SKILL.md`。
+默认主脑模板位于 `config/brain.default.json`。页面保存后的本机覆盖配置写入 `backend/instance/brain.json`；Agent 与 Skill 的配置分别写入 `agents/*.md` 和 `.claude/skills/*/SKILL.md`。
 
 ### DeepSeek 余额和本地用量
 
@@ -127,10 +131,10 @@ http://127.0.0.1:5173
 
 ## 使用流程
 
-1. 打开右上角“配置中心”，选择需要操作的本地项目目录。
-2. 根据任务复杂度调整 Agent 最大轮次、超时时间和并行数量。
+1. 打开右上角“配置中心”，选择包含一个或多个待改造项目的本地工作空间。
+2. 按需调整主脑提示词，以及 Agent 最大轮次、超时时间和并行数量。
 3. 在聊天框描述目标，或输入 `/` 直接选择专业 Agent。
-4. 在时间线中观察 DeepSeek 规划、LangGraph 分流和 Claude 工具调用。
+4. 在时间线中观察项目发现、DeepSeek 契约规划、LangGraph 分流和 Claude 工具调用。
 5. 任务结束后直接继续输入，基于上游输出开始下一轮。
 6. 某个节点失败时点击“重试”，或输入 `/retry <task-id>`。
 

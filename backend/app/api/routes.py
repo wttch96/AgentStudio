@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from app.domain.configuration import (
     AgentUpdate,
+    BrainConfiguration,
     SchedulerConfiguration,
     SkillCreate,
     SkillUpdate,
@@ -148,6 +149,25 @@ def update_scheduler():
         return jsonify(services().scheduler.update(payload).model_dump())
     except ValidationError as error:
         return jsonify({"error": "调度配置无效", "details": error.errors()}), 400
+
+
+@api.get("/brain")
+def get_brain():
+    return jsonify(services().brain.current().model_dump())
+
+
+@api.get("/brain/default")
+def get_default_brain():
+    return jsonify(services().brain.default().model_dump())
+
+
+@api.put("/brain")
+def update_brain():
+    try:
+        payload = BrainConfiguration.model_validate(request.get_json(silent=True) or {})
+        return jsonify(services().brain.update(payload).model_dump())
+    except ValidationError as error:
+        return jsonify({"error": "主脑配置无效", "details": error.errors()}), 400
 
 
 @api.get("/deepseek/balance")

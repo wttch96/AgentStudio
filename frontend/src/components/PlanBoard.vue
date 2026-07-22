@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import type { PlanTask, RunEvent } from '../types'
 
-const props = defineProps<{ tasks: PlanTask[]; events: RunEvent[]; canRetry: boolean }>()
+const props = defineProps<{
+  tasks: PlanTask[]
+  events: RunEvent[]
+  canRetry: boolean
+  contract: string
+}>()
 defineEmits<{ retry: [taskId: string] }>()
 
 function taskStatus(taskId: string) {
@@ -19,6 +24,10 @@ function taskStatus(taskId: string) {
       <span class="eyebrow">任务 DAG</span>
       <span>{{ tasks.length }} 个节点</span>
     </div>
+    <details v-if="contract" class="coordination-contract" open>
+      <summary>DeepSeek 共享接口 / 协议契约</summary>
+      <pre>{{ contract }}</pre>
+    </details>
     <div class="plan-grid">
       <article v-for="task in tasks" :key="task.id" class="plan-task" :class="taskStatus(task.id)">
         <div class="plan-task-top">

@@ -24,9 +24,22 @@ const agentEventTypes = new Set([
 ])
 
 const startEvents = computed(() =>
-  props.events.filter((event) =>
-    ['run.started', 'planner.started', 'planner.bypassed', 'plan.created'].includes(event.type),
-  ),
+  props.events.filter((event) => {
+    if (['run.started', 'workspace.discovery_started', 'planner.bypassed'].includes(event.type)) {
+      return true
+    }
+    if (event.type !== 'plan.created') return false
+    // 普通任务的实施计划在发现波次之后单独展示；直达命令没有发现波次，仍放在开头。
+    return event.payload.stage !== 'execution' || !hasDiscoveryTasks.value
+  }),
+)
+
+const decisionEvents = computed(() =>
+  props.events.filter((event) => {
+    if (!hasDiscoveryTasks.value) return false
+    if (['planner.started', 'brain.contract_created'].includes(event.type)) return true
+    return event.type === 'plan.created' && event.payload.stage === 'execution'
+  }),
 )
 
 const finishEvents = computed(() =>
@@ -36,12 +49,18 @@ const finishEvents = computed(() =>
 )
 
 const planningActive = computed(() => {
-  const started = props.events.some((event) => event.type === 'planner.started')
-  const finished = props.events.some((event) =>
-    ['plan.created', 'run.failed', 'run.cancelled'].includes(event.type),
+  const started = [...props.events].reverse().find((event) => event.type === 'planner.started')
+  if (!started) return false
+  return !props.events.some(
+    (event) =>
+      event.sequence > started.sequence
+      && ['plan.created', 'run.failed', 'run.cancelled'].includes(event.type),
   )
-  return started && !finished
 })
+
+const hasDiscoveryTasks = computed(() =>
+  props.tasks.some((task) => isDiscoveryTask(task)),
+)
 
 onMounted(() => {
   clock = window.setInterval(() => {
@@ -88,6 +107,10 @@ function taskEvents(taskId: string) {
   return props.events.filter(
     (event) => event.task_id === taskId && agentEventTypes.has(event.type),
   )
+}
+
+function isDiscoveryTask(task: PlanTask) {
+  return task.id.startsWith('workspace-discovery-')
 }
 
 function isLaneCollapsed(taskId: string) {
@@ -169,11 +192,15 @@ function waveSummary(tasks: PlanTask[]) {
 }
 
 function title(event: RunEvent) {
+  if (event.type === 'plan.created') {
+    return event.payload.stage === 'discovery' ? '项目发现 DAG 已生成' : '实施 DAG 已生成'
+  }
   const titles: Record<string, string> = {
     'run.started': '运行已启动',
+    'workspace.discovery_started': '正在搜索所选工作空间',
     'planner.started': 'DeepSeek 正在规划',
     'planner.bypassed': '已直接选择 Claude Agent',
-    'plan.created': '任务 DAG 已生成',
+    'brain.contract_created': 'DeepSeek 已生成共享契约',
     'agent.started': 'Agent 已启动',
     'agent.message': '思考与进展',
     'tool.started': '调用工具',
@@ -198,6 +225,8 @@ function detail(event: RunEvent) {
     return `已等待 ${elapsed} 秒 · DeepSeek 或模型代理响应较慢，系统仍在等待；你可以继续等待或停止本次运行。`
   }
   if (event.type === 'planner.bypassed') return '已跳过 DeepSeek 规划，直接执行指定 Agent'
+  if (event.type === 'workspace.discovery_started') return '专业 Agent 将先递归搜索并过滤与目标相关的真实项目'
+  if (event.type === 'brain.contract_created') return '前端、业务后端和 Netty 实施节点将共享同一份接口或协议定义'
   if (['run.completed', 'run.cancelled'].includes(event.type)) return ''
   if (typeof payload.text === 'string') return payload.text
   if (typeof payload.summary === 'string') return payload.summary
@@ -206,7 +235,11 @@ function detail(event: RunEvent) {
   if (typeof payload.tool === 'string') return payload.tool
   if (typeof payload.skill === 'string') return payload.skill
   if (event.type === 'plan.created') {
-    return `${(payload.tasks as unknown[] | undefined)?.length ?? 0} 个任务已排入执行图`
+    const tasks = (payload.tasks as PlanTask[] | undefined) ?? []
+    const count = payload.stage === 'execution'
+      ? tasks.filter((task) => !isDiscoveryTask(task)).length
+      : tasks.length
+    return `${count} 个${payload.stage === 'discovery' ? '只读发现' : '实施'}任务已排入执行图`
   }
   return ''
 }
@@ -381,6 +414,28 @@ function itemSequence(item: TimelineItem) {
           <strong>并行结果汇流</strong>
           <small>{{ waveSummary(wave.tasks) }}</small>
         </div>
+      </div>
+
+      <div
+        v-if="wave.tasks.some(isDiscoveryTask) && decisionEvents.length"
+        class="flow-decision"
+      >
+        <article
+          v-for="event in decisionEvents"
+          :key="event.sequence"
+          class="orchestrator-event"
+          :class="{ 'planning-active': event.type === 'planner.started' && planningActive }"
+        >
+          <div class="flow-event-icon" aria-hidden="true">{{ icon(event) }}</div>
+          <div>
+            <strong>{{ title(event) }}</strong>
+            <p v-if="detail(event)">{{ detail(event) }}</p>
+            <div v-if="event.type === 'planner.started' && planningActive" class="planning-progress" aria-hidden="true">
+              <i />
+            </div>
+          </div>
+          <span>#{{ event.sequence }}</span>
+        </article>
       </div>
     </div>
 

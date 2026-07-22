@@ -2,13 +2,14 @@
 import { ref } from 'vue'
 import type { AgentProfile, SkillProfile } from '../../types'
 import AgentConfigEditor from './AgentConfigEditor.vue'
+import BrainConfigEditor from './BrainConfigEditor.vue'
 import SchedulerConfigEditor from './SchedulerConfigEditor.vue'
 import SkillConfigEditor from './SkillConfigEditor.vue'
 import WorkspaceConfigEditor from './WorkspaceConfigEditor.vue'
 
 defineProps<{ agents: AgentProfile[]; skills: SkillProfile[] }>()
 defineEmits<{ close: []; saved: [] }>()
-const tab = ref<'agents' | 'skills' | 'workspace' | 'scheduler'>('agents')
+const tab = ref<'brain' | 'agents' | 'skills' | 'workspace' | 'scheduler'>('brain')
 </script>
 
 <template>
@@ -22,12 +23,14 @@ const tab = ref<'agents' | 'skills' | 'workspace' | 'scheduler'>('agents')
         <button type="button" aria-label="关闭配置中心" @click="$emit('close')">×</button>
       </header>
       <nav class="config-tabs" aria-label="配置类型">
+        <button type="button" :class="{ active: tab === 'brain' }" @click="tab = 'brain'">主脑配置</button>
         <button type="button" :class="{ active: tab === 'agents' }" @click="tab = 'agents'">Agent 配置</button>
         <button type="button" :class="{ active: tab === 'skills' }" @click="tab = 'skills'">Skill 编辑</button>
         <button type="button" :class="{ active: tab === 'workspace' }" @click="tab = 'workspace'">工作目录</button>
         <button type="button" :class="{ active: tab === 'scheduler' }" @click="tab = 'scheduler'">调度配置</button>
       </nav>
-      <AgentConfigEditor v-if="tab === 'agents'" :agents="agents" :skills="skills" @saved="$emit('saved')" />
+      <BrainConfigEditor v-if="tab === 'brain'" @saved="$emit('saved')" />
+      <AgentConfigEditor v-else-if="tab === 'agents'" :agents="agents" :skills="skills" @saved="$emit('saved')" />
       <SkillConfigEditor v-else-if="tab === 'skills'" :skills="skills" @saved="$emit('saved')" />
       <WorkspaceConfigEditor v-else-if="tab === 'workspace'" @saved="$emit('saved')" />
       <SchedulerConfigEditor v-else @saved="$emit('saved')" />

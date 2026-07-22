@@ -27,6 +27,7 @@ class GraphState(TypedDict, total=False):
     continuation_context: str
     preset_dag: dict[str, Any] | None
     direct_mode: bool
+    stage: str
     workspace_root: str
     dag: dict[str, Any]
     task: dict[str, Any]
@@ -48,21 +49,84 @@ def build_graph(
         run_id = state["run_id"]
         if state.get("preset_dag"):
             dag = TaskDag.model_validate(state["preset_dag"])
+            stage = "execution"
             events.emit(
                 run_id,
                 "planner.bypassed",
                 payload={"reason": "direct-agent-or-retry"},
             )
         else:
-            events.emit(run_id, "planner.started", payload={"model": "deepseek"})
-            dag = planner.create_dag(
-                state["objective"],
-                state["workspace_root"],
-                run_id=run_id,
-                continuation_context=state.get("continuation_context", ""),
+            events.emit(
+                run_id,
+                "workspace.discovery_started",
+                payload={"workspace_root": state["workspace_root"]},
             )
-        events.emit(run_id, "plan.created", payload=dag.model_dump())
-        return {"dag": dag.model_dump(), "results": []}
+            dag = planner.create_discovery_dag(state["objective"])
+            stage = "discovery"
+        events.emit(
+            run_id,
+            "plan.created",
+            payload={**dag.model_dump(), "stage": stage},
+        )
+        return {"dag": dag.model_dump(), "results": [], "stage": stage}
+
+    def replan_after_discovery(state: GraphState) -> GraphState:
+        """项目发现汇流后由 DeepSeek 选择项目、定义共享契约并生成实施 DAG。"""
+
+        run_id = state["run_id"]
+        discovery_dag = TaskDag.model_validate(state["dag"])
+        discovery_results = [
+            AgentResult.model_validate(item) for item in state.get("results", [])
+        ]
+        events.emit(
+            run_id,
+            "planner.started",
+            payload={"model": "deepseek", "phase": "implementation"},
+        )
+        implementation_dag = planner.create_dag(
+            state["objective"],
+            state["workspace_root"],
+            run_id=run_id,
+            continuation_context=state.get("continuation_context", ""),
+            discovery_results=discovery_results,
+        )
+
+        # 图阶段本身已形成屏障；把成功的发现节点显式加入依赖，既记录决策来源，
+        # 也让前端 DAG 能准确显示“先发现/定契约，再并行编码”的波次关系。
+        successful_discovery_ids = [
+            result.task_id
+            for result in discovery_results
+            if result.status == "completed"
+        ]
+        implementation_tasks = [
+            task.model_copy(
+                update={
+                    "depends_on": list(
+                        dict.fromkeys(
+                            [*successful_discovery_ids, *task.depends_on]
+                        )
+                    )
+                }
+            )
+            for task in implementation_dag.tasks
+        ]
+        combined_dag = TaskDag(
+            summary=implementation_dag.summary,
+            coordination_contract=implementation_dag.coordination_contract,
+            tasks=[*discovery_dag.tasks, *implementation_tasks],
+        )
+        if combined_dag.coordination_contract:
+            events.emit(
+                run_id,
+                "brain.contract_created",
+                payload={"text": combined_dag.coordination_contract},
+            )
+        events.emit(
+            run_id,
+            "plan.created",
+            payload={**combined_dag.model_dump(), "stage": "execution"},
+        )
+        return {"dag": combined_dag.model_dump(), "stage": "execution"}
 
     def ready_tasks(state: GraphState) -> list[DagTask]:
         dag = TaskDag.model_validate(state["dag"])
@@ -110,6 +174,7 @@ def build_graph(
                     {
                         "run_id": state["run_id"],
                         "workspace_root": state["workspace_root"],
+                        "dag": state["dag"],
                         "task": task.model_dump(),
                         "results": state.get("results", []),
                         "agent_max_turns": state["agent_max_turns"],
@@ -126,12 +191,22 @@ def build_graph(
 
     def worker(state: GraphState) -> GraphState:
         task = DagTask.model_validate(state["task"])
+        dag = TaskDag.model_validate(state["dag"])
         previous_results = [
             AgentResult.model_validate(item) for item in state.get("results", [])
         ]
         dependencies = [
             result for result in previous_results if result.task_id in task.depends_on
         ]
+        if dag.coordination_contract and not task.id.startswith("workspace-discovery-"):
+            dependencies.append(
+                AgentResult(
+                    task_id="deepseek-coordination-contract",
+                    agent="deepseek-brain",
+                    status="completed",
+                    summary=dag.coordination_contract,
+                )
+            )
         if context := state.get("continuation_context", ""):
             dependencies.append(
                 AgentResult(
@@ -188,6 +263,9 @@ def build_graph(
         )
         return {}
 
+    def route_after_barrier(state: GraphState) -> str:
+        return "replan_after_discovery" if state.get("stage") == "discovery" else "scheduler"
+
     def synthesize(state: GraphState) -> GraphState:
         dag = TaskDag.model_validate(state["dag"])
         results = [AgentResult.model_validate(item) for item in state.get("results", [])]
@@ -225,6 +303,7 @@ def build_graph(
     builder = StateGraph(GraphState)
     builder.add_node("plan", plan)
     builder.add_node("scheduler", scheduler)
+    builder.add_node("replan_after_discovery", replan_after_discovery)
     builder.add_node("worker", worker)
     builder.add_node("barrier", barrier)
     builder.add_node("synthesize", synthesize)
@@ -235,6 +314,11 @@ def build_graph(
     )
     # 同一 super-step 的 worker 全部完成后，只触发一次显式汇流屏障。
     builder.add_edge("worker", "barrier")
-    builder.add_edge("barrier", "scheduler")
+    builder.add_conditional_edges(
+        "barrier",
+        route_after_barrier,
+        ["replan_after_discovery", "scheduler"],
+    )
+    builder.add_edge("replan_after_discovery", "scheduler")
     builder.add_edge("synthesize", END)
     return builder.compile()

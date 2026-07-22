@@ -30,6 +30,7 @@ class TaskDag(BaseModel):
     """有向无环任务图。校验阶段拒绝未知依赖、重复 ID 和循环。"""
 
     summary: str = Field(min_length=1, max_length=1000)
+    coordination_contract: str = Field(default="", max_length=12_000)
     tasks: list[DagTask] = Field(min_length=1, max_length=20)
 
     @model_validator(mode="after")

@@ -228,9 +228,15 @@ export function useWorkspace() {
     )
   }
 
-  const plan = computed<PlanTask[]>(() => {
-    const event = state.events.find((item) => item.type === 'plan.created')
-    return (event?.payload.tasks as PlanTask[] | undefined) ?? []
+  const latestPlanEvent = computed(() =>
+    [...state.events].reverse().find((item) => item.type === 'plan.created'),
+  )
+  const plan = computed<PlanTask[]>(() =>
+    (latestPlanEvent.value?.payload.tasks as PlanTask[] | undefined) ?? [],
+  )
+  const planContract = computed(() => {
+    const value = latestPlanEvent.value?.payload.coordination_contract
+    return typeof value === 'string' ? value : ''
   })
 
   const agentEvents = computed(() => state.events.filter((event) => event.agent_id))
@@ -241,6 +247,7 @@ export function useWorkspace() {
   return {
     state,
     plan,
+    planContract,
     agentEvents,
     isRunning,
     initialize,

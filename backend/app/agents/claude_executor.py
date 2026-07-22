@@ -79,10 +79,13 @@ class ClaudeAgentExecutor:
         assigned_skills = ", ".join(profile.skills) or "无"
         prompt = (
             f"任务 ID：{task.id}\n"
+            f"用户选择的工作空间根目录：{workspace_root}\n"
             f"任务目标：{task.objective}\n"
             f"允许写入范围：{task.write_scope or ['只读']}\n"
             f"本 Agent 配置的项目 Skill：{assigned_skills}\n"
             f"前置任务结果：\n{dependency_context}\n\n"
+            "所有搜索和修改都以用户选择的工作空间为边界，不要默认操作 Agent Studio 自身。"
+            "允许写入范围为空时必须严格只读；不为空时不得写出列出的相对路径前缀。"
             "需要专项规范时先通过 Skill 工具加载已配置 Skill。"
             "请自主使用工具完成任务，结束时简洁说明结果、修改文件和验证情况。"
         )

@@ -44,6 +44,13 @@ class WorkspaceUpdate(BaseModel):
     path: str = Field(min_length=1, max_length=4096)
 
 
+class BrainConfiguration(BaseModel):
+    """DeepSeek 主脑的可编辑行为提示词；结构化输出约束由代码另行追加。"""
+
+    planning_prompt: str = Field(min_length=50, max_length=50_000)
+    summary_prompt: str = Field(min_length=20, max_length=30_000)
+
+
 class SchedulerConfiguration(BaseModel):
     """每次新运行读取一次的 LangGraph 与 Agent 执行限制。"""
 

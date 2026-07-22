@@ -61,6 +61,11 @@ export interface SchedulerConfiguration {
   agent_timeout_seconds: number
 }
 
+export interface BrainConfiguration {
+  planning_prompt: string
+  summary_prompt: string
+}
+
 export interface DeepSeekBalance {
   configured: boolean
   available: boolean

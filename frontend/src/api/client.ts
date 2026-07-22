@@ -1,6 +1,7 @@
 import type {
   AgentDetail,
   AgentProfile,
+  BrainConfiguration,
   DeepSeekBalance,
   DeepSeekUsage,
   Run,
@@ -57,6 +58,13 @@ export const api = {
   scheduler: () => request<SchedulerConfiguration>('/scheduler'),
   updateScheduler: (payload: SchedulerConfiguration) =>
     request<SchedulerConfiguration>('/scheduler', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  brain: () => request<BrainConfiguration>('/brain'),
+  defaultBrain: () => request<BrainConfiguration>('/brain/default'),
+  updateBrain: (payload: BrainConfiguration) =>
+    request<BrainConfiguration>('/brain', {
       method: 'PUT',
       body: JSON.stringify(payload),
     }),

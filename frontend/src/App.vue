@@ -108,6 +108,7 @@ onMounted(workspace.initialize)
         </section>
         <PlanBoard
           :tasks="workspace.plan.value"
+          :contract="workspace.planContract.value"
           :events="workspace.state.events"
           :can-retry="!workspace.isRunning.value"
           @retry="retryTask"

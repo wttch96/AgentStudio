@@ -70,3 +70,27 @@ def test_workspace_context_is_shallow_and_ignores_secrets(tmp_path: Path):
     assert "backend/" in context
     assert ".env" not in context
     assert "SECRET" not in context
+
+
+def test_discovery_dag_searches_only_explicit_frontend_and_backend_domains():
+    planner = DeepSeekPlanner.__new__(DeepSeekPlanner)
+
+    dag = planner.create_discovery_dag("给现有前后端项目增加一个新 API 功能，不用 Netty")
+
+    assert {task.agent for task in dag.tasks} == {
+        "frontend-agent",
+        "backend-agent",
+    }
+    assert all(task.id.startswith("workspace-discovery-") for task in dag.tasks)
+    assert all(task.write_scope == [] for task in dag.tasks)
+    assert all("不要假设固定目录名" in task.objective for task in dag.tasks)
+
+
+def test_agent_enforcement_preserves_brain_contract():
+    dag = backend_only_dag().model_copy(
+        update={"coordination_contract": "POST /api/items 使用统一请求和响应字段"}
+    )
+
+    repaired = DeepSeekPlanner._enforce_requested_agents(dag, "修改后端 API")
+
+    assert repaired.coordination_contract == dag.coordination_contract
