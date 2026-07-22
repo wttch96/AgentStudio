@@ -5,6 +5,7 @@ import type { PlanTask, RunEvent } from '../types'
 const props = defineProps<{ tasks: PlanTask[]; events: RunEvent[] }>()
 const now = ref(Date.now())
 const collapsedTaskIds = ref<Set<string>>(new Set())
+const collapsedWaveKeys = ref<Set<string>>(new Set())
 let clock: number | undefined
 
 interface TimelineItem {
@@ -98,6 +99,27 @@ function toggleLane(taskId: string) {
   if (next.has(taskId)) next.delete(taskId)
   else next.add(taskId)
   collapsedTaskIds.value = next
+}
+
+/**
+ * 使用本轮任务 ID 生成稳定标识，避免用户切换任务记录后，另一条运行中相同层级的
+ * 分流意外继承折叠状态。
+ */
+function waveKey(tasks: PlanTask[]) {
+  return tasks.map((task) => task.id).sort().join('|')
+}
+
+function isWaveCollapsed(tasks: PlanTask[]) {
+  return collapsedWaveKeys.value.has(waveKey(tasks))
+}
+
+/** 一次折叠或展开本轮分流中的全部 Agent 泳道，汇流节点保持可见。 */
+function toggleWave(tasks: PlanTask[]) {
+  const key = waveKey(tasks)
+  const next = new Set(collapsedWaveKeys.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  collapsedWaveKeys.value = next
 }
 
 /** 将相邻且同名的工具调用折叠成一项，同时保留每次原始事件和参数。 */
@@ -258,13 +280,30 @@ function itemSequence(item: TimelineItem) {
     <div v-for="wave in waves" :key="wave.level" class="parallel-wave">
       <div class="flow-junction split-junction">
         <span class="junction-symbol" aria-hidden="true">⑂</span>
-        <div>
+        <div class="junction-copy">
           <strong>LangGraph 第 {{ wave.level + 1 }} 轮分流</strong>
-          <small>{{ wave.tasks.length }} 个节点{{ wave.tasks.length > 1 ? '并行执行' : '开始执行' }}</small>
+          <small>
+            {{ wave.tasks.length }} 个节点{{ wave.tasks.length > 1 ? '并行执行' : '开始执行' }}{{ isWaveCollapsed(wave.tasks) ? ' · 已折叠' : '' }}
+          </small>
         </div>
+        <button
+          class="wave-collapse-button"
+          type="button"
+          :aria-expanded="!isWaveCollapsed(wave.tasks)"
+          :aria-controls="`wave-lanes-${wave.level}`"
+          :title="isWaveCollapsed(wave.tasks) ? '展开本轮全部泳道' : '折叠本轮全部泳道'"
+          @click="toggleWave(wave.tasks)"
+        >
+          <span aria-hidden="true">{{ isWaveCollapsed(wave.tasks) ? '⌄' : '⌃' }}</span>
+          <span>{{ isWaveCollapsed(wave.tasks) ? '展开' : '折叠' }}</span>
+        </button>
       </div>
 
-      <div class="agent-lanes">
+      <div
+        v-show="!isWaveCollapsed(wave.tasks)"
+        :id="`wave-lanes-${wave.level}`"
+        class="agent-lanes"
+      >
         <article
           v-for="task in wave.tasks"
           :key="task.id"

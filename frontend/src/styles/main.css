@@ -221,9 +221,12 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 3px
 .flow-junction { position: relative; display: flex; width: max-content; max-width: calc(100% - 40px); min-height: 42px; margin-left: 40px; align-items: center; gap: 10px; }
 .flow-junction::before { position: absolute; top: -18px; bottom: 50%; left: -25px; width: 1px; background: var(--separator-soft); content: ""; }
 .junction-symbol { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; background: rgba(191,90,242,.14); color: #da8fff; font-size: .875rem; box-shadow: inset 0 0 0 1px rgba(191,90,242,.22); }
-.flow-junction div { display: flex; flex-direction: column; gap: 3px; }
+.flow-junction .junction-copy { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
 .flow-junction strong { font-size: .625rem; font-weight: 620; }
 .flow-junction small { color: var(--tertiary); font-size: .5rem; }
+.wave-collapse-button { display: flex; align-items: center; gap: 5px; margin-left: 3px; padding: 5px 8px; border: 0; border-radius: 8px; background: rgba(118,118,128,.15); color: var(--secondary); cursor: pointer; font-size: .5rem; line-height: 1; white-space: nowrap; }
+.wave-collapse-button:hover { background: rgba(118,118,128,.28); color: var(--label); }
+.wave-collapse-button > span:first-child { font-size: .625rem; }
 .agent-lanes { position: relative; display: grid; grid-auto-columns: minmax(220px, 1fr); grid-auto-flow: column; align-items: start; gap: 10px; overflow-x: auto; padding: 21px 0 18px; scrollbar-width: thin; }
 .agent-lanes::before { position: absolute; top: 0; right: max(110px, calc(50% / 3)); left: max(110px, calc(50% / 3)); height: 1px; background: var(--separator); content: ""; }
 .agent-lane { position: relative; min-width: 220px; overflow: hidden; border: 1px solid var(--separator-soft); border-radius: 14px; background: rgba(28,28,30,.92); box-shadow: inset 0 1px 0 rgba(255,255,255,.04); }

@@ -151,7 +151,6 @@ AgentsManager/
 ## 文档
 
 - [完整技术架构、LangGraph 流程和 Agent/Skill 说明](docs/technical-architecture.md)
-- [README 截图准备说明](docs/images/README.md)
 
 ## 界面截图
 
