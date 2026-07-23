@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import AgentInspector from './components/AgentInspector.vue'
 import AppHeader from './components/AppHeader.vue'
 import EventTimeline from './components/EventTimeline.vue'
-import PlanBoard from './components/PlanBoard.vue'
+import DagGraph from './components/DagGraph.vue'
 import PromptComposer from './components/PromptComposer.vue'
 import RunSidebar from './components/RunSidebar.vue'
 import ConfigCenter from './components/config/ConfigCenter.vue'
@@ -106,12 +106,10 @@ onMounted(workspace.initialize)
           </div>
           <button type="button" @click="workspace.selectRun(upstreamRun.id)">查看上游</button>
         </section>
-        <PlanBoard
+        <DagGraph
           :tasks="workspace.plan.value"
           :contract="workspace.planContract.value"
           :events="workspace.state.events"
-          :can-retry="!workspace.isRunning.value"
-          @retry="retryTask"
         />
         <EventTimeline
           :key="workspace.state.activeRun.id"

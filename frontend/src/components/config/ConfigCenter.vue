@@ -6,10 +6,11 @@ import BrainConfigEditor from './BrainConfigEditor.vue'
 import SchedulerConfigEditor from './SchedulerConfigEditor.vue'
 import SkillConfigEditor from './SkillConfigEditor.vue'
 import WorkspaceConfigEditor from './WorkspaceConfigEditor.vue'
+import MemoryConfigEditor from './MemoryConfig.vue'
 
 defineProps<{ agents: AgentProfile[]; skills: SkillProfile[] }>()
 defineEmits<{ close: []; saved: [] }>()
-const tab = ref<'brain' | 'agents' | 'skills' | 'workspace' | 'scheduler'>('brain')
+const tab = ref<'brain' | 'agents' | 'skills' | 'workspace' | 'scheduler' | 'memory'>('brain')
 </script>
 
 <template>
@@ -28,12 +29,14 @@ const tab = ref<'brain' | 'agents' | 'skills' | 'workspace' | 'scheduler'>('brai
         <button type="button" :class="{ active: tab === 'skills' }" @click="tab = 'skills'">Skill 编辑</button>
         <button type="button" :class="{ active: tab === 'workspace' }" @click="tab = 'workspace'">工作目录</button>
         <button type="button" :class="{ active: tab === 'scheduler' }" @click="tab = 'scheduler'">调度配置</button>
+        <button type="button" :class="{ active: tab === 'memory' }" @click="tab = 'memory'">记忆配置</button>
       </nav>
       <BrainConfigEditor v-if="tab === 'brain'" @saved="$emit('saved')" />
       <AgentConfigEditor v-else-if="tab === 'agents'" :agents="agents" :skills="skills" @saved="$emit('saved')" />
       <SkillConfigEditor v-else-if="tab === 'skills'" :skills="skills" @saved="$emit('saved')" />
       <WorkspaceConfigEditor v-else-if="tab === 'workspace'" @saved="$emit('saved')" />
-      <SchedulerConfigEditor v-else @saved="$emit('saved')" />
+      <SchedulerConfigEditor v-else-if="tab === 'scheduler'" @saved="$emit('saved')" />
+      <MemoryConfigEditor v-else @saved="$emit('saved')" />
     </section>
   </div>
 </template>

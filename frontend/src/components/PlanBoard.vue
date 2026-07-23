@@ -9,12 +9,60 @@ const props = defineProps<{
 }>()
 defineEmits<{ retry: [taskId: string] }>()
 
+const agentEventTypes = new Set([
+  'agent.started',
+  'agent.message',
+  'tool.started',
+  'skill.loaded',
+  'agent.completed',
+  'agent.failed',
+])
+
+function taskEvents(taskId: string) {
+  return props.events.filter(
+    (event) => event.task_id === taskId && agentEventTypes.has(event.type),
+  )
+}
+
 function taskStatus(taskId: string) {
-  const taskEvents = props.events.filter((event) => event.task_id === taskId)
-  if (taskEvents.some((event) => event.type === 'agent.failed')) return 'failed'
-  if (taskEvents.some((event) => event.type === 'agent.completed')) return 'completed'
-  if (taskEvents.some((event) => event.type === 'agent.started')) return 'running'
+  const events = taskEvents(taskId)
+  if (events.some((event) => event.type === 'agent.failed')) return 'failed'
+  if (events.some((event) => event.type === 'agent.completed')) return 'completed'
+  if (events.some((event) => event.type === 'agent.started')) return 'running'
   return 'pending'
+}
+
+/** 利用 agent.started / agent.completed / agent.failed 事件的时间戳计算耗时文本。 */
+function taskTimingText(taskId: string) {
+  const events = taskEvents(taskId)
+  const status = taskStatus(taskId)
+  if (status === 'pending') return ''
+  const started = events.find(e => e.type === 'agent.started')
+  if (!started) return '--'
+  const startedAt = new Date(started.timestamp).getTime()
+  if (status === 'completed') {
+    const completed = events.find(e => e.type === 'agent.completed')
+    if (completed) {
+      const duration = ((new Date(completed.timestamp).getTime() - startedAt) / 1000).toFixed(1)
+      return `${duration}s`
+    }
+    return '--'
+  }
+  if (status === 'failed') {
+    const failedEv = events.find(e => e.type === 'agent.failed')
+    if (failedEv) {
+      const duration = ((new Date(failedEv.timestamp).getTime() - startedAt) / 1000).toFixed(1)
+      return `${duration}s · 失败`
+    }
+    return '--'
+  }
+  // running — PlanBoard 没有 live timer，用已记录耗时
+  const lastEvent = events.at(-1)
+  if (lastEvent) {
+    const duration = ((new Date(lastEvent.timestamp).getTime() - startedAt) / 1000).toFixed(1)
+    return `进行中 · ${duration}s`
+  }
+  return '--'
 }
 </script>
 
@@ -49,6 +97,7 @@ function taskStatus(taskId: string) {
         <div v-if="task.depends_on.length" class="dependency-label">
           依赖 {{ task.depends_on.join('、') }}
         </div>
+        <div v-if="taskTimingText(task.id)" class="task-timing">{{ taskTimingText(task.id) }}</div>
       </article>
     </div>
   </section>

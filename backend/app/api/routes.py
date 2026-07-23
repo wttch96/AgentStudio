@@ -10,6 +10,7 @@ from flask import Blueprint, Response, current_app, jsonify, request, stream_wit
 from pydantic import ValidationError
 
 from app.domain.configuration import (
+    MemoryConfiguration,
     AgentUpdate,
     BrainConfiguration,
     SchedulerConfiguration,
@@ -17,7 +18,12 @@ from app.domain.configuration import (
     SkillUpdate,
     WorkspaceUpdate,
 )
-from app.domain.models import CreateRunRequest
+from app.domain.models import (
+    CreateRunRequest,
+    InterruptAction,
+    InterruptCommand,
+    InterruptTarget,
+)
 from app.services.container import ServiceContainer
 from app.storage.sqlite_store import TERMINAL_STATUSES
 
@@ -237,6 +243,63 @@ def cancel_run(run_id: str):
 def list_events(run_id: str):
     after = max(0, request.args.get("after", default=0, type=int))
     return jsonify({"items": services().store.list_events(run_id, after)})
+
+
+# ==================== 记忆配置 ====================
+
+@api.get("/memory")
+def get_memory_config():
+    return jsonify(services().memory_settings.current().model_dump())
+
+
+@api.put("/memory")
+def update_memory_config():
+    try:
+        payload = MemoryConfiguration.model_validate(request.get_json(silent=True) or {})
+        return jsonify(services().memory_settings.update(payload).model_dump())
+    except ValidationError as error:
+        return jsonify({"error": "记忆配置无效", "details": error.errors()}), 400
+
+
+@api.get("/memory/stats/<conversation_id>")
+def get_memory_stats(conversation_id: str):
+    """返回对话的记忆统计：各级别记忆条数、token 节省量等。"""
+    return jsonify(services().memory_manager.get_stats(conversation_id))
+
+
+# ==================== 中断指令 ====================
+
+@api.post("/runs/<run_id>/interrupt")
+def send_interrupt(run_id: str):
+    """发送中断指令：暂停 agent、触发重规划或中止运行。"""
+    if not services().store.get_run(run_id):
+        return jsonify({"error": "运行不存在"}), 404
+    try:
+        data = request.get_json(silent=True) or {}
+        command = InterruptCommand(
+            run_id=run_id,
+            target=InterruptTarget(data.get("target", "all")),
+            action=InterruptAction(data.get("action", "pause")),
+            target_agent=data.get("target_agent"),
+            target_task=data.get("target_task"),
+            instruction=data.get("instruction", ""),
+        )
+        command_id = services().interrupt_router.send(command)
+        return jsonify({"id": command_id, "accepted": True}), 202
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+
+
+@api.post("/runs/<run_id>/resume")
+def resume_run(run_id: str):
+    """恢复被中断的运行，可携带更新后的指令。"""
+    if not services().store.get_run(run_id):
+        return jsonify({"error": "运行不存在"}), 404
+    payload = request.get_json(silent=True) or {}
+    command_id = payload.get("command_id", "")
+    decision = payload.get("decision", "apply")
+    services().interrupt_router.resolve(run_id, command_id, decision)
+    return jsonify({"accepted": True}), 202
 
 
 @api.get("/runs/<run_id>/stream")

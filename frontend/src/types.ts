@@ -111,3 +111,68 @@ export interface PlanTask {
   depends_on: string[]
   write_scope: string[]
 }
+
+export interface AgentResult {
+  task_id: string
+  agent: string
+  status: 'completed' | 'failed' | 'cancelled' | 'skipped'
+  summary: string
+  changed_files: string[]
+  provides?: string[]
+  error: string | null
+  started_at: string | null
+  duration_ms: number | null
+}
+
+
+// ==================== 记忆系统类型 ====================
+
+export interface MemoryRecord {
+  id: string
+  run_id: string
+  conversation_id: string
+  level: 'agent' | 'planner' | 'session' | 'project'
+  agent_id: string | null
+  task_id: string | null
+  phase: string
+  summary: string
+  structured_data: Record<string, unknown> | null
+  token_count_before: number
+  token_count_after: number
+  created_at: string
+  importance: number
+}
+
+export interface MemoryConfiguration {
+  agent_sliding_window: number
+  planner_sliding_window: number
+  compress_trigger_tokens: number
+  compress_keep_recent: number
+  summarizer_model: string
+  max_conversation_turns: number
+  session_archive_after_hours: number
+  importance_decay_rate: number
+}
+
+export interface MemoryStats {
+  conversation_id: string
+  total_memories: number
+  memories_by_level: Record<string, number>
+  total_tokens_saved: number
+  compression_ratio: number
+  oldest_memory: string | null
+  newest_memory: string | null
+}
+
+// ==================== 中断机制类型 ====================
+
+export interface InterruptCommand {
+  id: string
+  run_id: string
+  target: 'all' | 'agent' | 'planner'
+  action: 'pause' | 'inject' | 'replan' | 'abort' | 'resume'
+  target_agent: string | null
+  target_task: string | null
+  instruction: string
+  created_at: string
+}

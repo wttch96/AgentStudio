@@ -175,6 +175,47 @@ function taskStatus(taskId: string) {
   return 'pending'
 }
 
+/** 利用 agent.started / agent.completed / agent.failed 事件的时间戳计算耗时文本。 */
+function taskTimingText(taskId: string) {
+  const events = taskEvents(taskId)
+  const status = taskStatus(taskId)
+  if (status === 'pending') return ''
+  const started = events.find(e => e.type === 'agent.started')
+  if (!started) return '--'
+  const startedAt = new Date(started.timestamp).getTime()
+  if (status === 'completed') {
+    const completed = events.find(e => e.type === 'agent.completed')
+    if (completed) {
+      const duration = ((new Date(completed.timestamp).getTime() - startedAt) / 1000).toFixed(1)
+      return `${duration}s`
+    }
+    return '--'
+  }
+  if (status === 'failed') {
+    const failedEv = events.find(e => e.type === 'agent.failed')
+    if (failedEv) {
+      const duration = ((new Date(failedEv.timestamp).getTime() - startedAt) / 1000).toFixed(1)
+      return `${duration}s · 失败`
+    }
+    return '--'
+  }
+  // running
+  const elapsed = Math.max(0, Math.floor((now.value - startedAt) / 1000))
+  return `已运行 ${elapsed}s`
+}
+
+/** 找到本轮分流中最早 agent.started 的时间，作为波次开始时间。 */
+function waveStartTime(tasks: PlanTask[]) {
+  const timestamps = tasks
+    .map(t => {
+      const started = taskEvents(t.id).find(e => e.type === 'agent.started')
+      return started ? new Date(started.timestamp).getTime() : null
+    })
+    .filter((t): t is number => t !== null)
+  if (timestamps.length === 0) return ''
+  return new Date(Math.min(...timestamps)).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+}
+
 function waveStatus(tasks: PlanTask[]) {
   const statuses = tasks.map((task) => taskStatus(task.id))
   if (statuses.some((status) => status === 'failed')) return 'failed'
@@ -317,6 +358,7 @@ function itemSequence(item: TimelineItem) {
           <strong>LangGraph 第 {{ wave.level + 1 }} 轮分流</strong>
           <small>
             {{ wave.tasks.length }} 个节点{{ wave.tasks.length > 1 ? '并行执行' : '开始执行' }}{{ isWaveCollapsed(wave.tasks) ? ' · 已折叠' : '' }}
+            <template v-if="waveStartTime(wave.tasks)"> · {{ waveStartTime(wave.tasks) }}</template>
           </small>
         </div>
         <button
@@ -348,111 +390,10 @@ function itemSequence(item: TimelineItem) {
             <div class="lane-header-copy">
               <strong>{{ task.agent }}</strong>
               <small>{{ task.title }}</small>
+              <small v-if="taskTimingText(task.id)" class="lane-timing">{{ taskTimingText(task.id) }}</small>
             </div>
             <div class="lane-actions">
               <span class="lane-status">{{ taskStatus(task.id) }}</span>
               <button
                 class="lane-collapse-button"
-                type="button"
-                :aria-expanded="!isLaneCollapsed(task.id)"
-                :aria-controls="`lane-events-${task.id}`"
-                :title="isLaneCollapsed(task.id) ? '展开泳道' : '折叠泳道'"
-                @click="toggleLane(task.id)"
-              >
-                {{ isLaneCollapsed(task.id) ? '⌄' : '⌃' }}
-              </button>
-            </div>
-          </header>
-
-          <div
-            v-show="!isLaneCollapsed(task.id)"
-            :id="`lane-events-${task.id}`"
-            class="lane-events"
-          >
-            <article v-for="item in groupedTaskEvents(task.id)" :key="item.key" class="lane-event">
-              <div class="lane-event-marker" :class="item.event.type.replace('.', '-')" aria-hidden="true">
-                {{ icon(item.event) }}
-              </div>
-              <div class="lane-event-body">
-                <div>
-                  <strong>{{ itemTitle(item) }}</strong>
-                  <span>{{ itemSequence(item) }}</span>
-                </div>
-                <p
-                  v-if="!['tool.started', 'agent.failed'].includes(item.event.type) && detail(item.event)"
-                >
-                  {{ detail(item.event) }}
-                </p>
-                <div v-if="item.event.type === 'agent.failed'" class="agent-failure-detail">
-                  <div>
-                    <strong>{{ failureCategory(item.event) }}</strong>
-                    <span>{{ item.event.payload.summary ?? '节点未能完成' }}</span>
-                  </div>
-                  <pre>{{ failureReason(item.event) }}</pre>
-                </div>
-                <details v-if="item.event.type === 'tool.started'" class="tool-call-details">
-                  <summary>查看 {{ item.events.length }} 次调用参数</summary>
-                  <div class="tool-call-list">
-                    <section v-for="(call, index) in item.events" :key="call.sequence">
-                      <span>第 {{ index + 1 }} 次 · #{{ call.sequence }}</span>
-                      <pre>{{ JSON.stringify(call.payload.input ?? {}, null, 2) }}</pre>
-                    </section>
-                  </div>
-                </details>
-              </div>
-            </article>
-            <div v-if="taskEvents(task.id).length === 0" class="lane-waiting">
-              <span /> 等待调度器启动
-            </div>
-          </div>
-        </article>
-      </div>
-
-      <div class="flow-junction merge-junction" :class="waveStatus(wave.tasks)">
-        <span class="junction-symbol" aria-hidden="true">⌄</span>
-        <div>
-          <strong>并行结果汇流</strong>
-          <small>{{ waveSummary(wave.tasks) }}</small>
-        </div>
-      </div>
-
-      <div
-        v-if="wave.tasks.some(isDiscoveryTask) && decisionEvents.length"
-        class="flow-decision"
-      >
-        <article
-          v-for="event in decisionEvents"
-          :key="event.sequence"
-          class="orchestrator-event"
-          :class="{ 'planning-active': event.type === 'planner.started' && planningActive }"
-        >
-          <div class="flow-event-icon" aria-hidden="true">{{ icon(event) }}</div>
-          <div>
-            <strong>{{ title(event) }}</strong>
-            <p v-if="detail(event)">{{ detail(event) }}</p>
-            <div v-if="event.type === 'planner.started' && planningActive" class="planning-progress" aria-hidden="true">
-              <i />
-            </div>
-          </div>
-          <span>#{{ event.sequence }}</span>
-        </article>
-      </div>
-    </div>
-
-    <div v-if="finishEvents.length" class="flow-finish">
-      <article
-        v-for="event in finishEvents"
-        :key="event.sequence"
-        class="orchestrator-event"
-        :class="{ 'run-failure-detail': event.type === 'run.failed' }"
-      >
-        <div class="flow-event-icon" aria-hidden="true">{{ icon(event) }}</div>
-        <div>
-          <strong>{{ title(event) }}</strong>
-          <p v-if="detail(event)">{{ detail(event) }}</p>
-        </div>
-        <span>#{{ event.sequence }}</span>
-      </article>
-    </div>
-  </section>
-</template>
+                type="bu

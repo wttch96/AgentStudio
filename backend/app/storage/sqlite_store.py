@@ -74,6 +74,64 @@ class SQLiteStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_deepseek_usage_occurred_at
                 ON deepseek_usage(occurred_at);
+                CREATE TABLE IF NOT EXISTS memories (
+                    id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    conversation_id TEXT NOT NULL,
+                    level TEXT NOT NULL CHECK(level IN ('agent','planner','session','project')),
+                    agent_id TEXT,
+                    task_id TEXT,
+                    phase TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    structured_data TEXT,
+                    token_count_before INTEGER NOT NULL DEFAULT 0,
+                    token_count_after INTEGER NOT NULL DEFAULT 0,
+                    importance REAL NOT NULL DEFAULT 0.5,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_memories_conversation
+                ON memories(conversation_id, level, created_at);
+                CREATE INDEX IF NOT EXISTS idx_memories_agent
+                ON memories(agent_id, created_at);
+                CREATE TABLE IF NOT EXISTS session_summaries (
+                    conversation_id TEXT PRIMARY KEY,
+                    title TEXT,
+                    summary TEXT NOT NULL,
+                    key_decisions TEXT,
+                    total_turns INTEGER NOT NULL DEFAULT 0,
+                    total_tokens INTEGER NOT NULL DEFAULT 0,
+                    last_updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS agent_memory_state (
+                    agent_id TEXT NOT NULL,
+                    conversation_id TEXT NOT NULL,
+                    extracted_facts TEXT NOT NULL DEFAULT '{}',
+                    token_budget INTEGER NOT NULL DEFAULT 32000,
+                    last_updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (agent_id, conversation_id)
+                );
+                CREATE TABLE IF NOT EXISTS planner_memory_state (
+                    conversation_id TEXT PRIMARY KEY,
+                    decision_log TEXT NOT NULL DEFAULT '[]',
+                    agent_notes TEXT NOT NULL DEFAULT '{}',
+                    project_notes TEXT NOT NULL DEFAULT '{}',
+                    contract_history TEXT NOT NULL DEFAULT '[]',
+                    last_updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS interrupt_commands (
+                    id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    target_agent_id TEXT,
+                    target_task_id TEXT,
+                    instruction TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    resolved_at TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_interrupt_run
+                ON interrupt_commands(run_id, status);
                 """
             )
             columns = {
@@ -90,6 +148,8 @@ class SQLiteStore:
                 connection.execute(
                     "ALTER TABLE runs ADD COLUMN turn_index INTEGER NOT NULL DEFAULT 1"
                 )
+            if "started_at" not in columns:
+                connection.execute("ALTER TABLE runs ADD COLUMN started_at TEXT")
             # 老数据视为各自对话的第一轮，迁移后即可作为后续任务的上游。
             connection.execute(
                 "UPDATE runs SET conversation_id = id WHERE conversation_id IS NULL"
@@ -147,7 +207,7 @@ class SQLiteStore:
         return chain
 
     def update_run(self, run_id: str, status: str, **fields: Any) -> None:
-        allowed = {"final_answer", "error"}
+        allowed = {"final_answer", "error", "started_at"}
         assignments = ["status = ?", "updated_at = CURRENT_TIMESTAMP"]
         values: list[Any] = [status]
         for key, value in fields.items():
@@ -291,3 +351,252 @@ class SQLiteStore:
             event.pop("id", None)
             events.append(event)
         return events
+
+
+    # ==================== 分层记忆 Repository ====================
+
+    def insert_memory(self, record: dict[str, Any]) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO memories(
+                    id, run_id, conversation_id, level, agent_id, task_id,
+                    phase, summary, structured_data, token_count_before,
+                    token_count_after, importance, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    record["id"],
+                    record["run_id"],
+                    record["conversation_id"],
+                    record["level"],
+                    record.get("agent_id"),
+                    record.get("task_id"),
+                    record["phase"],
+                    record["summary"],
+                    json.dumps(record.get("structured_data") or {}, ensure_ascii=False),
+                    record.get("token_count_before", 0),
+                    record.get("token_count_after", 0),
+                    record.get("importance", 0.5),
+                    record["created_at"],
+                ),
+            )
+
+    def query_memories(
+        self,
+        conversation_id: str,
+        level: str | None = None,
+        agent_id: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        conditions = ["conversation_id = ?"]
+        params: list[Any] = [conversation_id]
+        if level:
+            conditions.append("level = ?")
+            params.append(level)
+        if agent_id:
+            conditions.append("agent_id = ?")
+            params.append(agent_id)
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""SELECT * FROM memories
+                WHERE {' AND '.join(conditions)}
+                ORDER BY created_at DESC
+                LIMIT ?""",
+                [*params, limit],
+            ).fetchall()
+        return [self._deserialize_memory(dict(row)) for row in rows]
+
+    def get_recent_memories(
+        self, conversation_id: str, level: str, limit: int = 10
+    ) -> list[dict[str, Any]]:
+        return self.query_memories(conversation_id, level=level, limit=limit)
+
+    def upsert_session_summary(
+        self,
+        conversation_id: str,
+        summary: str,
+        title: str = "",
+        key_decisions: list[str] | None = None,
+        total_turns: int = 0,
+        total_tokens: int = 0,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO session_summaries(
+                    conversation_id, title, summary, key_decisions,
+                    total_turns, total_tokens, last_updated
+                ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(conversation_id) DO UPDATE SET
+                    title = COALESCE(excluded.title, session_summaries.title),
+                    summary = excluded.summary,
+                    key_decisions = excluded.key_decisions,
+                    total_turns = excluded.total_turns,
+                    total_tokens = excluded.total_tokens,
+                    last_updated = CURRENT_TIMESTAMP""",
+                (
+                    conversation_id,
+                    title or None,
+                    summary,
+                    json.dumps(key_decisions or [], ensure_ascii=False),
+                    total_turns,
+                    total_tokens,
+                ),
+            )
+
+    def get_session_summary(self, conversation_id: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM session_summaries WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        result["key_decisions"] = json.loads(result.get("key_decisions", "[]"))
+        return result
+
+    def save_agent_memory_state(
+        self, agent_id: str, conversation_id: str, state: dict[str, Any]
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO agent_memory_state(
+                    agent_id, conversation_id, extracted_facts, token_budget, last_updated
+                ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(agent_id, conversation_id) DO UPDATE SET
+                    extracted_facts = excluded.extracted_facts,
+                    token_budget = excluded.token_budget,
+                    last_updated = CURRENT_TIMESTAMP""",
+                (
+                    agent_id,
+                    conversation_id,
+                    json.dumps(state.get("extracted_facts", {}), ensure_ascii=False),
+                    state.get("token_budget", 32000),
+                ),
+            )
+
+    def get_agent_memory_state(
+        self, agent_id: str, conversation_id: str
+    ) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM agent_memory_state WHERE agent_id = ? AND conversation_id = ?",
+                (agent_id, conversation_id),
+            ).fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        result["extracted_facts"] = json.loads(result.get("extracted_facts", "{}"))
+        return result
+
+    def save_planner_memory_state(
+        self, conversation_id: str, state: dict[str, Any]
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO planner_memory_state(
+                    conversation_id, decision_log, agent_notes,
+                    project_notes, contract_history, last_updated
+                ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(conversation_id) DO UPDATE SET
+                    decision_log = excluded.decision_log,
+                    agent_notes = excluded.agent_notes,
+                    project_notes = excluded.project_notes,
+                    contract_history = excluded.contract_history,
+                    last_updated = CURRENT_TIMESTAMP""",
+                (
+                    conversation_id,
+                    json.dumps(state.get("decision_log", []), ensure_ascii=False),
+                    json.dumps(state.get("agent_capability_notes", {}), ensure_ascii=False),
+                    json.dumps(state.get("project_structure_notes", {}), ensure_ascii=False),
+                    json.dumps(state.get("contract_history", []), ensure_ascii=False),
+                ),
+            )
+
+    def get_planner_memory_state(
+        self, conversation_id: str
+    ) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM planner_memory_state WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        for field in ("decision_log", "agent_notes", "project_notes", "contract_history"):
+            raw = result.get(field, "[]" if field in ("decision_log", "contract_history") else "{}")
+            result[field] = json.loads(raw)
+        return result
+
+    # ==================== 中断指令 Repository ====================
+
+    def insert_interrupt_command(self, record: dict[str, Any]) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO interrupt_commands(
+                    id, run_id, target, action, target_agent_id,
+                    target_task_id, instruction, status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)""",
+                (
+                    record["id"],
+                    record["run_id"],
+                    record["target"],
+                    record["action"],
+                    record.get("target_agent_id"),
+                    record.get("target_task_id"),
+                    record.get("instruction", ""),
+                    record["created_at"],
+                ),
+            )
+
+    def get_pending_interrupts(self, run_id: str) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM interrupt_commands WHERE run_id = ? AND status = 'pending' ORDER BY created_at",
+                (run_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def resolve_interrupt(self, command_id: str, status: str = "resolved") -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE interrupt_commands SET status = ?, resolved_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (status, command_id),
+            )
+
+    def get_memory_stats(self, conversation_id: str) -> dict[str, Any]:
+        with self._connect() as connection:
+            counts = connection.execute(
+                """SELECT level, COUNT(*) as cnt
+                FROM memories WHERE conversation_id = ?
+                GROUP BY level""",
+                (conversation_id,),
+            ).fetchall()
+            tokens = connection.execute(
+                """SELECT COALESCE(SUM(token_count_before), 0) as total_before,
+                       COALESCE(SUM(token_count_after), 0) as total_after
+                FROM memories WHERE conversation_id = ?""",
+                (conversation_id,),
+            ).fetchone()
+            times = connection.execute(
+                """SELECT MIN(created_at) as oldest, MAX(created_at) as newest
+                FROM memories WHERE conversation_id = ?""",
+                (conversation_id,),
+            ).fetchone()
+        memories_by_level = {row["level"]: row["cnt"] for row in counts}
+        total_before = int(tokens["total_before"])
+        total_after = int(tokens["total_after"])
+        return {
+            "conversation_id": conversation_id,
+            "total_memories": sum(memories_by_level.values()),
+            "memories_by_level": memories_by_level,
+            "total_tokens_saved": max(0, total_before - total_after),
+            "compression_ratio": round(total_after / total_before, 3) if total_before > 0 else 1.0,
+            "oldest_memory": times["oldest"] if times else None,
+            "newest_memory": times["newest"] if times else None,
+        }
+
+    @staticmethod
+    def _deserialize_memory(row: dict[str, Any]) -> dict[str, Any]:
+        row["structured_data"] = json.loads(row.get("structured_data", "{}"))
+        return row

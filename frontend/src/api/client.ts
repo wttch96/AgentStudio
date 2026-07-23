@@ -6,6 +6,7 @@ import type {
   DeepSeekUsage,
   Run,
   RunEvent,
+  MemoryConfiguration,
   SchedulerConfiguration,
   SkillProfile,
   SystemStatus,
@@ -77,5 +78,27 @@ export const api = {
       body: JSON.stringify({ objective, parent_run_id: parentRunId }),
     }),
   cancelRun: (id: string) => request<{ accepted: boolean }>(`/runs/${id}/cancel`, { method: 'POST' }),
+  memoryConfig: () => request<MemoryConfiguration>('/memory'),
+  updateMemoryConfig: (payload: MemoryConfiguration) =>
+    request<MemoryConfiguration>('/memory', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+  interruptRun: (runId: string, payload: {
+    target: string
+    action: string
+    target_agent?: string
+    target_task?: string
+    instruction?: string
+  }) =>
+    request<{ id: string; accepted: boolean }>(`/runs/${runId}/interrupt`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  resumeRun: (runId: string, commandId: string, decision?: string) =>
+    request<{ accepted: boolean }>(`/runs/${runId}/resume`, {
+      method: 'POST',
+      body: JSON.stringify({ command_id: commandId, decision: decision || 'apply' }),
+    }),
   streamUrl: (id: string, after: number) => `${API_BASE}/runs/${id}/stream?after=${after}`,
 }

@@ -9,7 +9,9 @@ tools:
 - Edit
 - Bash
 - Skill
-skills: []
+skills:
+- mojibake
+- dev-shell-assistant
 ---
 
 你是业务后端专业 Agent。你的对象是用户选择的工作空间，不是 Agent Studio 自身。

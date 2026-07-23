@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -75,7 +76,17 @@ class AgentResult(BaseModel):
     status: Literal["completed", "failed", "cancelled", "skipped"]
     summary: str
     changed_files: list[str] = Field(default_factory=list)
+    provides: list[str] = Field(
+        default_factory=list,
+        description="Agent 声明产出的资源/能力标识，供下游 Agent 通过依赖筛选消费",
+    )
     error: str | None = None
+    started_at: str | None = Field(
+        default=None, description="Agent 开始执行的 ISO 8601 时间戳"
+    )
+    duration_ms: int | None = Field(
+        default=None, description="Agent 执行耗时（毫秒），status 为终态时有值"
+    )
 
 
 class RunEvent(BaseModel):
@@ -95,3 +106,95 @@ class RunEvent(BaseModel):
 class CreateRunRequest(BaseModel):
     objective: str = Field(min_length=2, max_length=20_000)
     parent_run_id: str | None = Field(default=None, min_length=1, max_length=100)
+
+
+# ==================== 分层记忆模型 ====================
+
+class MemoryLevel(str, Enum):
+    AGENT = 'agent'
+    PLANNER = 'planner'
+    SESSION = 'session'
+    PROJECT = 'project'
+
+
+class MemoryRecord(BaseModel):
+    """单条记忆记录"""
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    run_id: str
+    conversation_id: str
+    level: MemoryLevel
+    agent_id: str | None = None
+    task_id: str | None = None
+    phase: str = Field(description='planning | execution | synthesis')
+    summary: str = Field(max_length=4000)
+    structured_data: dict[str, Any] | None = None
+    token_count_before: int = 0
+    token_count_after: int = 0
+    importance: float = Field(default=0.5, ge=0.0, le=1.0)
+    created_at: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+
+
+class AgentMemoryState(BaseModel):
+    """Agent 的完整记忆状态"""
+    agent_id: str
+    conversation_id: str
+    recent_message_count: int = 0
+    summary_count: int = 0
+    extracted_facts: dict[str, Any] = Field(default_factory=dict)
+    token_budget: int = 32000
+    last_updated: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+
+
+class PlannerMemoryState(BaseModel):
+    """主脑的完整记忆状态"""
+    conversation_id: str
+    task_history_count: int = 0
+    decision_log: list[dict[str, Any]] = Field(default_factory=list)
+    agent_capability_notes: dict[str, Any] = Field(default_factory=dict)
+    project_structure_notes: dict[str, Any] = Field(default_factory=dict)
+    contract_history: list[str] = Field(default_factory=list)
+    last_updated: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+
+
+# ==================== 中断机制模型 ====================
+
+class InterruptTarget(str, Enum):
+    ALL = 'all'
+    AGENT = 'agent'
+    PLANNER = 'planner'
+
+
+class InterruptAction(str, Enum):
+    PAUSE = 'pause'
+    INJECT = 'inject'
+    REPLAN = 'replan'
+    ABORT = 'abort'
+    RESUME = 'resume'
+
+
+class InterruptCommand(BaseModel):
+    """用户发送的中断指令"""
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    run_id: str
+    target: InterruptTarget
+    action: InterruptAction
+    target_agent: str | None = None
+    target_task: str | None = None
+    instruction: str = ''
+    created_at: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+
+
+class InterruptDecision(BaseModel):
+    """中断处理决策"""
+    command_id: str
+    decision: Literal['apply', 'discard', 'defer']
+    modified_instruction: str = ''
+    target_nodes: list[str] = Field(default_factory=list)

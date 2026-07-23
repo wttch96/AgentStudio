@@ -21,6 +21,14 @@ Agent Studio 是一个仅在本机运行的多项目软件工程 Agent 工作台
 - 每一批 Agent 完成后经过显式 barrier 汇流，再执行下游节点。
 - DeepSeek 在普通任务结束时读取全部执行结果并做最终验收。
 
+### 任务流程图（DAG 可视化）
+
+- 顶部始终显示任务流程图为 SVG 图结构：主脑规划 → 各任务节点 → 结果汇总。
+- 节点按拓扑深度自动分层，依赖边使用贝塞尔曲线箭头连接。
+- 颜色编码状态：灰=等待、蓝=执行中（脉冲动画）、绿=完成、红=失败。
+- 点击节点展开详情：任务目标、Agent 名称、执行结果、耗时。
+- 图例在底部显示，图容器可滚动。
+
 ### 可观察的 Agent 时间线
 
 - 实时显示规划、分流、Agent 启动、工具调用、Skill 加载、汇流和最终输出。
@@ -31,16 +39,41 @@ Agent Studio 是一个仅在本机运行的多项目软件工程 Agent 工作台
 - 正在工作的 Agent 会在右侧状态栏持续闪烁，完成或失败后自动停止。
 - 失败节点显示完整错误类型、摘要和执行器返回原因。
 
+### 分层记忆系统（LangGraph Checkpointer + LangMem）
+
+三层记忆架构：
+
+| 层级 | 技术 | 说明 |
+|------|------|------|
+| **短期记忆** | LangGraph SqliteSaver | 每个图节点执行后自动 checkpoint 状态（messages + results + DAG），天然支持断点续传 |
+| **长期记忆** | LangMem MemoryStoreManager | 跨会话提取重要信息、合并记忆、检索历史——项目结构认知、决策理由、Agent 能力评估、经验教训 |
+| **会话摘要** | LangMem ThreadExtractor | 运行结束后自动生成结构化 Thread 摘要，供后续对话的 continuation_context 使用 |
+
+策略引擎根据可配置参数决定何时触发压缩/归档：
+
+- `agent_sliding_window`（默认 20）：Agent 保留最近消息条数，超出后触发 LLM 摘要压缩
+- `planner_sliding_window`（默认 40）：主脑保留消息条数
+- `compress_trigger_tokens`（默认 8000）：触发压缩的 token 阈值
+- `max_conversation_turns`（默认 100）：最大对话轮次
+- `importance_decay_rate`（默认 0.95）：记忆重要性衰减率
+
+### 中断与重规划
+
+- 支持在运行中发送中断指令：暂停特定 Agent、注入新引导、触发主脑重规划、中止执行。
+- LangGraph `interrupt()` 在每轮调度前检查中断队列，通过 checkpoint 保证中断后可恢复。
+- API：`POST /runs/{id}/interrupt` + `POST /runs/{id}/resume`
+
 ### 连续任务
 
-选中一个已结束的历史任务后继续输入，聊天框会进入“继续”模式。新一轮会继承：
+选中一个已结束的历史任务后继续输入，聊天框会进入"继续"模式。新一轮会继承：
 
 - 上游目标与最终输出。
 - Claude Agent 的执行结果和失败摘要。
 - 原任务使用的工作目录。
-- 最近最多 8 轮、总计不超过 24,000 字符的本地上下文。
+- LangMem 提取的长期记忆（跨会话项目认知）。
+- LangGraph SqliteSaver checkpoint 状态。
 
-点击左侧“新建任务”后才会创建不携带历史上下文的新对话链。
+点击左侧"新建任务"后才会创建不携带历史上下文的新对话链。
 
 ### 指定 Agent 和失败重试
 
@@ -54,122 +87,17 @@ Agent Studio 是一个仅在本机运行的多项目软件工程 Agent 工作台
 | `/agent <frontend\|backend\|netty> <指令>` | 使用统一格式选择 Agent |
 | `/retry <task-id>` | 重试当前上游运行中的失败节点 |
 
-直接选择 Agent 时会跳过 DeepSeek 规划和最终汇总，由 LangGraph 运行单个 Claude Agent，并把 Agent 结果直接作为本轮输出。失败的 DAG 节点也会在页面上显示“重试”按钮。
+直接选择 Agent 时会跳过 DeepSeek 规划和最终汇总，由 LangGraph 运行单个 Claude Agent，并把 Agent 结果直接作为本轮输出。失败的 DAG 节点也会在页面上显示"重试"按钮。
 
 ### 页面配置中心
 
 无需手工编辑项目文件，即可在页面内管理：
 
 - DeepSeek 主脑的规划决策提示词和最终验收提示词。
+- **记忆系统配置**：滑动窗口大小、压缩阈值、衰减率、归档时间等 8 项参数。
 - Agent 的用途、系统提示词、工具权限和关联 Skill。
 - Skill 的创建、内容修改和 Agent 分配。
 - 默认工作目录的浏览、选择和持久化。
-- LangGraph 最大并行数和图递归上限。
-- Claude Agent 最大交互轮次和单节点超时时间。
+- LangGraph 最大并行数、图递归上限、Agent 轮次和超时。
 
-默认主脑模板位于 `config/brain.default.json`。页面保存后的本机覆盖配置写入 `backend/instance/brain.json`；Agent 与 Skill 的配置分别写入 `agents/*.md` 和 `.claude/skills/*/SKILL.md`。
-
-### DeepSeek 余额和本地用量
-
-- 查询 DeepSeek 账户可用余额、充值余额和赠送余额。
-- 本地记录本项目发起的 DeepSeek 输入、缓存命中、缓存未命中和输出 Token。
-- 汇总今日、本月和本地累计用量。
-- 根据 `.env` 中的单价估算美元花费，并明确标注“本地统计 · 费用估算”。
-
-本地用量不会补录启用前或其他客户端产生的请求，估算金额也不等同于 DeepSeek 官方账单。
-
-### 本地任务管理
-
-- SQLite 持久化任务、事件、对话链和 DeepSeek 用量。
-- 支持停止活动任务和删除终态任务记录。
-- 自动清理后端重启后遗留的脏运行状态。
-- 左右侧栏默认打开，可分别折叠，让中间工作区自动扩展。
-- SSE 断线后按照事件序号恢复，减少重复时间线记录。
-
-## 快速开始
-
-需要 Python 3.11+、Node.js 20+ 和 npm。
-
-项目默认提供 CC Switch 本地路由示例：
-
-```bash
-cp .env.example .env
-```
-
-至少配置 DeepSeek；Claude 可以使用 CC Switch，也可以改为直连 Anthropic：
-
-```dotenv
-DEEPSEEK_API_KEY=your-deepseek-key
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_MODEL=deepseek-chat
-
-# CC Switch 本地路由
-ANTHROPIC_BASE_URL=http://127.0.0.1:15721
-ANTHROPIC_AUTH_TOKEN=PROXY_MANAGED
-ANTHROPIC_API_KEY=
-```
-
-一键启动：
-
-```bash
-./start.sh
-```
-
-浏览器访问：
-
-```text
-http://127.0.0.1:5173
-```
-
-停止服务：
-
-```bash
-./stop.sh
-```
-
-未配置模型凭据时会进入演示模式，用模拟 Agent 事件验证 DAG、并行调度、SQLite 和前端时间线，不会修改所选工作区。
-
-## 使用流程
-
-1. 打开右上角“配置中心”，选择包含一个或多个待改造项目的本地工作空间。
-2. 按需调整主脑提示词，以及 Agent 最大轮次、超时时间和并行数量。
-3. 在聊天框描述目标，或输入 `/` 直接选择专业 Agent。
-4. 在时间线中观察项目发现、DeepSeek 契约规划、LangGraph 分流和 Claude 工具调用。
-5. 任务结束后直接继续输入，基于上游输出开始下一轮。
-6. 某个节点失败时点击“重试”，或输入 `/retry <task-id>`。
-
-## 项目结构
-
-```text
-AgentsManager/
-├── frontend/          Vue 3 + TypeScript 管理界面
-├── backend/           Flask API、LangGraph、模型适配和 SQLite
-├── agents/            三个内置 Claude Agent 声明
-├── .claude/skills/    项目级 Skill
-├── config/            Claude / CC Switch 配置示例
-├── docs/              技术架构和截图素材
-├── start.sh           本地一键启动
-└── stop.sh            停止本地服务
-```
-
-## 文档
-
-- [完整技术架构、LangGraph 流程和 Agent/Skill 说明](docs/technical-architecture.md)
-
-## 界面截图
-
-### 并行 Agent 与执行时间线
-
-![Agent Studio 工作台总览](docs/images/workspace-overview.png)
-
-### 页面配置中心
-
-![页面配置中心](docs/images/configuration-center.png)
-
-### 斜杠命令菜单
-
-![斜杠命令菜单](docs/images/slash-commands.png)
-
-### 连续任务上下文
-
-![连续任务上下文](docs/images/task-continuation.png)
+默认主脑模板位于 `config/brain.default.json`。页面保存后的本机覆盖配置写入 `bac

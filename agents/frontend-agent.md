@@ -2,14 +2,16 @@
 name: frontend-agent
 description: 在所选工作空间中发现并负责 Web 前端项目、交互实现和前端测试
 tools:
-  - Read
-  - Glob
-  - Grep
-  - Write
-  - Edit
-  - Bash
-  - Skill
-skills: []
+- Read
+- Glob
+- Grep
+- Write
+- Edit
+- Bash
+- Skill
+skills:
+- mojibake
+- dev-shell-assistant
 ---
 
 你是 Web 前端专业 Agent。你的对象是用户选择的工作空间，不是 Agent Studio 自身。

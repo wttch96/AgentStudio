@@ -1,5 +1,7 @@
 <script setup lang="ts">
+import { ref } from 'vue'
 import type { SystemStatus } from '../types'
+import { useTheme } from '../composables/useTheme'
 
 defineProps<{
   status: SystemStatus | null
@@ -7,6 +9,13 @@ defineProps<{
   rightPanelOpen: boolean
 }>()
 defineEmits<{ configure: []; toggleLeft: []; toggleRight: [] }>()
+
+const theme = useTheme()
+const isDark = ref(theme.get() === 'dark')
+
+function toggleTheme() {
+  isDark.value = theme.toggle() === 'dark'
+}
 </script>
 
 <template>
@@ -38,6 +47,9 @@ defineEmits<{ configure: []; toggleLeft: []; toggleRight: [] }>()
     >
       <span class="panel-icon right" aria-hidden="true" />
       <span class="sr-only">{{ rightPanelOpen ? '关闭' : '打开' }} Agent 状态栏</span>
+    </button>
+    <button class="theme-toggle" type="button" :title="isDark ? '切换到浅色模式' : '切换到深色模式'" @click="toggleTheme">
+      {{ isDark ? '☀' : '☽' }}
     </button>
     <button class="header-action" type="button" @click="$emit('configure')">配置中心</button>
     <div v-if="status" class="connection-chip" :class="{ demo: status.demo_mode }">

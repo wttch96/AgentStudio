@@ -15,6 +15,9 @@ from app.services.brain_settings import BrainSettings
 from app.services.run_manager import RunManager
 from app.services.scheduler_settings import SchedulerSettings
 from app.services.workspace_settings import WorkspaceSettings
+from app.services.memory_settings import MemorySettings
+from app.services.memory_manager import MemoryManager
+from app.services.interrupt_router import InterruptRouter
 from app.storage.sqlite_store import SQLiteStore
 
 
@@ -32,6 +35,9 @@ class ServiceContainer:
     deepseek_usage: DeepSeekUsageService
     planner: DeepSeekPlanner
     executor: ClaudeAgentExecutor
+    memory_settings: MemorySettings
+    memory_manager: MemoryManager
+    interrupt_router: InterruptRouter
     runs: RunManager
 
     @classmethod
@@ -62,6 +68,9 @@ class ServiceContainer:
         deepseek_usage = DeepSeekUsageService(settings, store)
         planner = DeepSeekPlanner(settings, deepseek_usage, brain)
         executor = ClaudeAgentExecutor(settings, registry, events)
+        memory_settings = MemorySettings(settings.instance_dir / "memory.json")
+        memory_manager = MemoryManager(settings, store, memory_settings.current())
+        interrupt_router = InterruptRouter(store, events)
         runs = RunManager(
             store,
             events,
@@ -69,6 +78,8 @@ class ServiceContainer:
             executor,
             workspace,
             scheduler,
+            memory_manager,
+            interrupt_router,
         )
         return cls(
             settings,
@@ -83,5 +94,8 @@ class ServiceContainer:
             deepseek_usage,
             planner,
             executor,
+            memory_settings,
+            memory_manager,
+            interrupt_router,
             runs,
         )

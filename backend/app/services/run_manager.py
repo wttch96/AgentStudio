@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import threading
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from app.agents.claude_executor import ClaudeAgentExecutor
@@ -19,6 +20,13 @@ from app.services.run_commands import AGENT_SCOPES, RunCommand, parse_run_comman
 from app.services.scheduler_settings import SchedulerSettings
 from app.storage.sqlite_store import SQLiteStore
 from app.services.workspace_settings import WorkspaceSettings
+from app.services.memory_manager import MemoryManager
+from app.services.interrupt_router import InterruptRouter
+import sqlite3
+import tempfile
+from pathlib import Path
+from app.services.memory_manager import MemoryManager
+from app.services.interrupt_router import InterruptRouter
 
 
 class RunManager:
@@ -30,6 +38,8 @@ class RunManager:
         executor: ClaudeAgentExecutor,
         workspace_settings: WorkspaceSettings,
         scheduler_settings: SchedulerSettings,
+        memory_manager: MemoryManager | None = None,
+        interrupt_router: InterruptRouter | None = None,
     ) -> None:
         self.store = store
         self.events = events
@@ -37,7 +47,10 @@ class RunManager:
         self.executor = executor
         self.workspace_settings = workspace_settings
         self.scheduler_settings = scheduler_settings
+        self.memory_manager = memory_manager
+        self.interrupt_router = interrupt_router
         self._cancel_events: dict[str, threading.Event] = {}
+        self._agent_pause_events: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
 
     def start(self, objective: str, parent_run_id: str | None = None) -> dict:
@@ -76,6 +89,9 @@ class RunManager:
                 continuation_context,
                 preset_dag.model_dump() if preset_dag else None,
                 command.kind in {"direct", "retry"},
+                self.interrupt_router,
+                self.memory_manager,
+                self.store.get_run(run_id).get("conversation_id", run_id),
             ),
             name=f"run-{run_id[:8]}",
             daemon=True,
@@ -123,8 +139,12 @@ class RunManager:
         continuation_context: str,
         preset_dag: dict | None,
         direct_mode: bool,
+        interrupt_router: InterruptRouter | None = None,
+        memory_manager: MemoryManager | None = None,
+        conversation_id: str = "",
     ) -> None:
-        self.store.update_run(run_id, "running")
+        started_at_iso = datetime.now(timezone.utc).isoformat()
+        self.store.update_run(run_id, "running", started_at=started_at_iso)
         self.events.emit(
             run_id,
             "run.started",
@@ -136,7 +156,17 @@ class RunManager:
             },
         )
         try:
-            graph = build_graph(self.planner, self.executor, self.events, cancel_event)
+            # 创建 SqliteSaver checkpointer 用于短期记忆（图状态 checkpoint）
+            checkpoint_db = Path(workspace_root) / '.agent-studio-checkpoints.db'
+            checkpointer = None
+            try:
+                conn = sqlite3.connect(str(checkpoint_db), check_same_thread=False)
+                from langgraph.checkpoint.sqlite import SqliteSaver
+                checkpointer = SqliteSaver(conn)
+            except Exception:
+                pass  # checkpoint 失败不阻塞主流程
+
+            graph = build_graph(self.planner, self.executor, self.events, cancel_event, checkpointer, interrupt_router, memory_manager)
             output = graph.invoke(
                 {
                     "run_id": run_id,
@@ -157,6 +187,26 @@ class RunManager:
             )
             final_answer = output.get("final_answer", "")
             status = "cancelled" if cancel_event.is_set() else "completed"
+            # 短期记忆：SqliteSaver 已在 graph 编译时注入，自动 checkpoint 每个节点状态
+            # 长期记忆：运行结束后用 LangMem 提取跨会话记忆
+            if memory_manager and conversation_id:
+                try:
+                    session_summary = output.get("session_summary", final_answer)
+                    results_raw = output.get("results", [])
+                    memory_manager.extract_long_term_memory(
+                        conversation_id, run_id,
+                        session_summary=str(session_summary)[:4000],
+                        agent_results=list(results_raw)[-20:] if results_raw else None,
+                    )
+                    memory_manager.summarize_thread(
+                        conversation_id,
+                        [
+                            {"role": "user", "content": objective},
+                            {"role": "assistant", "content": final_answer},
+                        ],
+                    )
+                except Exception:
+                    pass  # 长期记忆提取失败不影响主流程
             self.store.update_run(run_id, status, final_answer=final_answer)
             self.events.emit(run_id, f"run.{status}", payload={"text": final_answer})
         except Exception as error:

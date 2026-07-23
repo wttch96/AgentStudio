@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import operator
 import threading
+import time
+from datetime import datetime, timezone
 from typing import Annotated, Any
 
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import Send
+from langgraph.types import Send, interrupt, Command
 from typing_extensions import TypedDict
 
 from app.agents.claude_executor import ClaudeAgentExecutor
@@ -37,6 +39,8 @@ class GraphState(TypedDict, total=False):
     agent_max_turns: int
     agent_timeout_seconds: int
     final_answer: str
+    # LangMem 长期记忆写入的会话摘要
+    session_summary: str
 
 
 def build_graph(
@@ -44,6 +48,9 @@ def build_graph(
     executor: ClaudeAgentExecutor,
     events: EventPublisher,
     cancel_event: threading.Event,
+    checkpointer=None,
+    interrupt_router: object | None = None,
+    memory_manager: object | None = None,
 ):
     def plan(state: GraphState) -> GraphState:
         run_id = state["run_id"]
@@ -143,6 +150,47 @@ def build_graph(
             )
         ]
 
+    def interrupt_check(state: GraphState) -> GraphState:
+        """在每个 wave 开始前检查是否有中断指令。"""
+        if interrupt_router is None:
+            return {}
+        pending = interrupt_router.check_and_clear(state["run_id"])
+        if not pending:
+            return {}
+        events.emit(
+            state["run_id"],
+            "interrupt.received",
+            payload={
+                "count": len(pending),
+                "commands": [
+                    {
+                        "id": cmd.get("id"),
+                        "target": cmd.get("target"),
+                        "action": cmd.get("action"),
+                        "target_agent": cmd.get("target_agent_id"),
+                        "instruction": cmd.get("instruction", "")[:200],
+                    }
+                    for cmd in pending
+                ],
+            },
+        )
+        # 使用 LangGraph interrupt 暂停执行
+        decision = interrupt({
+            "message": "收到用户中断指令",
+            "pending_commands": pending,
+            "active_tasks": state.get("active_task_ids", []),
+            "current_stage": state.get("stage"),
+        })
+        # decision 由 resume 时通过 Command(resume=...) 传入
+        if isinstance(decision, dict):
+            action = decision.get("action", "continue")
+            if action == "replan":
+                return {"stage": "replan_requested"}
+            elif action == "abort":
+                cancel_event.set()
+                return {}
+        return {}
+
     def scheduler(state: GraphState) -> GraphState:
         """冻结本轮就绪集合，保证一批任务先并行完成，再计算下一批。"""
 
@@ -216,12 +264,14 @@ def build_graph(
                     summary=context[-6000:],
                 )
             )
+        started_at = datetime.now(timezone.utc).isoformat()
+        started_ms = int(time.time() * 1000)
         events.emit(
             state["run_id"],
             "agent.started",
             agent_id=task.agent,
             task_id=task.id,
-            payload={"title": task.title, "objective": task.objective},
+            payload={"title": task.title, "objective": task.objective, "started_at": started_at},
         )
         result = executor.execute(
             state["run_id"],
@@ -232,12 +282,18 @@ def build_graph(
             max_turns=state["agent_max_turns"],
             timeout_seconds=state["agent_timeout_seconds"],
         )
+        duration_ms = int(time.time() * 1000) - started_ms
+        result.started_at = started_at
+        result.duration_ms = duration_ms
         events.emit(
             state["run_id"],
             "agent.completed" if result.status == "completed" else "agent.failed",
             agent_id=task.agent,
             task_id=task.id,
-            payload=result.model_dump(),
+            payload={
+                **result.model_dump(),
+                "duration_ms": duration_ms,
+            },
         )
         # reducer 会把每个并行 worker 的单个结果合并回共享状态。
         return {"results": [result.model_dump()]}
@@ -282,7 +338,7 @@ def build_graph(
                 "run.summary",
                 payload={"text": final_answer, "direct_agent": True},
             )
-            return {"final_answer": final_answer}
+            return {"final_answer": final_answer, "session_summary": final_answer[:4000]}
         events.emit(
             state["run_id"],
             "brain.synthesizing",
@@ -298,17 +354,22 @@ def build_graph(
         events.emit(
             state["run_id"], "run.summary", payload={"text": final_answer}
         )
-        return {"final_answer": final_answer}
+        return {
+            "final_answer": final_answer,
+            "session_summary": final_answer[:4000],
+        }
 
     builder = StateGraph(GraphState)
     builder.add_node("plan", plan)
+    builder.add_node("interrupt_check", interrupt_check)
     builder.add_node("scheduler", scheduler)
     builder.add_node("replan_after_discovery", replan_after_discovery)
     builder.add_node("worker", worker)
     builder.add_node("barrier", barrier)
     builder.add_node("synthesize", synthesize)
     builder.add_edge(START, "plan")
-    builder.add_edge("plan", "scheduler")
+    builder.add_edge("plan", "interrupt_check")
+    builder.add_edge("interrupt_check", "scheduler")
     builder.add_conditional_edges(
         "scheduler", route_tasks, ["worker", "synthesize"]
     )
@@ -317,8 +378,8 @@ def build_graph(
     builder.add_conditional_edges(
         "barrier",
         route_after_barrier,
-        ["replan_after_discovery", "scheduler"],
+        ["replan_after_discovery", "interrupt_check"],
     )
-    builder.add_edge("replan_after_discovery", "scheduler")
+    builder.add_edge("replan_after_discovery", "interrupt_check")
     builder.add_edge("synthesize", END)
-    return builder.compile()
+    return builder.compile(checkpointer=checkpointer) if checkpointer else builder.compile()

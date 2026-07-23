@@ -277,7 +277,7 @@ RunManager._execute
 - `max_concurrency` 并发限制。
 - 明确的 discover → replan/contract → implement → synthesize 生命周期。
 
-当前 SQLite 保存的是应用运行和前端事件；尚未接入 LangGraph 持久化 checkpointer。需要节点级断点恢复时，可以在现有 `compile()` 位置增加 SQLite 或 PostgreSQL checkpointer。
+已接入 **LangGraph SqliteSaver checkpointer**。每次图节点执行后自动持久化图状态（messages + results + DAG），支持节点级断点续传。checkpoint 数据库位于工作空间根目录的 `.agent-studio-checkpoints.db`。同时集成 **LangMem** 进行跨会话长期记忆管理：`create_memory_store_manager` 负责提取/合并/检索，`create_thread_extractor` 负责会话级摘要生成。
 
 ### 一次任务的完整生命周期
 
@@ -341,24 +341,29 @@ flowchart TD
 ```text
 backend/app/
 ├── api/
-│   └── routes.py             REST、取消接口、历史查询和 SSE
+│   └── routes.py             REST、取消、中断、记忆管理和 SSE
 ├── agents/
 │   ├── registry.py           加载并校验 agents/*.md
 │   └── claude_executor.py    单个 Claude 专业节点的执行与事件适配
 ├── domain/
-│   └── models.py             TaskDag、DagTask、AgentResult、RunEvent
+│   ├── models.py             TaskDag、AgentResult、MemoryRecord、InterruptCommand
+│   └── configuration.py      页面配置模型（Scheduler、Brain、Memory）
 ├── events/
 │   └── publisher.py          所有运行事件的统一入口
 ├── orchestration/
-│   └── graph.py              LangGraph discover/replan/worker/synthesize
+│   └── graph.py              LangGraph 图 + SqliteSaver checkpoint + LangMem extract
 ├── planning/
 │   └── deepseek_planner.py   DeepSeek 规划和最终验收
 ├── services/
 │   ├── container.py          显式依赖组装
 │   ├── brain_settings.py     主脑提示词默认值与本地持久化
-│   └── run_manager.py        后台线程、取消信号和运行生命周期
+│   ├── memory_manager.py     LangMem 分层记忆管理（短期 checkpoint + 长期提取）
+│   ├── memory_settings.py    记忆配置持久化
+│   ├── interrupt_router.py   中断指令队列与路由
+│   ├── scheduler_settings.py LangGraph 调度参数持久化
+│   └── run_manager.py        后台线程、checkpointer 创建、记忆生命周期
 └── storage/
-    └── sqlite_store.py       运行历史与有序事件持久化
+    └── sqlite_store.py       运行历史、事件、记忆记录与中断指令持久化
 ```
 
 各层职责保持单一：HTTP 路由不直接调用模型，Claude 执行器不决定任务依赖，LangGraph 不读取环境密钥，SQLite 存储层不理解模型消息。
@@ -367,16 +372,24 @@ backend/app/
 
 ```text
 frontend/src/
-├── api/client.ts             Flask API 和 SSE 地址
+├── api/client.ts             Flask API、记忆配置和 SSE 地址
 ├── composables/
-│   └── useWorkspace.ts       当前运行、历史、事件流和重连状态
+│   ├── useWorkspace.ts       当前运行、历史、事件流和重连状态
+│   └── useTheme.ts           深色/浅色模式切换与持久化
 ├── components/
-│   ├── AppHeader.vue         模型连接与本机状态
+│   ├── AppHeader.vue         模型连接、主题切换与本机状态
 │   ├── RunSidebar.vue        历史运行
-│   ├── PlanBoard.vue         DAG 节点状态
-│   ├── EventTimeline.vue     Agent、工具、Skill 事件
+│   ├── DagGraph.vue          SVG 任务流程图（主脑→节点→结果）
+│   ├── EventTimeline.vue     Agent、工具、Skill 事件时间线
+│   ├── ConversationView.vue  Markdown 渲染的对话记录
 │   ├── AgentInspector.vue    三个 Claude Agent 的当前状态
-│   └── PromptComposer.vue    用户目标输入
+│   ├── PromptComposer.vue    用户目标输入
+│   └── config/              配置中心组件
+│       ├── ConfigCenter.vue
+│       ├── BrainConfigEditor.vue
+│       ├── SchedulerConfigEditor.vue
+│       ├── MemoryConfig.vue  记忆系统配置
+│       └── ...
 └── App.vue                   工作台布局与组件组合
 ```
 
@@ -566,6 +579,8 @@ DeepSeek 主脑输出类似：
 - `agent.started`、`agent.message`、`agent.completed`、`agent.failed`
 - `tool.started`、`skill.loaded`、`agent.usage`
 - `brain.contract_created`、`brain.synthesizing`、`run.summary`
+- `interrupt.requested`、`interrupt.received`、`interrupt.resolved`
+- `memory.extracted`、`memory.compressed`
 
 事件在 SQLite 中按每个运行的 `sequence` 单调递增。SSE 断线后，前端可以带上最后一个序号继续接收，避免重复显示。
 
@@ -644,8 +659,97 @@ npm --prefix frontend run build
 
 运行日志保存在 `.run/backend.log` 和 `.run/frontend.log`。
 
+
+
+## 分层记忆系统
+
+Agent Studio 采用三层记忆架构：
+
+### 短期记忆：LangGraph Checkpointer
+
+`SqliteSaver`（来自 `langgraph-checkpoint-sqlite`）在每次图节点执行后自动保存完整图状态到 SQLite。每个运行通过 `thread_id` 标识，天然支持：
+
+- 节点级断点续传：服务重启后可从最近的 checkpoint 恢复
+- 状态查询：可查看任意历史时间点的图状态
+- 中断恢复：LangGraph `interrupt()` 暂停后，通过 `Command(resume=...)` 继续
+
+checkpoint 实现位于 `graph.py` 的 `build_graph()`，在 `builder.compile(checkpointer=checkpointer)` 注入。
+
+### 长期记忆：LangMem
+
+`langmem` 提供两个核心能力：
+
+| 组件 | 作用 |
+|------|------|
+| `create_memory_store_manager` | 从对话中提取重要信息（项目结构、决策理由、Agent 能力、经验教训），自动与已有记忆比较、合并、去重 |
+| `create_thread_extractor` | 运行结束后生成结构化 Thread 摘要，供下一轮 `continuation_context` 使用 |
+
+记忆以 `namespace=(agent_studio, long_term)` 组织，集成 LangGraph 的 BaseStore。实现位于 `memory_manager.py`。
+
+### 策略引擎
+
+`StrategyEngine` 根据可配置参数决定何时触发记忆操作：
+
+| 方法 | 触发条件 | 配置项（默认值） |
+|------|----------|-----------------|
+| `should_compress()` | token 数 > 阈值 | `compress_trigger_tokens`（8000） |
+| `should_archive()` | 轮次超限 / 闲置超时 | `max_conversation_turns`（100）、`session_archive_after_hours`（24） |
+| `decay_importance()` | 每次压缩后 | `importance_decay_rate`（0.95） |
+| `sliding_window_size()` | Agent/主脑层 | `agent_sliding_window`（20）、`planner_sliding_window`（40） |
+
+配置通过页面配置中心的记忆配置标签页编辑，持久化到 `backend/instance/memory.json`。
+
+## 中断与重规划机制
+
+支持在运行中发送中断指令，通过 LangGraph `interrupt()` 实现：
+
+| API | 作用 |
+|-----|------|
+| `POST /api/runs/{id}/interrupt` | 发送中断指令 |
+| `POST /api/runs/{id}/resume` | 恢复运行 |
+
+中断指令类型：
+
+| target | action | 效果 |
+|--------|--------|------|
+| `all` | `pause` | 暂停所有 Agent |
+| `agent` | `inject` | 暂停指定 Agent 并注入新指令 |
+| `planner` | `replan` | 触发主脑重新规划 DAG |
+| `all` | `abort` | 中止运行 |
+
+`InterruptRouter`（`interrupt_router.py`）管理指令队列和 per-agent 暂停信号。图拓扑中的 `interrupt_check` 节点在每个 wave 开始前检查待处理指令。由于 SqliteSaver 已自动 checkpoint 状态，中断后可通过 `/resume` 恢复。
+
+## 任务流程图（DAG 可视化）
+
+`DagGraph.vue` 使用纯 SVG 渲染任务依赖图为流程图：
+
+- 节点按拓扑深度自动分层，依赖边使用贝塞尔曲线箭头连接
+- 始终显示开始节点（主脑规划，蓝色）和结束节点（结果汇总，绿色）
+- 每个任务节点显示 Agent 名称、执行状态和耗时
+- 颜色编码：灰=等待、蓝=执行中（脉冲动画）、绿=完成、红=失败
+- 点击任务节点展开详情：目标、结果
+
+## 深色/浅色模式
+
+`useTheme` composable 管理主题状态：
+
+- 自动检测系统 `prefers-color-scheme` 偏好
+- 通过 `data-theme` 属性切换 CSS 自定义属性
+- 持久化到 localStorage
+- 所有 UI 组件适配：覆盖 `--bg`、`--surface`、`--label`、`--secondary` 等变量以及硬编码的暗色背景
+
+## 记忆配置 API
+
+| 方法 | 地址 | 作用 |
+|------|------|------|
+| `GET` | `/api/memory` | 读取记忆系统配置 |
+| `PUT` | `/api/memory` | 更新记忆配置 |
+| `GET` | `/api/memory/stats/{conversation_id}` | 查询对话记忆统计 |
+
 ## 当前边界
 
-- 取消采用协作式取消：调度轮次间立即生效，Claude SDK 事件循环收到取消信号后结束消费。
+- 取消采用协作式取消，支持全局取消和 per-agent 暂停信号。调度轮次间立即生效，Claude SDK 事件循环收到取消信号后结束消费。
+- 中断：LangGraph `interrupt()` 在 wave 边界检查指令队列，checkpoint 支持恢复。
+- 记忆：三层架构（短期 checkpoint + 长期 LangMem + 策略引擎），所有参数可通过配置中心调整。
 - SQLite 加后台线程适合本地单用户；多用户部署时可把 `RunManager` 和 `EventPublisher` 替换为任务队列与 Redis Stream。
 - `write_scope` 当前同时用于计划表达和 Agent 提示约束，还不是操作系统级沙箱。
