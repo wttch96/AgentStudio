@@ -87,6 +87,7 @@ def get_agent(name: str):
             "skill_count": len(profile.skills),
             "sub_dir": profile.sub_dir,
             "is_required": profile.is_required,
+            "agent_type": profile.agent_type,
         })
     except ValueError as error:
         return jsonify({"error": str(error)}), 404
@@ -429,8 +430,7 @@ def add_knowledge_feedback(entry_id: str):
     except ValidationError as error:
         return jsonify({"error": "反馈无效", "details": error.errors()}), 400
     services().knowledge_store.add_feedback(entry_id, payload.feedback)
-    score = services().knowledge_store.store.get_knowledge_score(entry_id)
-    return jsonify({"entry_id": entry_id, "score": score})
+    return jsonify({"entry_id": entry_id})
 
 
 @api.get("/knowledge-stats")
@@ -543,6 +543,64 @@ def create_template():
         return jsonify({"error": "模板参数无效", "details": error.errors()}), 400
     tid = services().project_manager.create_template(payload.model_dump())
     return jsonify(tid), 201
+
+
+@api.put("/templates/<template_id>")
+def update_template(template_id: str):
+    """更新 Agent 模板，后续从该模板创建的 Agent 将使用新配置。"""
+    data = request.get_json(silent=True) or {}
+    result = services().project_manager.update_template(template_id, data)
+    if not result:
+        return jsonify({"error": "模板不存在"}), 404
+    return jsonify(result)
+
+
+@api.delete("/templates/<template_id>")
+def delete_template(template_id: str):
+    """删除非内置模板。"""
+    try:
+        ok = services().project_manager.delete_template(template_id)
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    if not ok:
+        return jsonify({"error": "模板不存在"}), 404
+    return "", 204
+
+
+# ==================== 模板中心 ====================
+
+@api.get("/template-center")
+def template_center():
+    """返回所有 Agent 模板和 Skill 模板。"""
+    agent_templates = services().project_manager.list_templates()
+    skill_templates = []
+    with services().store._connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM skill_templates ORDER BY category, name"
+        ).fetchall()
+        skill_templates = [dict(r) for r in rows]
+    return jsonify({"agents": agent_templates, "skills": skill_templates})
+
+
+@api.post("/template-center/skills")
+def publish_skill_template():
+    """将项目 Skill 发布为公共模板。"""
+    data = request.get_json(silent=True) or {}
+    name = data.get("name", "")
+    display_name = data.get("display_name", name)
+    description = data.get("description", "")
+    content = data.get("content", "")
+    category = data.get("category", "general")
+    if not name or not content:
+        return jsonify({"error": "name 和 content 为必填项"}), 400
+    import uuid as _uuid
+    tid = _uuid.uuid4().hex
+    with services().store._connect() as conn:
+        conn.execute(
+            "INSERT INTO skill_templates(id, name, display_name, description, category, content) VALUES (?,?,?,?,?,?)",
+            (tid, name, display_name, description, category, content),
+        )
+    return jsonify({"id": tid}), 201
 
 
 @api.get("/runs/<run_id>/stream")

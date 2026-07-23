@@ -40,6 +40,8 @@ class RunManager:
         scheduler_settings: SchedulerSettings,
         memory_manager: MemoryManager | None = None,
         interrupt_router: InterruptRouter | None = None,
+        deepseek_executor=None,
+        rag_executor=None,
     ) -> None:
         self.store = store
         self.events = events
@@ -49,6 +51,8 @@ class RunManager:
         self.scheduler_settings = scheduler_settings
         self.memory_manager = memory_manager
         self.interrupt_router = interrupt_router
+        self.deepseek_executor = deepseek_executor
+        self.rag_executor = rag_executor
         self._cancel_events: dict[str, threading.Event] = {}
         self._agent_pause_events: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
@@ -56,23 +60,11 @@ class RunManager:
     def start(self, objective: str, parent_run_id: str | None = None,
               project_id: str | None = None) -> dict:
         command = parse_run_command(objective)
-        parent = self.store.get_run(parent_run_id) if parent_run_id else None
-        if parent_run_id and not parent:
-            raise ValueError("上游任务不存在")
-        if parent and parent["status"] not in {"completed", "failed", "cancelled"}:
-            raise RuntimeError("上游任务仍在执行，请等待结束后再继续")
-
-        # 继续任务必须沿用上游工作目录，避免一次对话意外切到另一个项目。
-        root = (
-            Path(parent["workspace_root"])
-            if parent and parent.get("workspace_root")
-            else self.workspace_settings.current()
-        )
+        root = self.workspace_settings.current()
         if not root.is_dir():
-            raise ValueError(f"上游工作目录不存在：{root}")
+            raise ValueError(f"工作目录不存在：{root}")
         scheduler = self.scheduler_settings.current()
         run_id = uuid.uuid4().hex
-        continuation_context = self._continuation_context(parent_run_id)
         preset_dag = self._preset_dag(command, parent_run_id)
         run = self.store.create_run(run_id, objective, str(root), parent_run_id)
         cancel_event = threading.Event()
@@ -87,7 +79,7 @@ class RunManager:
                 root,
                 scheduler,
                 cancel_event,
-                continuation_context,
+                "",
                 preset_dag.model_dump() if preset_dag else None,
                 command.kind in {"direct", "retry"},
                 self.interrupt_router,
@@ -138,7 +130,7 @@ class RunManager:
         workspace_root: Path,
         scheduler: SchedulerConfiguration,
         cancel_event: threading.Event,
-        continuation_context: str,
+        guidance: str,
         preset_dag: dict | None,
         direct_mode: bool,
         interrupt_router: InterruptRouter | None = None,
@@ -169,21 +161,34 @@ class RunManager:
             except Exception:
                 pass  # checkpoint 失败不阻塞主流程
 
-            # 加载项目 Agent 列表
+            # 加载项目 Agent 列表（未指定 project_id 时加载全部项目的 Agent）
             project_agents = []
-            if project_id:
-                try:
+            try:
+                if project_id:
                     agent_profiles = self.executor.registry.load_project_agents(project_id)
                     project_agents = list(agent_profiles.values())
-                except Exception:
-                    pass
+                else:
+                    # 遍历所有项目加载 Agent
+                    with self.store._connect() as conn:
+                        rows = conn.execute(
+                            "SELECT DISTINCT project_id FROM project_agents"
+                        ).fetchall()
+                        seen = set()
+                        for row in rows:
+                            profiles = self.executor.registry.load_project_agents(row["project_id"])
+                            for name, p in profiles.items():
+                                if name not in seen and p.agent_type not in ('brain',):
+                                    seen.add(name)
+                                    project_agents.append(p)
+            except Exception:
+                pass
 
-            graph = build_graph(self.planner, self.executor, self.events, cancel_event, checkpointer, interrupt_router, memory_manager, project_agents)
+            graph = build_graph(self.planner, self.executor, self.events, cancel_event, checkpointer, interrupt_router, memory_manager, project_agents, deepseek_executor=self.deepseek_executor, rag_executor=self.rag_executor)
             output = graph.invoke(
                 {
                     "run_id": run_id,
                     "objective": objective,
-                    "continuation_context": continuation_context,
+                    "guidance": guidance,
                     "preset_dag": preset_dag,
                     "direct_mode": direct_mode,
                     "workspace_root": str(workspace_root),
@@ -300,35 +305,3 @@ class RunManager:
                 )
             ],
         )
-
-    def _continuation_context(self, parent_run_id: str | None) -> str:
-        """把最近上游输出压缩成有界文本，供 DeepSeek 继续规划。"""
-
-        if not parent_run_id:
-            return ""
-        sections: list[str] = []
-        for run in self.store.run_ancestry(parent_run_id):
-            agent_summaries: list[str] = []
-            for event in self.store.list_events(run["id"]):
-                if event["type"] not in {"agent.completed", "agent.failed"}:
-                    continue
-                payload = event["payload"]
-                summary = str(payload.get("summary") or payload.get("error") or "")[:1600]
-                if summary:
-                    agent_summaries.append(
-                        f"- {event.get('agent_id') or 'agent'}: {summary}"
-                    )
-            answer = str(run.get("final_answer") or run.get("error") or "无最终输出")[:6000]
-            sections.append(
-                "\n".join(
-                    [
-                        f"第 {run.get('turn_index', 1)} 轮用户目标：{run['objective']}",
-                        f"状态：{run['status']}",
-                        "Agent 结果：",
-                        *(agent_summaries[-6:] or ["- 无"]),
-                        f"最终输出：\n{answer}",
-                    ]
-                )
-            )
-        # 优先保留最新轮次，限制上下文避免历史对话无限膨胀。
-        return "\n\n--- 上游轮次 ---\n\n".join(sections)[-24_000:]

@@ -27,7 +27,8 @@ class KnowledgeStore:
 
     def add(self, title: str, content: str, category: str = "general",
             tags: list[str] | None = None, source: str = "",
-            expires_at: str | None = None, score: float = 0.0) -> str:
+            expires_at: str | None = None, score: float = 0.0,
+            project_id: str = "") -> str:
         """添加知识条目，返回 entry_id。"""
         entry_id = uuid.uuid4().hex
         self.store.insert_knowledge({
@@ -35,6 +36,7 @@ class KnowledgeStore:
             "category": category, "tags": tags or [],
             "source": source, "score": score,
             "expires_at": expires_at,
+            "project_id": project_id,
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
         return entry_id
@@ -48,18 +50,22 @@ class KnowledgeStore:
     def get(self, entry_id: str) -> dict[str, Any] | None:
         return self.store.get_knowledge(entry_id)
 
-    def list(self, category: str | None = None, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
-        return self.store.list_knowledge(category=category, limit=limit, offset=offset)
+    def list(self, category: str | None = None, limit: int = 50, offset: int = 0,
+             project_id: str = "") -> list[dict[str, Any]]:
+        return self.store.list_knowledge(category=category, limit=limit, offset=offset,
+                                         project_id=project_id)
 
     # ── 混合检索 ──────────────────────────────────────
 
-    def search(self, query: str, category: str | None = None, top_k: int = 10) -> list[dict[str, Any]]:
+    def search(self, query: str, category: str | None = None, top_k: int = 10,
+               project_id: str = "") -> list[dict[str, Any]]:
         """混合检索：BM25 (FTS5) + 向量检索，RRF 融合排序。"""
         # 自动清理过期条目
         self.store.cleanup_expired_knowledge()
 
         # 1. BM25 全文搜索
-        bm25_ids = self.store.search_knowledge_fts(query, category=category, limit=top_k * 2)
+        bm25_ids = self.store.search_knowledge_fts(query, category=category, limit=top_k * 2,
+                                                    project_id=project_id)
 
         # 2. 向量检索（如可用）
         vec_results: list[tuple[str, float]] = self._vector_search(query, limit=top_k)
@@ -159,8 +165,8 @@ class KnowledgeStore:
 
     # ── 统计 ──────────────────────────────────────────
 
-    def stats(self) -> dict[str, Any]:
-        return self.store.knowledge_stats()
+    def stats(self, project_id: str = "") -> dict[str, Any]:
+        return self.store.knowledge_stats(project_id=project_id)
 
     def cleanup(self) -> int:
         return self.store.cleanup_expired_knowledge()

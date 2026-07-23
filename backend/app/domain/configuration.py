@@ -45,10 +45,9 @@ class WorkspaceUpdate(BaseModel):
 
 
 class BrainConfiguration(BaseModel):
-    """DeepSeek 主脑的可编辑行为提示词；结构化输出约束由代码另行追加。"""
+    """DeepSeek 主脑的统一编排提示词。"""
 
-    planning_prompt: str = Field(min_length=50, max_length=50_000)
-    summary_prompt: str = Field(min_length=20, max_length=30_000)
+    orchestration_prompt: str = Field(min_length=50, max_length=50_000)
 
 
 class SchedulerConfiguration(BaseModel):

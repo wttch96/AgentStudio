@@ -50,11 +50,12 @@ interface LayoutNode {
   w: number; h: number; status: string; isStart?: boolean; isEnd?: boolean; task?: PlanTask
 }
 
-const nodeW = 146; const nodeH = 48; const hGap = 120; const vGap = 72
-const padX = 20; const padY = 32
+const nodeW = 110; const nodeH = 34; const hGap = 70; const vGap = 40
+const padX = 12; const padY = 16
 
 const layout = computed(() => {
-  const tasks = props.tasks
+  // Filter out RAG/system agent tasks from display (they run behind the scenes)
+  const tasks = props.tasks.filter(t => !t.agent?.includes('brain'))
   if (!tasks.length) {
     return { nodes: [] as LayoutNode[], edges: [] as { from: string; to: string }[], width: 400, height: 120 }
   }
@@ -208,15 +209,15 @@ const layout = computed(() => {
           <!-- Title -->
           <text
             :x="node.task ? 20 : 10" y="18"
-            font-size="10.5" font-weight="600" fill="var(--label)"
+            font-size="9" font-weight="600" fill="var(--label)"
             :text-anchor="node.task ? 'start' : 'middle'"
           >
-            {{ node.label.length > 16 ? node.label.slice(0, 16) + '…' : node.label }}
+            {{ node.label.length > 14 ? node.label.slice(0, 14) + '…' : node.label }}
           </text>
           <!-- Sub label -->
           <text
             :x="node.task ? 20 : 10" y="35"
-            font-size="9" fill="var(--secondary)"
+            font-size="7.5" fill="var(--secondary)"
             :text-anchor="node.task ? 'start' : 'middle'"
           >
             {{ node.task ? node.sub : node.sub }}
@@ -270,7 +271,7 @@ const layout = computed(() => {
   border: 1px solid var(--separator-soft);
   border-radius: 10px;
   overflow: auto;
-  max-height: 380px;
+  max-height: 240px;
 }
 .graph-container svg { display: block; }
 

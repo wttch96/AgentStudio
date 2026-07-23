@@ -103,7 +103,7 @@ watch(() => props.projects.length, (n) => { if (n === 0) view.value = 'create' }
 
 onMounted(async () => {
   browseDir()
-  try { allTemplates.value = (await api.templates()).items.filter(t => t.agent_type === 'claude') } catch { /* */ }
+  try { allTemplates.value = (await api.templates()).items.filter(t => t.agent_type !== 'brain') } catch { /* */ }
   if (props.projects.length === 0) view.value = 'create'
 })
 </script>
@@ -200,10 +200,10 @@ onMounted(async () => {
 
           <div class="pm-section">
             <div class="pm-section-header">
-              <strong>项目 Agent（{{ detailAgents.filter(a => a.agent_type === 'claude').length }} 个）</strong>
+              <strong>项目 Agent（{{ detailAgents.filter(a => a.agent_type !== 'brain').length }} 个）</strong>
             </div>
             <div class="pm-agent-list">
-              <div v-for="a in detailAgents.filter(a => a.agent_type === 'claude')" :key="a.id" class="pm-agent-item">
+              <div v-for="a in detailAgents.filter(a => a.agent_type !== 'brain')" :key="a.id" class="pm-agent-item">
                 <div>
                   <strong>{{ a.display_name }}</strong>
                   <small>{{ a.name }} · 子目录: {{ a.sub_dir || '根目录' }}</small>

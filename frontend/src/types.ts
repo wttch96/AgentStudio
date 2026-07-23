@@ -35,6 +35,7 @@ export interface AgentProfile {
   builtin: boolean
   sub_dir?: string
   project_id?: string
+  agent_type?: 'claude' | 'deepseek' | 'rag'
 }
 
 export interface AgentDetail extends AgentProfile {
@@ -66,8 +67,7 @@ export interface SchedulerConfiguration {
 }
 
 export interface BrainConfiguration {
-  planning_prompt: string
-  summary_prompt: string
+  orchestration_prompt: string
 }
 
 export interface DeepSeekBalance {
@@ -233,7 +233,7 @@ export interface ProjectAgent {
   display_name: string
   description: string
   template_id: string | null
-  agent_type: 'brain' | 'rag' | 'claude'
+  agent_type: 'brain' | 'rag' | 'claude' | 'deepseek'
   sub_dir: string
   system_prompt: string
   tools: string[]
@@ -254,4 +254,15 @@ export interface AgentTemplate {
   default_tools: string[]
   default_skills: string[]
   is_builtin: boolean
+}
+
+export interface SkillTemplate {
+  id: string
+  name: string
+  display_name: string
+  description: string
+  category: string
+  content: string
+  is_builtin: boolean
+  created_at: string
 }

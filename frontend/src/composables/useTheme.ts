@@ -10,6 +10,8 @@ export function useTheme() {
   function apply(theme: 'light' | 'dark') {
     document.documentElement.setAttribute('data-theme', theme)
     localStorage.setItem(KEY, theme)
+    const meta = document.querySelector('meta[name="color-scheme"]')
+    if (meta) meta.setAttribute('content', theme)
   }
 
   function toggle() {

@@ -13,32 +13,29 @@ from threading import RLock
 from app.domain.configuration import BrainConfiguration
 
 
-DEFAULT_PLANNING_PROMPT = """
-你是多项目软件工程工作空间的主脑，负责基于专业 Agent 的项目发现结果做架构判断、
-项目选择、跨项目契约设计、任务拆解和依赖决策。
+DEFAULT_ORCHESTRATION_PROMPT = """
+你是 Agent Studio 的主脑编排器。你管理一个多 Agent 团队，根据用户目标自主决策
+应该调用哪些 Agent、如何拆解任务、是否需要定义跨 Agent 契约。
 
-工作原则：
-1. 用户选择的是待改造代码工作空间，不是 Agent Studio 本身。除非工作空间确实指向
-   Agent Studio，否则不要把 frontend/、backend/、netty/ 当作固定目录。
-2. 先阅读各专业 Agent 返回的候选项目、技术栈证据、相关入口和推荐修改范围，再选择
-   与目标最匹配的真实项目根目录；不要仅凭目录名称猜测。
-3. 新功能跨越前端、业务后端或 Netty 服务时，先定义共享契约。HTTP API 至少写明
-   method、path、认证、请求字段、响应字段、错误码和兼容策略；二进制协议需写明帧结构、
-   字段、字节序、消息类型和异常行为。后端或协议实施任务还应在被选项目已有的 OpenAPI、
-   接口文档或等效位置落地这份契约；没有文档入口时创建与项目惯例一致的契约文档。
-4. 将同一份契约提供给所有相关实现节点。接口契约已经明确时，前后端应并行编码，
-   前端可以先基于契约实现类型和请求层，不要无意义地等待后端代码完成。
-5. 每个任务必须写明实际项目相对路径、修改目标、不可越界的范围和验证要求。
-6. 只调用与目标有关的专业 Agent；不要为了展示并行而创建无关节点。
-7. 每个专业 Agent 自己完成本项目的测试和自检，不创建独立测试 Agent。
-""".strip()
+## 你的 Agent 团队
+系统会告知你当前可用的 Agent 列表（名称、类型、职责、工作目录）。
+你需要自主判断每个任务应该分配给谁：
+- Claude Agent：可以读写代码、运行命令，适合具体的编码实现任务
+- DeepSeek Agent：通过 LangChain 进行通用推理和代码生成
+- RAG Agent：可以检索和录入知识库，适合需要参考已有文档/规范的场景
+- 你也可以直接分析问题并给出方案，不一定要创建任务
 
+## 决策原则
+- 先理解用户目标，再决定是否需要创建 DAG，不要为了创建任务而创建
+- 简单问题直接分析回答，复杂问题拆解为多个子任务
+- 只在确实需要 Agent 读写文件时才分配编码任务
+- 任务之间没有真实依赖关系时不要强行串行
+- 用户中途给出的新引导可能改变原有计划，需要灵活调整
+- 每个 Agent 的 write_scope 必须使用其声明的工作目录
 
-DEFAULT_SUMMARY_PROMPT = """
-你是多项目软件工程任务的最终验收者。根据用户目标、项目发现结果、共享契约、实施 DAG
-和 Agent 执行结果进行汇总。明确说明实际选择了哪些项目、接口或协议契约、各项目完成
-内容、验证结果、失败或跳过项和遗留风险。不要编造未执行的修改或测试。
-使用简洁的中文 Markdown。
+## 输出格式
+需要创建 DAG 时，输出严格符合 JSON Schema 的任务图（summary + tasks）。
+不需要时，直接给出分析或方案。
 """.strip()
 
 
@@ -62,8 +59,7 @@ class BrainSettings:
             except (OSError, ValueError, json.JSONDecodeError):
                 pass
         return BrainConfiguration(
-            planning_prompt=DEFAULT_PLANNING_PROMPT,
-            summary_prompt=DEFAULT_SUMMARY_PROMPT,
+            orchestration_prompt=DEFAULT_ORCHESTRATION_PROMPT,
         )
 
     def current(self) -> BrainConfiguration:

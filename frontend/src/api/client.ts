@@ -159,6 +159,14 @@ export const api = {
   },
   createTemplate: (payload: import("../types").AgentTemplate) =>
     request<{ id: string }>("/templates", { method: "POST", body: JSON.stringify(payload) }),
+  updateTemplate: (id: string, updates: Record<string, unknown>) =>
+    request<import("../types").AgentTemplate>("/templates/" + id, { method: "PUT", body: JSON.stringify(updates) }),
+  deleteTemplate: (id: string) =>
+    fetch(API_BASE + "/templates/" + id, { method: "DELETE" }).then(r => { if (!r.ok) throw new Error("delete failed") }),
+  templateCenter: () =>
+    request<{ agents: import("../types").AgentTemplate[]; skills: import("../types").SkillTemplate[] }>("/template-center"),
+  publishSkillTemplate: (payload: { name: string; display_name?: string; description?: string; content: string; category?: string }) =>
+    request<{ id: string }>("/template-center/skills", { method: "POST", body: JSON.stringify(payload) }),
   streamUrl: (id: string, after: number) => API_BASE + '/runs/' + id + '/stream?after=' + after,
 
 }

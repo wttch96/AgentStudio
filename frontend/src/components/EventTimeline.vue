@@ -313,9 +313,23 @@ function icon(event: RunEvent) {
 }
 
 function itemTitle(item: TimelineItem) {
-  if (item.event.type !== 'tool.started') return title(item.event)
-  const tool = typeof item.event.payload.tool === 'string' ? item.event.payload.tool : '工具'
-  return item.events.length > 1 ? `调用 ${tool} ×${item.events.length}` : `调用 ${tool}`
+  if (item.event.type === 'tool.started') {
+    const tool = typeof item.event.payload.tool === 'string' ? item.event.payload.tool : '工具'
+    let totalBytes = 0
+    for (const e of item.events) {
+      totalBytes += JSON.stringify(e.payload?.input ?? '').length
+    }
+    const sizeStr = totalBytes > 1024 ? `${(totalBytes/1024).toFixed(1)}KB` : `${totalBytes}B`
+    const base = item.events.length > 1 ? `调用 ${tool} ×${item.events.length}` : `调用 ${tool}`
+    return `${base} · 入参 ${sizeStr}`
+  }
+  if (item.event.type === 'agent.message') {
+    const text = typeof item.event.payload?.text === 'string' ? item.event.payload.text : ''
+    const bytes = new Blob([text]).size
+    const sizeStr = bytes > 1024 ? `${(bytes/1024).toFixed(1)}KB` : `${bytes}B`
+    return `Agent 输出 · ${sizeStr}`
+  }
+  return title(item.event)
 }
 
 function itemSequence(item: TimelineItem) {
@@ -438,7 +452,7 @@ function itemSequence(item: TimelineItem) {
                   <div class="tool-call-list">
                     <section v-for="(call, index) in item.events" :key="call.sequence">
                       <span>第 {{ index + 1 }} 次 · #{{ call.sequence }}</span>
-                      <pre>{{ JSON.stringify(call.payload.input ?? {}, null, 2) }}</pre>
+                      <pre>{{ JSON.stringify(call.payload.input ?? {}, null, 2).slice(0, 400) }}{{ JSON.stringify(call.payload.input ?? {}).length > 400 ? '\n…(截断)' : '' }}</pre>
                     </section>
                   </div>
                 </details>

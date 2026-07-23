@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import AgentInspector from './components/AgentInspector.vue'
 import AppHeader from './components/AppHeader.vue'
 import EventTimeline from './components/EventTimeline.vue'
+import ChatHistory from './components/ChatHistory.vue'
 import DagGraph from './components/DagGraph.vue'
 import PromptComposer from './components/PromptComposer.vue'
 import RunSidebar from './components/RunSidebar.vue'
@@ -27,8 +28,14 @@ async function loadProjects() {
   try { projects.value = (await api.projects()).items } catch { /* */ }
 }
 
+function applyProject(p: Project) {
+  workspace.state.projectId = p.id
+  workspace.state.projectName = p.name
+}
+
 function selectProject(p: Project) {
   currentProject.value = p
+  applyProject(p)
   showProjectDialog.value = false
   workspace.refreshConfiguration()
 }
@@ -36,24 +43,13 @@ function selectProject(p: Project) {
 function onProjectCreated(p: Project) {
   projects.value.unshift(p)
   currentProject.value = p
+  applyProject(p)
   showProjectDialog.value = false
   workspace.refreshConfiguration()
 }
 
 watch(currentProject, (p) => {
-  if (p) {
-    workspace.state.projectId = p.id
-    workspace.state.projectName = p.name
-  }
-})
-
-const isContinuation = computed(() => {
-  const run = workspace.state.activeRun
-  return Boolean(run && ['completed', 'failed', 'cancelled'].includes(run.status))
-})
-const upstreamRun = computed(() => {
-  const parentId = workspace.state.activeRun?.parent_run_id
-  return parentId ? workspace.state.runs.find((run) => run.id === parentId) ?? null : null
+  if (p) applyProject(p)
 })
 
 const subtitle = computed(() => {
@@ -84,6 +80,7 @@ onMounted(async () => {
   await loadProjects()
   if (projects.value.length > 0) {
     currentProject.value = projects.value[0]
+    applyProject(projects.value[0])
   }
   await workspace.initialize()
 })
@@ -136,16 +133,20 @@ onMounted(async () => {
           <span class="loading-orb" /> 正在连接本地调度器…
         </div>
 
-        <template v-if="workspace.state.activeRun">
-          <section v-if="upstreamRun" class="continuation-context">
-            <span class="continuation-link" aria-hidden="true">&#x21B3;</span>
-            <div>
-              <span>正在延续第 {{ upstreamRun.turn_index }} 轮</span>
-              <strong>{{ upstreamRun.objective }}</strong>
-            </div>
-            <button type="button" @click="workspace.selectRun(upstreamRun.id)">查看上游</button>
-          </section>
+        <!-- 对话历史 -->
+        <ChatHistory
+          :runs="workspace.state.runs"
+          :active-run-id="workspace.state.activeRun?.id ?? null"
+          :queue-items="workspace.state.taskQueue"
+        />
 
+        <template v-if="workspace.state.activeRun">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.35rem">
+            <span class="eyebrow">正在执行: {{ workspace.state.activeRun.objective.slice(0, 60) }}{{ workspace.state.activeRun.objective.length > 60 ? '…' : '' }}</span>
+            <button class="stop-button" type="button" @click="workspace.cancelActiveRun()">
+              <span aria-hidden="true">&#x25A0;</span> 停止任务
+            </button>
+          </div>
           <DagGraph
             :tasks="workspace.plan.value"
             :contract="workspace.planContract.value"
@@ -169,14 +170,6 @@ onMounted(async () => {
               <h1>今天想让 Agent 团队完成什么？</h1>
               <p>{{ subtitle }}</p>
             </div>
-            <button
-              v-if="workspace.isRunning.value"
-              class="stop-button"
-              type="button"
-              @click="workspace.cancelActiveRun"
-            >
-              <span aria-hidden="true">&#x25A0;</span> 停止
-            </button>
           </div>
 
           <section class="welcome-panel" style="min-height:200px">
@@ -190,9 +183,12 @@ onMounted(async () => {
         <PromptComposer
           ref="composer"
           :submitting="workspace.state.submitting"
-          :continuing="isContinuation"
-          :disabled="workspace.isRunning.value"
+          :is-running="workspace.isRunning.value"
+          :queue-items="workspace.state.taskQueue"
           @submit="submit"
+          @interrupt="workspace.cancelActiveRun()"
+          @promote-queue="workspace.promoteQueueItem"
+          @remove-queue="workspace.removeFromQueue"
         />
       </template>
     </main>

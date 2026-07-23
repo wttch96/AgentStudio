@@ -14,31 +14,20 @@ from app.services.deepseek_usage import DeepSeekUsageService
 
 
 STRUCTURE_GUARD_BASE = """
-请把实施任务输出为小而清晰的有向无环任务图，并严格遵守以下控制协议：
+请把任务输出为有向无环任务图，严格遵守以下协议：
 
-要求：
-1. 架构分析、项目选择、接口边界和验收策略由主脑直接体现在共享契约、任务目标与依赖中，
-   不创建独立架构 Agent。
-2. Web 前端任务交给 frontend-agent，Python/Java/Go 等普通业务服务端任务交给
-   backend-agent；不要把 backend-agent 限定为 Agent Studio 自身的 Flask 目录。
-3. Java Netty 的连接、数据接收、协议解析、编码和发送任务交给 netty-agent。
-4. 不要把普通 Flask 业务接口交给 netty-agent，也不要把 Netty 传输链路交给 backend-agent。
-5. 每个执行 Agent 必须自行完成相关测试和代码自检，不创建独立测试或审查 Agent。
-6. 无文件冲突的任务可以并行，有真实协议或接口依赖时再建立 depends_on。
-7. write_scope 必须来自项目发现结果，使用相对于用户所选工作空间根目录的精确路径前缀；
-   不得默认假设 frontend/、backend/ 或 netty/ 存在。
-8. 输出 JSON，结构严格符合提供的 schema，不要输出 Markdown。
-9. 当目标是分析、审查或修改“整个项目”，且明显跨越前端和后端时，必须分别创建
-   frontend-agent 与 backend-agent 节点；二者没有真实接口前置关系时 depends_on 置空，允许并行。
-10. 不要把跨领域的整项目工作全部塞给一个 Agent。尊重用户明确排除的领域，例如用户说
-    “不用 Netty”时不要创建 netty-agent 节点；与目标无关的 Agent 也不要为了凑并发而调用。
-11. 若提供了上游对话上下文，当前指令是对已有任务的延续。必须结合上游输出理解“继续”、
-    “按刚才方案修改”等指代，并把 Agent 节点目标写成无需猜测的完整指令。
-12. 项目发现节点已由 LangGraph 执行，不要在实施 DAG 中重复创建只读发现节点，也不要使用
-    workspace-discovery- 前缀的任务 ID。
-13. 跨项目接口或协议必须写入 coordination_contract。相关并行任务会共享这份契约，因此在
-    接口已经明确时不要让前端无意义地依赖后端编码完成；负责服务端或协议实现的节点目标
-    必须包含把契约同步到被选项目现有 OpenAPI、接口文档或等效文档入口的要求。
+1. 只使用可用 Agent 列表中列出的精确名称，不要编造 agent 名。
+2. 分析和编码任务分配给 Claude/DeepSeek Agent；RAG Agent 随时可用于检索或存储知识。
+3. 主脑自主决策何时读写 RAG——可以在任务前检索已有知识，也可以在任务后存储新发现。
+4. 用户说"先...然后..."/"再..."时，then 后的任务 depends_on 于前面的任务。
+5. 无真实依赖的任务可以并行；有数据或逻辑依赖时建立 depends_on。
+6. write_scope 使用 Agent 声明的工作目录，没有工作目录的 Agent 不限制写入范围。
+7. 每个 Agent 自己完成测试和自检，不创建独立测试 Agent。
+8. 输出严格 JSON，符合提供的 schema。
+9. 不要把跨领域工作全部塞给一个 Agent；与目标无关的 Agent 不要调用。
+10. 上游上下文是已有任务的延续，结合上游理解指代；不要重复已完成的工作。
+11. 不要创建 workspace-discovery- 前缀的任务（发现阶段已完成）。
+12. 跨项目接口写入 coordination_contract。
 """.strip()
 
 
@@ -48,23 +37,22 @@ class DeepSeekPlanner:
         settings: Settings,
         usage: DeepSeekUsageService | None = None,
         brain: BrainSettings | None = None,
+        knowledge_store=None,
     ) -> None:
         self.settings = settings
         self.usage = usage
-        self.brain = brain or BrainSettings(settings.instance_dir / "brain.json")
+        self.brain = brain or BrainSettings()
+        self.knowledge_store = knowledge_store
 
     def create_discovery_dag(self, objective: str,
                               project_agents: list | None = None) -> TaskDag:
-        """创建只读项目发现图；相关专业 Agent 会在所选工作空间内并行过滤候选项目。"""
+        """创建只读项目发现图；相关专业 Agent 会在所选工作空间内并行过滤候选项目。
+        调用方需保证 project_agents 非空，否则应先跳过发现阶段直接规划。"""
 
-        # 动态 Agent 列表
-        if project_agents:
-            selected = [
-                a for a in project_agents
-                if getattr(a, 'agent_type', '') not in ('brain',)
-            ]
-        else:
-            selected = []
+        selected = [
+            a for a in (project_agents or [])
+            if getattr(a, 'agent_type', '') not in ('brain',)
+        ]
         tasks = []
         for agent_obj in selected:
             agent_name = agent_obj.name if hasattr(agent_obj, 'name') else str(agent_obj)
@@ -93,14 +81,14 @@ class DeepSeekPlanner:
         objective: str,
         workspace_root: str | None = None,
         run_id: str | None = None,
-        continuation_context: str = "",
+        guidance: str = "",
         discovery_results: list[AgentResult] | None = None,
         project_agents: list | None = None,
     ) -> TaskDag:
         """基于项目发现结果生成实施 DAG；未设置密钥时返回代表性演示图。"""
 
         if not self.settings.deepseek_api_key:
-            return self._enforce_requested_agents(self._demo_dag(objective), objective)
+            return self._enforce_requested_agents(self._demo_dag(objective), objective, project_agents)
 
         client = OpenAI(
             api_key=self.settings.deepseek_api_key,
@@ -120,23 +108,43 @@ class DeepSeekPlanner:
             for a in project_agents:
                 name = getattr(a, 'name', str(a))
                 dtype = getattr(a, 'display_name', name)
+                atype = getattr(a, 'agent_type', 'claude')
                 sd = getattr(a, 'sub_dir', '.')
-                agent_list.append(f"- {name}: {dtype}（工作子目录: {sd}）")
-            agent_guard = "可用的执行 Agent：\n" + "\n".join(agent_list) + "\n\n只允许把执行任务交给以上列出的 Agent。\n每个 Agent 的 write_scope 必须使用其指定的工作子目录。"
+                agent_list.append(f"- {name} (类型:{atype}): {dtype}（工作子目录: {sd}）")
+            agent_guard = (
+                "可用的执行 Agent：\n" + "\n".join(agent_list) + "\n\n"
+                "只允许把执行任务交给以上列出的 Agent，必须使用上面列出的精确名称。\n"
+                "每个 Agent 的 write_scope 必须使用其指定的工作子目录。\n"
+                "不要使用 frontend-agent、backend-agent 等占位名称。"
+            )
         guard = STRUCTURE_GUARD_BASE + "\n\n" + agent_guard
+
+        # 从知识库中检索与目标相关的内容，注入主脑规划上下文
+        knowledge_context = ""
+        if self.knowledge_store:
+            try:
+                kb_results = self.knowledge_store.search(objective, top_k=3, project_id="")
+                if kb_results:
+                    knowledge_context = "相关知识库条目：\n" + "\n".join(
+                        f"- [{r.get('category', '')}] {r.get('title', '')}: {r.get('content', '')[:500]}"
+                        for r in kb_results
+                    ) + "\n\n"
+            except Exception:
+                pass
 
         response = client.chat.completions.create(
             model=self.settings.deepseek_model,
             messages=[
                 {
                     "role": "system",
-                    "content": f"{brain.planning_prompt}\n\n{guard}",
+                    "content": f"{brain.orchestration_prompt}\n\n{guard}",
                 },
                 {
                     "role": "user",
                     "content": (
                         f"用户目标：\n{objective}\n\n"
-                        f"上游对话上下文：\n{continuation_context or '无，这是新任务'}\n\n"
+                        f"{knowledge_context}"
+                        f"上游对话上下文：\n{guidance or '无，这是新任务'}\n\n"
                         f"专业 Agent 的工作空间搜索与项目过滤结果：\n{discovery_context or '[]'}\n\n"
                         f"工作区结构索引（仅用于补充，不得覆盖 Agent 的过滤证据）：\n"
                         f"{self._workspace_context(workspace_root)}\n\n"
@@ -152,36 +160,93 @@ class DeepSeekPlanner:
         content = response.choices[0].message.content
         if not content:
             raise RuntimeError("DeepSeek 返回了空计划")
-        dag = TaskDag.model_validate_json(content)
-        return self._enforce_requested_agents(dag, objective)
+        try:
+            dag = TaskDag.model_validate_json(content)
+        except Exception:
+            # DeepSeek 可能返回空 tasks 或格式异常，使用兜底方案
+            dag = TaskDag(
+                summary=f"围绕{objective[:60]}的自动规划",
+                tasks=[
+                    DagTask(
+                        id="auto-plan",
+                        title="主脑直接分析",
+                        objective=f"用户目标：{objective}。由主脑直接分析工作空间并给出方案。",
+                        agent=(project_agents[0].name if project_agents and hasattr(project_agents[0], 'name') else "brain"),
+                        write_scope=[],
+                    )
+                ],
+            )
+        return self._enforce_requested_agents(dag, objective, project_agents)
 
+
+    @classmethod
+    def _resolve_agent_name(cls, role: str, project_agents: list | None) -> str | None:
+        """将概念角色映射到实际项目 Agent 名称。"""
+        if not project_agents:
+            return None
+        role_map = {
+            "frontend-agent": ("claude", "vue-frontend", "react-frontend"),
+            "backend-agent": ("claude", "flask-backend", "springboot-backend", "deepseek-agent"),
+            "netty-agent": ("claude", "springboot-netty"),
+        }
+        candidates = role_map.get(role, ())
+        for a in project_agents:
+            name = getattr(a, 'name', '')
+            if name in candidates:
+                return name
+        # fallback: any claude agent for frontend/backend, any agent for others
+        for a in project_agents:
+            if getattr(a, 'agent_type', '') in ('claude', 'deepseek'):
+                return getattr(a, 'name', None)
+        return None
 
     @classmethod
     def _enforce_requested_agents(cls, dag: TaskDag, objective: str,
                                    project_agents: list | None = None) -> TaskDag:
         """把用户明确点名的领域从软提示提升为确定性的 DAG 约束。"""
 
+        renamed = {}
+        if project_agents:
+            name_map = {"frontend-agent": "frontend-agent", "backend-agent": "backend-agent",
+                        "netty-agent": "netty-agent", "knowledge-agent": "knowledge-agent"}
+            for role in name_map:
+                actual = cls._resolve_agent_name(role, project_agents)
+                if actual and actual != role:
+                    renamed[role] = actual
+            # Apply renames to all tasks
+            tasks = []
+            for task in dag.tasks:
+                new_agent = renamed.get(task.agent, task.agent)
+                new_deps = [renamed.get(d, d) for d in task.depends_on]
+                tasks.append(task.model_copy(update={"agent": new_agent, "depends_on": new_deps}))
+            if tasks:
+                dag = dag.model_copy(update={"tasks": tasks})
+
         lowered = objective.lower().replace(" ", "")
+        # Resolve actual agent names
+        frontend_agent = cls._resolve_agent_name("frontend-agent", project_agents) or "frontend-agent"
+        backend_agent = cls._resolve_agent_name("backend-agent", project_agents) or "backend-agent"
+        netty_agent = cls._resolve_agent_name("netty-agent", project_agents) or "netty-agent"
+
         exclusions = {
-            "frontend-agent": any(
+            frontend_agent: any(
                 phrase in lowered
                 for phrase in ("不用前端", "不要前端", "不需要前端", "仅后端", "只看后端", "只改后端")
             ),
-            "backend-agent": any(
+            backend_agent: any(
                 phrase in lowered
                 for phrase in ("不用后端", "不要后端", "不需要后端", "仅前端", "只看前端", "只改前端")
             ),
-            "netty-agent": any(
+            netty_agent: any(
                 phrase in lowered for phrase in ("不用netty", "不要netty", "不需要netty", "排除netty")
             ),
         }
         requested = {
-            "knowledge-agent": any(w in lowered for w in ("知识", "knowledge", "文档", "规范")),
-            "frontend-agent": "前后端" in lowered
+            frontend_agent: "前后端" in lowered
             or any(word in lowered for word in ("前端", "frontend", "vue", "react", "页面")),
-            "backend-agent": "前后端" in lowered
+            backend_agent: "前后端" in lowered
             or any(word in lowered for word in ("后端", "backend", "flask", "服务端", "api")),
-            "netty-agent": "netty" in lowered,
+            netty_agent: "netty" in lowered,
         }
 
         has_explicit_scope = any(requested.values())
@@ -210,14 +275,13 @@ class DeepSeekPlanner:
             for phrase in ("看看", "分析", "审查", "了解", "干了啥", "做了什么", "不要动", "不用动")
         )
         domain_details = {
-            "knowledge-agent": ("knowledge", "知识库管理", ["."]),
-            "frontend-agent": ("frontend", "前端项目", ["."]),
-            "backend-agent": ("backend", "后端项目", ["."]),
-            "netty-agent": ("netty", "Netty 数据链路", ["."]),
+            frontend_agent: ("frontend", "前端项目", ["."]),
+            backend_agent: ("backend", "后端项目", ["."]),
+            netty_agent: ("netty", "Netty 数据链路", ["."]),
         }
         existing_ids = {task.id for task in tasks}
         for agent, is_requested in requested.items():
-            if not is_requested or exclusions[agent] or agent in present:
+            if not is_requested or exclusions.get(agent, False) or agent in present:
                 continue
             base_id, label, write_scope = domain_details[agent]
             task_id = f"required-{base_id}"
@@ -234,13 +298,29 @@ class DeepSeekPlanner:
                         "先根据前置项目发现结果确定真实项目根目录，只处理本领域并给出"
                         "可供主脑汇总的明确结果。"
                     ),
-                    agent=agent_obj.name if hasattr(agent_obj, 'name') else str(agent_obj),
+                    agent=agent,
                     depends_on=[],
                     write_scope=[] if read_only else write_scope,
                 )
             )
             existing_ids.add(task_id)
             present.add(agent)
+
+        # 兜底: 过滤/重命名后若 tasks 为空，至少保留一个脑力分析任务
+        if not tasks:
+            fallback_agent = backend_agent if backend_agent != "backend-agent" else (
+                frontend_agent if frontend_agent != "frontend-agent" else "brain"
+            )
+            tasks.append(
+                DagTask(
+                    id="fallback-analysis",
+                    title="主脑直接分析",
+                    objective=f"用户目标：{objective}。由于没有匹配的专业 Agent，由主脑直接分析并给出方案。",
+                    agent=fallback_agent,
+                    depends_on=[],
+                    write_scope=[],
+                )
+            )
 
         return TaskDag(
             summary=dag.summary,
@@ -254,7 +334,7 @@ class DeepSeekPlanner:
         dag: TaskDag,
         results: list[AgentResult],
         run_id: str | None = None,
-        continuation_context: str = "",
+        guidance: str = "",
     ) -> str:
         """由 DeepSeek 主脑验收并汇总执行结果；演示模式使用确定性汇总。"""
 
@@ -268,13 +348,13 @@ class DeepSeekPlanner:
         response = client.chat.completions.create(
             model=self.settings.deepseek_model,
             messages=[
-                {"role": "system", "content": self.brain.current().summary_prompt},
+                {"role": "system", "content": self.brain.current().orchestration_prompt},
                 {
                     "role": "user",
                     "content": json.dumps(
                         {
                             "objective": objective,
-                            "upstream_context": continuation_context,
+                            "upstream_context": guidance,
                             "dag": dag.model_dump(),
                             "results": [result.model_dump() for result in results],
                         },
@@ -292,12 +372,67 @@ class DeepSeekPlanner:
         return content
 
     @staticmethod
+    def _workspace_context(workspace_root: str | None) -> str:
+        """生成工作空间的结构概览，帮助主脑理解目录布局。"""
+        if not workspace_root:
+            return "未提供工作空间路径"
+        root = Path(workspace_root)
+        if not root.is_dir():
+            return f"工作空间路径不存在: {workspace_root}"
+        lines = [f"工作空间根目录: {workspace_root}"]
+        try:
+            entries = sorted(root.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower()))
+            for entry in entries[:40]:
+                marker = "/" if entry.is_dir() else ""
+                lines.append(f"  {entry.name}{marker}")
+            remaining = len(entries) - 40
+            if remaining > 0:
+                lines.append(f"  ... 还有 {remaining} 项")
+        except PermissionError:
+            lines.append("  (无权限读取目录)")
+        return "\n".join(lines)
+
+    @staticmethod
     def _demo_dag(objective: str, project_agents: list | None = None) -> TaskDag:
-        """演示模式用三个执行 Agent 验证并行分发和结果汇合。"""
+        """演示模式用执行 Agent 验证并行分发和结果汇合。"""
 
         short_objective = objective[:800]
+        demo_tasks = [
+            DagTask(
+                id="demo-analyze",
+                title="分析项目结构（演示）",
+                objective=f"分析当前工作空间结构并撰写简要发现报告。用户目标：{short_objective}",
+                agent="flask-backend" if any(
+                    a for a in (project_agents or [])
+                    if getattr(a, 'name', '') == 'flask-backend'
+                ) else "flask-backend",
+                write_scope=[],
+            ),
+            DagTask(
+                id="demo-code",
+                title="代码实施（演示）",
+                objective=f"基于分析结果选择最佳实现方案并说明理由。用户目标：{short_objective}",
+                agent="vue-frontend" if any(
+                    a for a in (project_agents or [])
+                    if getattr(a, 'name', '') == 'vue-frontend'
+                ) else "vue-frontend",
+                depends_on=["demo-analyze"],
+                write_scope=["frontend"],
+            ),
+            DagTask(
+                id="demo-verify",
+                title="验证总结（演示）",
+                objective=f"验证前两步结果并汇总报告。用户目标：{short_objective}",
+                agent="vue-frontend" if any(
+                    a for a in (project_agents or [])
+                    if getattr(a, 'name', '') == 'vue-frontend'
+                ) else "vue-frontend",
+                depends_on=["demo-code"],
+                write_scope=[],
+            ),
+        ]
         return TaskDag(
-            summary=f"围绕“{short_objective[:60]}”生成本地演示任务图",
+            summary=f"Around '{short_objective[:60]}' - demo task graph",
             coordination_contract=(
                 "演示共享契约：跨项目实现应先约定接口路径、方法、请求/响应字段与错误行为；"
                 "真实模式由 DeepSeek 根据项目发现结果生成具体契约。"

@@ -21,12 +21,20 @@ from app.agents.claude_executor import ClaudeAgentExecutor
 from app.domain.models import AgentResult, DagTask, TaskDag
 from app.events.publisher import EventPublisher
 from app.planning.deepseek_planner import DeepSeekPlanner
+from typing import Protocol
+
+
+class AgentExecutorProtocol(Protocol):
+    def execute(self, run_id: str, task: DagTask, dependency_results: list[AgentResult],
+                cancel_event: threading.Event, workspace_root: str,
+                max_turns: int | None = None, timeout_seconds: int | None = None,
+                project_id: str | None = None) -> AgentResult: ...
 
 
 class GraphState(TypedDict, total=False):
     run_id: str
     objective: str
-    continuation_context: str
+    guidance: str  # 运行中途用户注入的引导指令
     preset_dag: dict[str, Any] | None
     direct_mode: bool
     stage: str
@@ -52,6 +60,8 @@ def build_graph(
     interrupt_router: object | None = None,
     memory_manager: object | None = None,
     project_agents: list | None = None,
+    deepseek_executor=None,
+    rag_executor=None,
 ):
     def plan(state: GraphState) -> GraphState:
         run_id = state["run_id"]
@@ -63,13 +73,28 @@ def build_graph(
                 "planner.bypassed",
                 payload={"reason": "direct-agent-or-retry"},
             )
+        elif not project_agents:
+            # 没有项目 Agent 时跳过发现阶段，直接由主脑规划
+            events.emit(
+                run_id,
+                "workspace.discovery_skipped",
+                payload={"reason": "no-project-agents"},
+            )
+            dag = planner.create_dag(
+                state["objective"],
+                state["workspace_root"],
+                run_id=run_id,
+                guidance=state.get("guidance", ""),
+                project_agents=project_agents,
+            )
+            stage = "execution"
         else:
             events.emit(
                 run_id,
                 "workspace.discovery_started",
                 payload={"workspace_root": state["workspace_root"]},
             )
-            dag = planner.create_discovery_dag(state["objective"])
+            dag = planner.create_discovery_dag(state["objective"], project_agents=project_agents)
             stage = "discovery"
         events.emit(
             run_id,
@@ -95,8 +120,9 @@ def build_graph(
             state["objective"],
             state["workspace_root"],
             run_id=run_id,
-            continuation_context=state.get("continuation_context", ""),
+            guidance=state.get("guidance", ""),
             discovery_results=discovery_results,
+            project_agents=project_agents,
         )
 
         # 图阶段本身已形成屏障；把成功的发现节点显式加入依赖，既记录决策来源，
@@ -158,11 +184,20 @@ def build_graph(
         pending = interrupt_router.check_and_clear(state["run_id"])
         if not pending:
             return {}
+        # 收集所有 inject 类型的指令（不暂停，直接注入上下文）
+        inject_instructions = []
+        pause_commands = []
+        for cmd in pending:
+            if cmd.get("action") == "inject":
+                inject_instructions.append(cmd.get("instruction", ""))
+            else:
+                pause_commands.append(cmd)
         events.emit(
             state["run_id"],
             "interrupt.received",
             payload={
                 "count": len(pending),
+                "injected": len(inject_instructions),
                 "commands": [
                     {
                         "id": cmd.get("id"),
@@ -175,22 +210,27 @@ def build_graph(
                 ],
             },
         )
-        # 使用 LangGraph interrupt 暂停执行
-        decision = interrupt({
-            "message": "收到用户中断指令",
-            "pending_commands": pending,
-            "active_tasks": state.get("active_task_ids", []),
-            "current_stage": state.get("stage"),
-        })
-        # decision 由 resume 时通过 Command(resume=...) 传入
-        if isinstance(decision, dict):
-            action = decision.get("action", "continue")
-            if action == "replan":
-                return {"stage": "replan_requested"}
-            elif action == "abort":
-                cancel_event.set()
-                return {}
-        return {}
+        # inject 类型：直接注入为引导上下文，不暂停执行
+        guidance = "\n".join(inject_instructions) if inject_instructions else ""
+        result: dict = {}
+        if guidance:
+            existing = state.get("guidance", "")
+            result["guidance"] = f"[用户引导]\n{guidance}\n\n{existing}" if existing else f"[用户引导]\n{guidance}"
+        # pause/abort 类型：暂停图执行
+        if pause_commands:
+            decision = interrupt({
+                "message": "收到用户中断指令",
+                "pending_commands": pause_commands,
+                "active_tasks": state.get("active_task_ids", []),
+                "current_stage": state.get("stage"),
+            })
+            if isinstance(decision, dict):
+                action = decision.get("action", "continue")
+                if action == "replan":
+                    result["stage"] = "replan_requested"
+                elif action == "abort":
+                    cancel_event.set()
+        return result
 
     def scheduler(state: GraphState) -> GraphState:
         """冻结本轮就绪集合，保证一批任务先并行完成，再计算下一批。"""
@@ -228,7 +268,7 @@ def build_graph(
                         "results": state.get("results", []),
                         "agent_max_turns": state["agent_max_turns"],
                         "agent_timeout_seconds": state["agent_timeout_seconds"],
-                        "continuation_context": state.get("continuation_context", ""),
+                        "continuation_context": state.get("guidance", ""),
                     },
                 )
                 for task_id in active_task_ids
@@ -237,6 +277,14 @@ def build_graph(
 
         # 没有就绪任务意味着全部完成、取消，或有任务被失败依赖阻塞。
         return "synthesize"
+
+    def _resolve_agent_type(agent_name: str) -> str:
+        """根据 agent 名称查找其类型。"""
+        if project_agents:
+            for a in project_agents:
+                if getattr(a, 'name', '') == agent_name:
+                    return getattr(a, 'agent_type', 'claude')
+        return "claude"
 
     def worker(state: GraphState) -> GraphState:
         task = DagTask.model_validate(state["task"])
@@ -256,7 +304,7 @@ def build_graph(
                     summary=dag.coordination_contract,
                 )
             )
-        if context := state.get("continuation_context", ""):
+        if context := state.get("guidance", ""):
             dependencies.append(
                 AgentResult(
                     task_id="upstream-conversation",
@@ -265,6 +313,15 @@ def build_graph(
                     summary=context[-6000:],
                 )
             )
+        # 根据 agent_type 选择 executor
+        agent_type = _resolve_agent_type(task.agent)
+        if agent_type == "deepseek" and deepseek_executor:
+            active_executor = deepseek_executor
+        elif agent_type == "rag" and rag_executor:
+            active_executor = rag_executor
+        else:
+            active_executor = executor
+
         started_at = datetime.now(timezone.utc).isoformat()
         started_ms = int(time.time() * 1000)
         events.emit(
@@ -274,7 +331,7 @@ def build_graph(
             task_id=task.id,
             payload={"title": task.title, "objective": task.objective, "started_at": started_at},
         )
-        result = executor.execute(
+        result = active_executor.execute(
             state["run_id"],
             task,
             dependencies,
@@ -320,40 +377,61 @@ def build_graph(
         )
         return {}
 
+    def compact_memory(state: GraphState) -> GraphState:
+        """每个 wave 结束后，按滑动窗口策略压缩 Agent 消息历史。"""
+        if memory_manager is None:
+            return {}
+        try:
+            results = state.get("results", [])
+            active_ids = state.get("active_task_ids", [])
+            conversation_id = state.get("run_id", "")
+            for result in results:
+                r = AgentResult.model_validate(result) if isinstance(result, dict) else result
+                messages = [{"role": "assistant", "content": r.summary}]
+                memory_manager.compress_agent_messages(r.agent, conversation_id, messages)
+            events.emit(
+                state["run_id"], "memory.compacted",
+                payload={"wave": state.get("wave_index", 0), "agents": active_ids},
+            )
+        except Exception:
+            pass
+        return {}
+
+    def extract_memory(state: GraphState) -> GraphState:
+        """全部执行完成后，用 LangMem 提取跨会话长期记忆。"""
+        if memory_manager is None:
+            return {}
+        try:
+            results_raw = state.get("results", [])
+            session_summary = state.get("session_summary", state.get("final_answer", ""))
+            memory_manager.extract_long_term_memory(
+                state["run_id"], state["run_id"],
+                session_summary=str(session_summary)[:4000],
+                agent_results=list(results_raw)[-20:] if results_raw else None,
+            )
+            events.emit(
+                state["run_id"], "memory.extracted",
+                payload={"conversation_id": state["run_id"]},
+            )
+        except Exception:
+            pass
+        return {}
+
     def route_after_barrier(state: GraphState) -> str:
         return "replan_after_discovery" if state.get("stage") == "discovery" else "scheduler"
 
     def synthesize(state: GraphState) -> GraphState:
-        dag = TaskDag.model_validate(state["dag"])
+        """汇流所有 Agent 结果，不调用 LLM——主脑在需要时自行创建验收任务。"""
         results = [AgentResult.model_validate(item) for item in state.get("results", [])]
-        if state.get("direct_mode"):
-            result = results[-1] if results else None
-            if result:
-                final_answer = result.summary
-                if result.error:
-                    final_answer = f"{final_answer}\n\n失败原因：{result.error}"
-            else:
-                final_answer = "指定 Agent 没有返回执行结果。"
-            events.emit(
-                state["run_id"],
-                "run.summary",
-                payload={"text": final_answer, "direct_agent": True},
-            )
-            return {"final_answer": final_answer, "session_summary": final_answer[:4000]}
+        # 汇总所有完成/失败的结果
+        parts: list[str] = []
+        for r in results:
+            icon = "✓" if r.status == "completed" else "✗" if r.status == "failed" else "-"
+            parts.append(f"{icon} {r.agent}: {r.summary[:300]}")
+        final_answer = "\n".join(parts) if parts else "无执行结果"
         events.emit(
-            state["run_id"],
-            "brain.synthesizing",
-            payload={"model": "deepseek", "result_count": len(results)},
-        )
-        final_answer = planner.summarize(
-            state["objective"],
-            dag,
-            results,
-            run_id=state["run_id"],
-            continuation_context=state.get("continuation_context", ""),
-        )
-        events.emit(
-            state["run_id"], "run.summary", payload={"text": final_answer}
+            state["run_id"], "run.summary",
+            payload={"text": final_answer, "result_count": len(results)},
         )
         return {
             "final_answer": final_answer,
@@ -367,6 +445,8 @@ def build_graph(
     builder.add_node("replan_after_discovery", replan_after_discovery)
     builder.add_node("worker", worker)
     builder.add_node("barrier", barrier)
+    builder.add_node("compact_memory", compact_memory)
+    builder.add_node("extract_memory", extract_memory)
     builder.add_node("synthesize", synthesize)
     builder.add_edge(START, "plan")
     builder.add_edge("plan", "interrupt_check")
@@ -376,11 +456,13 @@ def build_graph(
     )
     # 同一 super-step 的 worker 全部完成后，只触发一次显式汇流屏障。
     builder.add_edge("worker", "barrier")
+    builder.add_edge("barrier", "compact_memory")
     builder.add_conditional_edges(
-        "barrier",
+        "compact_memory",
         route_after_barrier,
         ["replan_after_discovery", "interrupt_check"],
     )
     builder.add_edge("replan_after_discovery", "interrupt_check")
-    builder.add_edge("synthesize", END)
+    builder.add_edge("synthesize", "extract_memory")
+    builder.add_edge("extract_memory", END)
     return builder.compile(checkpointer=checkpointer) if checkpointer else builder.compile()

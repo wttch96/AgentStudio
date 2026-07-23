@@ -50,11 +50,13 @@ watch(
     if (selectedName.value !== '__new__' && !skills.some((item) => item.name === selectedName.value)) reset()
   },
 )
+// 切换项目时重置选中和表单
+watch(() => props.projectId, () => { reset(); selectedName.value = '__new__' })
 </script>
 
 <template>
   <div class="config-editor">
-    <label class="field-label">选择或新增 Skill</label>
+    <label class="field-label">选择或新增 Skill<span v-if="projectId" class="storage-badge">项目级</span><span v-else class="storage-badge global">全局</span></label>
     <div class="config-selector">
       <button type="button" :class="{ active: selectedName === '__new__' }" @click="select('__new__')">＋ 新建</button>
       <button

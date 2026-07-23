@@ -49,6 +49,82 @@ function loadedSkills(name: string) {
       .map((event) => String(event.payload.skill ?? 'unknown')),
   ).size
 }
+
+function agentTokens(name: string) {
+  let input = 0; let output = 0; let promptChars = 0; let hasUsage = false
+  for (const e of props.events) {
+    if (e.agent_id === name) {
+      if (e.type === 'agent.prompt') {
+        promptChars += (e.payload?.prompt_chars as number) || 0
+      } else if (e.type === 'agent.usage') {
+        input += (e.payload?.input_tokens as number) || 0
+        output += (e.payload?.output_tokens as number) || 0
+        hasUsage = true
+      }
+    }
+  }
+  // SDK 提供 usage 时：加上提示词估算 (chars/2 ≈ tokens)
+  if (hasUsage) {
+    input += Math.ceil(promptChars / 2)
+  } else {
+    // SDK 未提供 token 时，从文本长度估算
+    for (const e of props.events) {
+      if (e.agent_id === name) {
+        if (e.type === 'agent.message') {
+          output += Math.ceil((e.payload?.text as string || '').length / 2)
+        } else if (e.type === 'tool.started') {
+          input += JSON.stringify(e.payload?.input || '').length
+        }
+      }
+    }
+    input += Math.ceil(promptChars / 2)
+  }
+  return { input, output }
+}
+function formatKTokens(n: number) {
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'k'
+  return String(n)
+}
+
+// 系统 Agent 状态（主脑 / RAG / 记忆）
+function brainStatus() {
+  const events = props.events
+  if (events.some(e => e.type === 'brain.synthesizing')) return 'synthesizing'
+  if (events.some(e => e.type === 'planner.started')) return 'planning'
+  if (events.some(e => e.type === 'plan.created')) return 'planned'
+  return 'idle'
+}
+function brainActivity() {
+  const plans = props.events.filter(e => e.type === 'plan.created').length
+  const contracts = props.events.filter(e => e.type === 'brain.contract_created').length
+  const tokens = props.deepseekUsage?.all_time?.total_tokens || 0
+  return { plans, contracts, tokens }
+}
+function memoryActivity() {
+  const compacted = props.events.filter(e => e.type === 'memory.compacted').length
+  const extracted = props.events.filter(e => e.type === 'memory.extracted').length
+  return { compacted, extracted }
+}
+function ragActivity() {
+  const searches = props.events.filter(e => e.agent_id && e.type === 'tool.started' && e.payload?.tool === 'search_knowledge').length
+  const adds = props.events.filter(e => e.agent_id && e.type === 'tool.started' && e.payload?.tool === 'add_knowledge').length
+  const started = props.events.some(e => e.agent_id && e.type === 'agent.started' && props.agents.some(a => a.name === e.agent_id && a.agent_type === 'rag'))
+  return { searches, adds, active: started }
+}
+function ragStatus() {
+  const events = props.events
+  if (events.some(e => e.agent_id && e.type === 'agent.failed' && props.agents.some(a => a.name === e.agent_id && a.agent_type === 'rag'))) return 'failed'
+  const starts = events.filter(e => e.agent_id && e.type === 'agent.started' && props.agents.some(a => a.name === e.agent_id && a.agent_type === 'rag')).length
+  const finishes = events.filter(e => e.agent_id && e.type === 'agent.completed' && props.agents.some(a => a.name === e.agent_id && a.agent_type === 'rag')).length
+  if (starts > finishes) return 'running'
+  if (finishes) return 'completed'
+  return 'idle'
+}
+function memoryStatus() {
+  if (props.events.some(e => e.type === 'memory.extracted')) return 'completed'
+  if (props.events.some(e => e.type === 'memory.compacted')) return 'compacting'
+  return 'idle'
+}
 </script>
 
 <template>
@@ -61,7 +137,7 @@ function loadedSkills(name: string) {
       <span class="agent-count">{{ agents.length }}</span>
     </div>
     <div class="agent-stack">
-      <article v-for="agent in agents" :key="agent.name" class="agent-card" :class="status(agent.name)">
+      <article v-for="agent in agents.filter(a => a.agent_type !== 'rag')" :key="agent.name" class="agent-card" :class="status(agent.name)">
         <div class="agent-avatar">{{ agent.name.charAt(0).toUpperCase() }}</div>
         <div class="agent-card-copy">
           <strong>{{ agent.name }}</strong>
@@ -72,14 +148,59 @@ function loadedSkills(name: string) {
             <span>配置 {{ agent.skill_count }}</span>
             <span>本次加载 {{ loadedSkills(agent.name) }}</span>
             <span v-if="calls(agent.name)">{{ calls(agent.name) }} 次工具</span>
+            <span class="token-stat">入 {{ formatKTokens(agentTokens(agent.name).input) }} / 出 {{ formatKTokens(agentTokens(agent.name).output) }} token</span>
           </div>
         </div>
       </article>
     </div>
-    <div class="model-panel">
-      <span class="eyebrow">调度层</span>
-      <div><strong>DeepSeek</strong><span>规划 · 路由 · 决策</span></div>
-      <div><strong>LangGraph</strong><span>DAG · 并行 · 汇合</span></div>
+    <!-- 系统 Agent：主脑 / RAG / 记忆 -->
+    <div class="inspector-heading" style="margin-top:12px">
+      <div>
+        <span class="eyebrow">系统 Agent</span>
+        <h2>主脑 · RAG · 记忆</h2>
+      </div>
+    </div>
+    <div class="agent-stack">
+      <!-- 主脑 Agent -->
+      <article class="agent-card system-agent" :class="brainStatus()">
+        <div class="agent-avatar brain-avatar">B</div>
+        <div class="agent-card-copy">
+          <strong>主脑 (DeepSeek)</strong>
+          <p>任务规划 · DAG生成 · 契约设计 · 最终验收</p>
+          <div class="agent-meta">
+            <span class="mini-status"><i />{{ brainStatus() }}</span>
+            <span>{{ brainActivity().plans }} 次规划</span>
+            <span v-if="brainActivity().contracts">{{ brainActivity().contracts }} 份契约</span>
+            <span v-if="brainActivity().tokens" class="token-stat">累计 {{ formatKTokens(brainActivity().tokens) }} token</span>
+          </div>
+        </div>
+      </article>
+      <!-- RAG Agent -->
+      <article class="agent-card system-agent" :class="ragStatus()">
+        <div class="agent-avatar rag-avatar">R</div>
+        <div class="agent-card-copy">
+          <strong>RAG (LangChain)</strong>
+          <p>知识检索 · 内容录入 · 关联管理 · 综合问答</p>
+          <div class="agent-meta">
+            <span class="mini-status"><i />{{ ragStatus() }}</span>
+            <span>{{ ragActivity().searches }} 次检索</span>
+            <span v-if="ragActivity().adds">{{ ragActivity().adds }} 条录入</span>
+          </div>
+        </div>
+      </article>
+      <!-- 记忆 Agent -->
+      <article class="agent-card system-agent" :class="memoryStatus()">
+        <div class="agent-avatar memory-avatar">M</div>
+        <div class="agent-card-copy">
+          <strong>记忆管理 (LangMem)</strong>
+          <p>滑动窗口压缩 · 跨会话提取 · 重要性衰减</p>
+          <div class="agent-meta">
+            <span class="mini-status"><i />{{ memoryStatus() }}</span>
+            <span>{{ memoryActivity().compacted }} 次压缩</span>
+            <span v-if="memoryActivity().extracted">{{ memoryActivity().extracted }} 次提取</span>
+          </div>
+        </div>
+      </article>
     </div>
     <section class="balance-panel">
       <header>
@@ -121,35 +242,6 @@ function loadedSkills(name: string) {
       </div>
       <div v-else class="balance-loading">正在读取余额…</div>
 
-      <div v-if="deepseekUsage" class="local-usage">
-        <div class="local-usage-heading">
-          <strong>Token 与花费</strong>
-          <span>本地统计 · 费用估算</span>
-        </div>
-        <div class="usage-periods">
-          <div>
-            <span>今日</span>
-            <strong>{{ formatTokens(deepseekUsage.today.total_tokens) }}</strong>
-            <small>{{ formatCost(deepseekUsage.today.estimated_cost_usd) }}</small>
-          </div>
-          <div>
-            <span>本月</span>
-            <strong>{{ formatTokens(deepseekUsage.month.total_tokens) }}</strong>
-            <small>{{ formatCost(deepseekUsage.month.estimated_cost_usd) }}</small>
-          </div>
-          <div>
-            <span>本地累计</span>
-            <strong>{{ formatTokens(deepseekUsage.all_time.total_tokens) }}</strong>
-            <small>{{ formatCost(deepseekUsage.all_time.estimated_cost_usd) }}</small>
-          </div>
-        </div>
-        <div class="usage-breakdown">
-          <span>命中 {{ formatTokens(deepseekUsage.all_time.cache_hit_tokens) }}</span>
-          <span>未命中 {{ formatTokens(deepseekUsage.all_time.cache_miss_tokens) }}</span>
-          <span>输出 {{ formatTokens(deepseekUsage.all_time.completion_tokens) }}</span>
-        </div>
-        <p>仅统计本机从启用此功能后发起的 DeepSeek 规划与汇总；金额按本地单价估算，不是官方账单。</p>
-      </div>
     </section>
   </aside>
 </template>

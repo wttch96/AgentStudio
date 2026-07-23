@@ -60,6 +60,7 @@ class ClaudeAgentExecutor:
                 Path(workspace_root),
                 max_turns or self.settings.agent_max_turns,
                 timeout_seconds or self.settings.agent_timeout_seconds,
+                project_id or "",
             )
         )
 
@@ -72,8 +73,9 @@ class ClaudeAgentExecutor:
         workspace_root: Path,
         max_turns: int,
         timeout_seconds: int,
+        project_id: str = "",
     ) -> AgentResult:
-        profile = self.registry.get(project_id or "", task.agent)
+        profile = self.registry.get(project_id, task.agent)
         dependency_context = "\n".join(
             f"- {result.task_id}: {result.summary}" for result in dependency_results
         ) or "无前置任务"
@@ -90,6 +92,8 @@ class ClaudeAgentExecutor:
             "需要专项规范时先通过 Skill 工具加载已配置 Skill。"
             "请自主使用工具完成任务，结束时简洁说明结果、修改文件和验证情况。"
         )
+        # 提示词 + 系统提示词总长度
+        prompt_chars = len(profile.prompt) + len(prompt)
 
         options = ClaudeAgentOptions(
             model=self.settings.claude_model,
@@ -110,6 +114,12 @@ class ClaudeAgentExecutor:
         result_error: str | None = None
         result_subtype: str | None = None
 
+        # 发送提示词大小事件，供前端统计 token
+        self.events.emit(
+            run_id, "agent.prompt",
+            agent_id=task.agent, task_id=task.id,
+            payload={"prompt_chars": prompt_chars, "system_prompt_chars": len(profile.prompt)},
+        )
         try:
             async with asyncio.timeout(timeout_seconds):
                 async for message in query(prompt=prompt, options=options):
@@ -206,16 +216,27 @@ class ClaudeAgentExecutor:
                         payload=payload,
                     )
         elif isinstance(message, ResultMessage):
+            raw_usage = getattr(message, "usage", None)
+            raw_model = getattr(message, "model_usage", None)
+            # 直接传递 SDK 原始 token 数据
+            usage_payload = {
+                "duration_ms": getattr(message, "duration_ms", None),
+                "cost_usd": getattr(message, "total_cost_usd", None),
+                "is_error": getattr(message, "is_error", False),
+            }
+            if isinstance(raw_usage, dict):
+                usage_payload["input_tokens"] = (
+                    raw_usage.get("input_tokens", 0)
+                    or raw_usage.get("cache_read_input_tokens", 0)
+                    or raw_usage.get("cache_creation_input_tokens", 0)
+                )
+                usage_payload["output_tokens"] = raw_usage.get("output_tokens", 0)
             self.events.emit(
                 run_id,
                 "agent.usage",
                 agent_id=task.agent,
                 task_id=task.id,
-                payload={
-                    "duration_ms": getattr(message, "duration_ms", None),
-                    "cost_usd": getattr(message, "total_cost_usd", None),
-                    "is_error": getattr(message, "is_error", False),
-                },
+                payload=usage_payload,
             )
 
     def _execute_demo(
@@ -225,7 +246,7 @@ class ClaudeAgentExecutor:
 
         import time
 
-        profile = self.registry.get(project_id or "", task.agent)
+        profile = self.registry.get("", task.agent)
         steps = [
             ("tool.started", {"tool": "Read", "summary": "检查相关目录和约束"}),
         ]

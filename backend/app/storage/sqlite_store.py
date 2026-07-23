@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -147,7 +148,7 @@ class SQLiteStore:
                     display_name TEXT NOT NULL,
                     description TEXT DEFAULT '',
                     template_id TEXT,
-                    agent_type TEXT NOT NULL CHECK(agent_type IN ('brain','rag','claude')),
+                    agent_type TEXT NOT NULL CHECK(agent_type IN ('brain','rag','claude','deepseek')),
                     sub_dir TEXT DEFAULT '',
                     system_prompt TEXT NOT NULL,
                     tools TEXT NOT NULL DEFAULT '[]',
@@ -216,6 +217,33 @@ CREATE TABLE IF NOT EXISTS project_skills (
                 );
 CREATE INDEX IF NOT EXISTS idx_interrupt_run
                 ON interrupt_commands(run_id, status);
+                CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
+                    title, content, category, tags
+                );
+                CREATE TRIGGER IF NOT EXISTS knowledge_fts_insert
+                AFTER INSERT ON knowledge_entries BEGIN
+                    INSERT INTO knowledge_fts(rowid, title, content, category, tags)
+                    VALUES (new.rowid, new.title, new.content, new.category, new.tags);
+                END;
+                CREATE TRIGGER IF NOT EXISTS knowledge_fts_update
+                AFTER UPDATE ON knowledge_entries BEGIN
+                    UPDATE knowledge_fts SET title=new.title, content=new.content,
+                        category=new.category, tags=new.tags WHERE rowid=old.rowid;
+                END;
+                CREATE TRIGGER IF NOT EXISTS knowledge_fts_delete
+                AFTER DELETE ON knowledge_entries BEGIN
+                    DELETE FROM knowledge_fts WHERE rowid=old.rowid;
+                END;
+                CREATE TABLE IF NOT EXISTS skill_templates (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL UNIQUE,
+                    display_name TEXT NOT NULL,
+                    description TEXT DEFAULT '',
+                    category TEXT DEFAULT 'general',
+                    content TEXT NOT NULL,
+                    is_builtin INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
                 """
             )
             columns = {
@@ -733,6 +761,7 @@ CREATE INDEX IF NOT EXISTS idx_interrupt_run
     # ==================== 知识库 CRUD ====================
 
     def insert_knowledge(self, record):
+        """插入知识条目。FTS 索引由 knowledge_fts_insert 触发器自动维护。"""
         with self._connect() as connection:
             connection.execute(
                 "INSERT INTO knowledge_entries("
@@ -747,16 +776,10 @@ CREATE INDEX IF NOT EXISTS idx_interrupt_run
                     record.get("expires_at"), record.get("created_at", ""),
                 ),
             )
-            row = connection.execute("SELECT last_insert_rowid()").fetchone()
-            connection.execute(
-                "INSERT INTO knowledge_fts(rowid, title, content, category, tags) VALUES (?,?,?,?,?)",
-                (row[0], record["title"], record["content"],
-                 record.get("category", "general"),
-                 json.dumps(record.get("tags", []), ensure_ascii=False)),
-            )
         return record["id"]
 
     def update_knowledge(self, entry_id, updates):
+        """更新知识条目。FTS 索引由 knowledge_fts_update 触发器自动维护。"""
         allowed = {"title", "content", "category", "tags", "score", "expires_at"}
         fields = {k: v for k, v in updates.items() if k in allowed}
         if not fields:
@@ -772,29 +795,15 @@ CREATE INDEX IF NOT EXISTS idx_interrupt_run
             )
             if cursor.rowcount == 0:
                 return False
-            if "title" in fields or "content" in fields:
-                row = connection.execute(
-                    "SELECT rowid FROM knowledge_entries WHERE id = ?", (entry_id,)
-                ).fetchone()
-                if row:
-                    connection.execute(
-                        "UPDATE knowledge_fts SET title=?, content=?, category=?, tags=? WHERE rowid=?",
-                        (fields.get("title", ""), fields.get("content", ""),
-                         fields.get("category", "general"),
-                         fields.get("tags", "[]"), row["rowid"]),
-                    )
         return True
 
     def delete_knowledge(self, entry_id):
+        """删除知识条目。FTS 索引由 knowledge_fts_delete 触发器自动维护。"""
         with self._connect() as connection:
-            row = connection.execute(
-                "SELECT rowid FROM knowledge_entries WHERE id = ?", (entry_id,)
-            ).fetchone()
-            if not row:
-                return False
-            connection.execute("DELETE FROM knowledge_fts WHERE rowid = ?", (row["rowid"],))
-            connection.execute("DELETE FROM knowledge_entries WHERE id = ?", (entry_id,))
-        return True
+            cursor = connection.execute(
+                "DELETE FROM knowledge_entries WHERE id = ?", (entry_id,)
+            )
+            return cursor.rowcount > 0
 
     def get_knowledge(self, entry_id):
         with self._connect() as connection:
@@ -861,15 +870,22 @@ CREATE INDEX IF NOT EXISTS idx_interrupt_run
             results.append(r)
         return results
 
-    def knowledge_stats(self):
+    def knowledge_stats(self, project_id: str = ""):
+        project_filter = "WHERE project_id = ?" if project_id else ""
+        params = (project_id,) if project_id else ()
         with self._connect() as connection:
-            total = connection.execute("SELECT COUNT(*) as cnt FROM knowledge_entries").fetchone()
+            total = connection.execute(
+                f"SELECT COUNT(*) as cnt FROM knowledge_entries {project_filter}", params
+            ).fetchone()
             by_cat = connection.execute(
-                "SELECT category, COUNT(*) as cnt FROM knowledge_entries GROUP BY category"
+                f"SELECT category, COUNT(*) as cnt FROM knowledge_entries {project_filter} GROUP BY category",
+                params,
             ).fetchall()
             expired = connection.execute(
-                "SELECT COUNT(*) as cnt FROM knowledge_entries "
-                "WHERE expires_at IS NOT NULL AND expires_at < datetime('now')"
+                f"SELECT COUNT(*) as cnt FROM knowledge_entries "
+                f"WHERE expires_at IS NOT NULL AND expires_at < datetime('now')"
+                f"{' AND project_id = ?' if project_id else ''}",
+                (project_id,) if project_id else (),
             ).fetchone()
             relations = connection.execute("SELECT COUNT(*) as cnt FROM knowledge_relations").fetchone()
         return {

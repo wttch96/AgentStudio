@@ -26,6 +26,7 @@ interface WorkspaceState {
   loading: boolean
   submitting: boolean
   error: string
+  taskQueue: { id: string; objective: string }[]
 }
 
 const state = reactive<WorkspaceState>({
@@ -36,6 +37,7 @@ const state = reactive<WorkspaceState>({
   projectName: '',
 
   agents: [],
+  taskQueue: [],
   skills: [],
   status: null,
   deepseekBalance: null,
@@ -126,11 +128,20 @@ export function useWorkspace() {
     state.submitting = true
     state.error = ''
     try {
-      const parentRunId =
-        state.activeRun && ['completed', 'failed', 'cancelled'].includes(state.activeRun.status)
-          ? state.activeRun.id
-          : undefined
-      const run = await api.createRun(objective, parentRunId)
+      // 如果有活跃任务，发送中断引导指令到当前任务
+      if (state.activeRun && !['completed', 'failed', 'cancelled'].includes(state.activeRun.status)) {
+        await api.interruptRun(state.activeRun.id, {
+          target: 'all',
+          action: 'inject',
+          instruction: objective,
+        })
+        const qid = Date.now().toString(36)
+        state.taskQueue.push({ id: qid, objective })
+        state.submitting = false
+        return
+      }
+      // 新任务：不携带上游，独立运行
+      const run = await api.createRun(objective)
       state.runs.unshift(run)
       state.activeRun = run
       state.events = []
@@ -141,6 +152,19 @@ export function useWorkspace() {
     } finally {
       state.submitting = false
     }
+  }
+
+  function removeFromQueue(qid: string) {
+    state.taskQueue = state.taskQueue.filter(q => q.id !== qid)
+  }
+
+  function promoteQueueItem(qid: string) {
+    const idx = state.taskQueue.findIndex(q => q.id === qid)
+    if (idx < 0) return
+    const item = state.taskQueue[idx]
+    state.taskQueue.splice(idx, 1)
+    // Cancel current and start this one (as continuation of same conversation)
+    cancelActiveRun().then(() => _startRun(item.objective))
   }
 
   function beginNewRun() {
@@ -215,6 +239,11 @@ export function useWorkspace() {
       closeStream()
       void refreshDeepSeekBalance()
       void refreshDeepSeekUsage()
+      // 自动推进队列中的下一个任务（作为当前对话的延续）
+      if (state.taskQueue.length > 0) {
+        const next = state.taskQueue.shift()!
+        void _startRun(next.objective)
+      }
     } else if (event.type === 'run.started') {
       state.activeRun.status = 'running'
       replaceRun(state.activeRun)
@@ -265,6 +294,8 @@ export function useWorkspace() {
     beginNewRun,
     cancelActiveRun,
     deleteRun,
+    removeFromQueue,
+    promoteQueueItem,
     refreshConfiguration,
     refreshDeepSeekBalance,
     refreshDeepSeekUsage,

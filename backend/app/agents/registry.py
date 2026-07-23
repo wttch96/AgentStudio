@@ -69,22 +69,14 @@ class AgentRegistry:
 
     def get(self, project_id: str = "", agent_name: str = "") -> AgentProfile:
         if not project_id:
-            result = []
+            # 无 project_id 时遍历所有项目查找 agent
             with self.store._connect() as conn:
                 rows = conn.execute("SELECT DISTINCT project_id FROM project_agents").fetchall()
                 for row in rows:
                     profiles = self.load_project_agents(row["project_id"])
-                    for p in profiles.values():
-                        if p.agent_type in ("brain", "rag"):
-                            continue
-                        result.append({
-                            "id": p.id, "name": p.name, "display_name": p.display_name,
-                            "description": p.description, "agent_type": p.agent_type,
-                            "tools": list(p.tools), "skills": list(p.skills),
-                            "skill_count": len(p.skills), "is_required": p.is_required,
-                            "sub_dir": p.sub_dir, "project_id": row["project_id"],
-                        })
-            return result
+                    if agent_name in profiles:
+                        return profiles[agent_name]
+            raise ValueError(f"Agent '{agent_name}' not found in any project")
         profiles = self.load_project_agents(project_id)
         if agent_name not in profiles:
             raise ValueError(f"Agent '{agent_name}' not found in project {project_id}")
@@ -99,11 +91,13 @@ class AgentRegistry:
                     profiles = self.load_project_agents(row["project_id"])
                     for p in profiles.values():
                         result.append({
+                            "id": p.id,
                             "name": p.name, "display_name": p.display_name,
                             "description": p.description, "agent_type": p.agent_type,
                             "tools": list(p.tools), "skills": list(p.skills),
                             "skill_count": len(p.skills), "is_required": p.is_required,
                             "sub_dir": p.sub_dir, "project_id": row["project_id"],
+                            "agent_type": p.agent_type,
                         })
             return result
         profiles = self.load_project_agents(project_id)
@@ -121,7 +115,7 @@ class AgentRegistry:
                 "sub_dir": p.sub_dir,
             }
             for p in profiles.values()
-            if p.agent_type not in ("brain", "rag")
+            if p.agent_type not in ("brain",)
         ]
 
     def invalidate(self, project_id: str) -> None:

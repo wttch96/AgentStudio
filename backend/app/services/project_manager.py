@@ -28,14 +28,14 @@ BUILTIN_TEMPLATES = [
     },
     {
         "id": "rag-template",
-        "name": "knowledge-rag",
-        "display_name": "知识库 RAG",
-        "description": "知识检索、录入、关联和评分管理",
+        "name": "rag",
+        "display_name": "RAG",
+        "description": "基于 LangChain 的知识检索与录入 Agent，由 RAGAgentExecutor 驱动",
         "category": "other",
         "agent_type": "rag",
         "default_sub_dir": "",
-        "default_prompt": "你是知识库管理 Agent，负责检索知识库、录入新知识和建立知识关联。",
-        "default_tools": ["Read", "Write", "Grep", "Bash"],
+        "default_prompt": "你是知识库管理 Agent，负责检索知识库、录入新知识和建立知识关联。使用 search_knowledge 检索、add_knowledge 录入、get_knowledge 查看详情、list_knowledge 浏览条目。优先从知识库检索相关信息，综合后回答。",
+        "default_tools": [],
         "default_skills": [],
         "is_builtin": 1,
     },
@@ -47,7 +47,7 @@ BUILTIN_TEMPLATES = [
         "category": "frontend",
         "agent_type": "claude",
         "default_sub_dir": "frontend",
-        "default_prompt": "你是 Vue 3 前端开发专家。使用 TypeScript、Vite 构建工具，遵循 Vue 3 Composition API 规范。负责页面组件、路由、状态管理和前端测试。",
+        "default_prompt": "你是 Vue 3 前端开发专家。使用 TypeScript、Vite 构建工具，遵循 Vue 3 Composition API 规范。负责页面组件、路由、状态管理和前端测试。\n\n工具使用：CLI 命令前加 rtk 前缀可节省 token（如 rtk npm test）。Read 工具只读取需要的文件片段，避免全文读取大文件。输出简洁，只包含关键信息。",
         "default_tools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
         "default_skills": [],
         "is_builtin": 1,
@@ -60,7 +60,7 @@ BUILTIN_TEMPLATES = [
         "category": "frontend",
         "agent_type": "claude",
         "default_sub_dir": "frontend",
-        "default_prompt": "你是 React 前端开发专家。使用 TypeScript、React Hooks、React Router。负责组件开发、状态管理、路由配置和前端测试。",
+        "default_prompt": "你是 React 前端开发专家。使用 TypeScript、React Hooks、React Router。负责组件开发、状态管理、路由配置和前端测试。\n\n工具使用：CLI 命令前加 rtk 前缀可节省 token。Read 只读取需要的文件片段。输出简洁。",
         "default_tools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
         "default_skills": [],
         "is_builtin": 1,
@@ -73,7 +73,7 @@ BUILTIN_TEMPLATES = [
         "category": "backend",
         "agent_type": "claude",
         "default_sub_dir": "backend",
-        "default_prompt": "你是 Python Flask 后端开发专家。负责 REST API 设计、数据库 ORM、业务逻辑、认证授权和后端测试。遵循 Flask 最佳实践。",
+        "default_prompt": "你是 Python Flask 后端开发专家。负责 REST API 设计、数据库 ORM、业务逻辑、认证授权和后端测试。遵循 Flask 最佳实践。\n\n工具使用：CLI 命令前加 rtk 前缀（如 rtk pytest）。Read 只读取需要的文件片段。输出简洁。",
         "default_tools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
         "default_skills": [],
         "is_builtin": 1,
@@ -100,6 +100,19 @@ BUILTIN_TEMPLATES = [
         "agent_type": "claude",
         "default_sub_dir": "netty",
         "default_prompt": "你是 Java Netty 数据传输专家。负责 TCP/UDP 连接管理、数据接收、粘包拆包处理、协议编解码、ByteBuf 管理和传输层测试。",
+        "default_tools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
+        "default_skills": [],
+        "is_builtin": 1,
+    },
+    {
+        "id": "deepseek-agent-template",
+        "name": "deepseek-agent",
+        "display_name": "DeepSeek 编码 Agent",
+        "description": "基于 LangChain 的 DeepSeek 通用 Agent，支持工具调用和代码生成",
+        "category": "backend",
+        "agent_type": "deepseek",
+        "default_sub_dir": "",
+        "default_prompt": "你是 DeepSeek 编程助手，负责代码实现、调试、测试和文档编写。使用可用的工具自主完成任务，结束时简洁说明结果、修改文件和验证情况。",
         "default_tools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
         "default_skills": [],
         "is_builtin": 1,
@@ -202,4 +215,148 @@ class ProjectManager:
                     tmpl["default_tools"],
                     tmpl["default_skills"],
                     0,  # claude agents are not required
-                    99,  # default s
+                    99,  # default sort_order
+                ),
+            )
+        return dict(conn.execute(
+            "SELECT * FROM project_agents WHERE id = ?", (aid,)
+        ).fetchone())
+
+    def update_agent(self, project_id: str, agent_id: str, updates: dict) -> dict | None:
+        allowed = {"display_name", "description", "system_prompt", "tools",
+                   "skills", "sub_dir", "sort_order"}
+        fields = {k: v for k, v in updates.items() if k in allowed and v is not None}
+        if not fields:
+            return None
+        if "tools" in fields and not isinstance(fields["tools"], str):
+            fields["tools"] = json.dumps(fields["tools"], ensure_ascii=False)
+        if "skills" in fields and not isinstance(fields["skills"], str):
+            fields["skills"] = json.dumps(fields["skills"], ensure_ascii=False)
+        set_clause = ", ".join(f"{k} = ?" for k in fields)
+        set_clause += ", updated_at = ?"
+        values = list(fields.values()) + [datetime.now(timezone.utc).isoformat(), agent_id, project_id]
+        with self.store._connect() as conn:
+            cursor = conn.execute(
+                f"UPDATE project_agents SET {set_clause} WHERE id = ? AND project_id = ?",
+                values,
+            )
+            if cursor.rowcount == 0:
+                return None
+            row = conn.execute(
+                "SELECT * FROM project_agents WHERE id = ?", (agent_id,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def delete_agent(self, project_id: str, agent_id: str) -> bool:
+        with self.store._connect() as conn:
+            # 检查是否为必选 Agent
+            row = conn.execute(
+                "SELECT is_required FROM project_agents WHERE id = ? AND project_id = ?",
+                (agent_id, project_id),
+            ).fetchone()
+            if not row:
+                return False
+            if row["is_required"]:
+                raise ValueError("必选 Agent 不可删除")
+            cursor = conn.execute(
+                "DELETE FROM project_agents WHERE id = ? AND project_id = ?",
+                (agent_id, project_id),
+            )
+        return cursor.rowcount > 0
+
+    def list_agents(self, project_id: str) -> list[dict]:
+        with self.store._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM project_agents WHERE project_id = ? ORDER BY sort_order",
+                (project_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ── 模板管理 ──
+
+    def list_templates(self, category: str | None = None) -> list[dict]:
+        with self.store._connect() as conn:
+            if category:
+                rows = conn.execute(
+                    "SELECT * FROM agent_templates WHERE category = ? ORDER BY name",
+                    (category,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM agent_templates ORDER BY category, name"
+                ).fetchall()
+        results = []
+        for row in rows:
+            r = dict(row)
+            r["default_tools"] = json.loads(r.get("default_tools", "[]"))
+            r["default_skills"] = json.loads(r.get("default_skills", "[]"))
+            results.append(r)
+        return results
+
+    def create_template(self, data: dict) -> dict | None:
+        tid = data.get("id") or uuid.uuid4().hex
+        with self.store._connect() as conn:
+            conn.execute(
+                """INSERT INTO agent_templates(
+                    id, name, display_name, description, category, agent_type,
+                    default_sub_dir, default_prompt, default_tools, default_skills, is_builtin
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    tid,
+                    data["name"],
+                    data.get("display_name", data["name"]),
+                    data.get("description", ""),
+                    data.get("category", "general"),
+                    data.get("agent_type", "claude"),
+                    data.get("default_sub_dir", ""),
+                    data.get("default_prompt", ""),
+                    json.dumps(data.get("default_tools", []), ensure_ascii=False),
+                    json.dumps(data.get("default_skills", []), ensure_ascii=False),
+                    0,  # 用户创建的模板不是内置模板
+                ),
+            )
+        return {"id": tid}
+
+    def update_template(self, template_id: str, updates: dict) -> dict | None:
+        """更新模板配置，后续从该模板创建的 Agent 将使用新默认值。"""
+        allowed = {"display_name", "description", "default_sub_dir",
+                   "default_prompt", "default_tools", "default_skills", "category"}
+        fields = {k: v for k, v in updates.items() if k in allowed and v is not None}
+        if not fields:
+            return None
+        if "default_tools" in fields and not isinstance(fields["default_tools"], str):
+            fields["default_tools"] = json.dumps(fields["default_tools"], ensure_ascii=False)
+        if "default_skills" in fields and not isinstance(fields["default_skills"], str):
+            fields["default_skills"] = json.dumps(fields["default_skills"], ensure_ascii=False)
+        set_clause = ", ".join(f"{k} = ?" for k in fields)
+        values = list(fields.values()) + [template_id]
+        with self.store._connect() as conn:
+            cursor = conn.execute(
+                f"UPDATE agent_templates SET {set_clause} WHERE id = ?", values
+            )
+            if cursor.rowcount == 0:
+                return None
+            row = conn.execute(
+                "SELECT * FROM agent_templates WHERE id = ?", (template_id,)
+            ).fetchone()
+        if not row:
+            return None
+        r = dict(row)
+        r["default_tools"] = json.loads(r.get("default_tools", "[]"))
+        r["default_skills"] = json.loads(r.get("default_skills", "[]"))
+        return r
+
+    def delete_template(self, template_id: str) -> bool:
+        """删除非内置模板。内置模板不可删除。"""
+        with self.store._connect() as conn:
+            row = conn.execute(
+                "SELECT is_builtin FROM agent_templates WHERE id = ?", (template_id,)
+            ).fetchone()
+            if not row:
+                return False
+            if row["is_builtin"]:
+                raise ValueError("内置模板不可删除")
+            cursor = conn.execute(
+                "DELETE FROM agent_templates WHERE id = ?", (template_id,)
+            )
+        return cursor.rowcount > 0

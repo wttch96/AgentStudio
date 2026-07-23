@@ -239,7 +239,7 @@ class ProjectAgent(BaseModel):
     display_name: str = Field(min_length=1, max_length=100)
     description: str = ""
     template_id: str | None = None
-    agent_type: Literal["brain", "rag", "claude"]
+    agent_type: Literal["brain", "rag", "claude", "deepseek"]
     sub_dir: str = ""
     system_prompt: str = Field(min_length=10, max_length=30000)
     tools: list[str] = Field(default_factory=list)
