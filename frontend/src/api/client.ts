@@ -30,16 +30,30 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   status: () => request<SystemStatus>('/status'),
-  agents: async () => (await request<{ items: AgentProfile[] }>('/agents')).items,
-  agent: (name: string) => request<AgentDetail>(`/agents/${name}`),
+  agents: async (projectId?: string) => {
+    const p = projectId ? '?project_id=' + encodeURIComponent(projectId) : ''
+    return (await request<{ items: AgentProfile[] }>('/agents' + p)).items
+  },
+  agent: (name: string, projectId?: string) => {
+    const p = projectId ? '?project_id=' + encodeURIComponent(projectId) : ''
+    return request<AgentDetail>(`/agents/${name}${p}`)
+  },
   updateAgent: (name: string, payload: Omit<AgentDetail, 'name' | 'skill_count' | 'builtin'>) =>
     request<AgentDetail>(`/agents/${name}`, { method: 'PUT', body: JSON.stringify(payload) }),
-  skills: async () => (await request<{ items: SkillProfile[] }>('/skills')).items,
-  skill: (name: string) => request<Required<SkillProfile>>(`/skills/${name}`),
+  skills: async (projectId?: string) => {
+    const p = projectId ? '?project_id=' + encodeURIComponent(projectId) : ''
+    return (await request<{ items: SkillProfile[] }>('/skills' + p)).items
+  },
+  skill: (name: string, projectId?: string) => {
+    const p = projectId ? '?project_id=' + encodeURIComponent(projectId) : ''
+    return request<Required<SkillProfile>>(`/skills/${name}${p}`)
+  },
   createSkill: (payload: Required<SkillProfile>) =>
     request<Required<SkillProfile>>('/skills', { method: 'POST', body: JSON.stringify(payload) }),
-  updateSkill: (name: string, payload: Omit<Required<SkillProfile>, 'name'>) =>
-    request<Required<SkillProfile>>(`/skills/${name}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  updateSkill: (name: string, payload: Omit<Required<SkillProfile>, 'name'>, projectId?: string) => {
+    const p = projectId ? '?project_id=' + encodeURIComponent(projectId) : ''
+    return request<Required<SkillProfile>>(`/skills/${name}${p}`, { method: 'PUT', body: JSON.stringify(payload) })
+  },
   runs: async () => (await request<{ items: Run[] }>('/runs')).items,
   run: (id: string) => request<Run & { events: RunEvent[] }>(`/runs/${id}`),
   deleteRun: async (id: string) => {
@@ -100,5 +114,51 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ command_id: commandId, decision: decision || 'apply' }),
     }),
-  streamUrl: (id: string, after: number) => `${API_BASE}/runs/${id}/stream?after=${after}`,
+
+  knowledgeSearch: (q: string, category?: string, topK?: number, projectId?: string) => {
+    const params = new URLSearchParams()
+    if (q) params.set('q', q)
+    if (category) params.set('category', category)
+    if (topK) params.set('top_k', String(topK))
+    if (projectId) params.set('project_id', projectId)
+    return request<{ items: import('../types').KnowledgeEntry[] }>('/knowledge?' + params.toString())
+  },
+  knowledgeGet: (id: string) => request<import('../types').KnowledgeEntry>('/knowledge/' + id),
+  knowledgeCreate: (payload: { title: string; content: string; category?: string; tags?: string[]; expires_at?: string | null }) =>
+    request<{ id: string }>('/knowledge', { method: 'POST', body: JSON.stringify(payload) }),
+  knowledgeUpdate: (id: string, payload: Record<string, unknown>) =>
+    request<{ id: string }>('/knowledge/' + id, { method: 'PUT', body: JSON.stringify(payload) }),
+  knowledgeDelete: (id: string) =>
+    fetch(API_BASE + '/knowledge/' + id, { method: 'DELETE' }).then(r => { if (!r.ok) throw new Error('删除失败') }),
+  knowledgeFeedback: (id: string, feedback: 'up' | 'down') =>
+    request<{ entry_id: string; score: number }>('/knowledge/' + id + '/feedback', { method: 'POST', body: JSON.stringify({ entry_id: id, feedback }) }),
+  knowledgeRelations: (id: string) =>
+    request<{ items: import('../types').KnowledgeRelation[] }>('/knowledge/' + id + '/relations'),
+  knowledgeAddRelation: (payload: { source_id: string; target_id: string; relation_type: string }) =>
+    request<{ id: string }>('/knowledge/relations', { method: 'POST', body: JSON.stringify(payload) }),
+  knowledgeStats: (projectId?: string) => {
+    const p = projectId ? '?project_id=' + encodeURIComponent(projectId) : ''
+    return request<import('../types').KnowledgeStats>('/knowledge-stats' + p)
+  },
+  projects: () => request<{ items: import("../types").Project[] }>("/projects"),
+  createProject: (name: string, root_dir: string, description?: string) =>
+    request<import("../types").Project>("/projects", { method: "POST", body: JSON.stringify({ name, root_dir, description }) }),
+  deleteProject: (id: string) =>
+    fetch(API_BASE + "/projects/" + id, { method: "DELETE" }).then(r => { if (!r.ok) throw new Error("delete failed") }),
+  projectAgents: (projectId: string) =>
+    request<{ items: import("../types").ProjectAgent[] }>("/projects/" + projectId + "/agents"),
+  addProjectAgent: (projectId: string, template_id: string, sub_dir?: string, system_prompt?: string) =>
+    request<import("../types").ProjectAgent>("/projects/" + projectId + "/agents", { method: "POST", body: JSON.stringify({ template_id, sub_dir, system_prompt }) }),
+  updateProjectAgent: (projectId: string, agentId: string, updates: Record<string, unknown>) =>
+    request<import("../types").ProjectAgent>("/projects/" + projectId + "/agents/" + agentId, { method: "PUT", body: JSON.stringify(updates) }),
+  deleteProjectAgent: (projectId: string, agentId: string) =>
+    fetch(API_BASE + "/projects/" + projectId + "/agents/" + agentId, { method: "DELETE" }).then(r => { if (!r.ok) throw new Error("delete failed") }),
+  templates: (category?: string) => {
+    const p = category ? "?category=" + encodeURIComponent(category) : ""
+    return request<{ items: import("../types").AgentTemplate[] }>("/templates" + p)
+  },
+  createTemplate: (payload: import("../types").AgentTemplate) =>
+    request<{ id: string }>("/templates", { method: "POST", body: JSON.stringify(payload) }),
+  streamUrl: (id: string, after: number) => API_BASE + '/runs/' + id + '/stream?after=' + after,
+
 }

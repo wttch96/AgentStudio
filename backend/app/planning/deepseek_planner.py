@@ -13,9 +13,8 @@ from app.services.brain_settings import BrainSettings
 from app.services.deepseek_usage import DeepSeekUsageService
 
 
-STRUCTURE_GUARD = """
+STRUCTURE_GUARD_BASE = """
 请把实施任务输出为小而清晰的有向无环任务图，并严格遵守以下控制协议：
-只允许把执行任务交给三个 Claude Agent：frontend-agent、backend-agent、netty-agent。
 
 要求：
 1. 架构分析、项目选择、接口边界和验收策略由主脑直接体现在共享契约、任务目标与依赖中，
@@ -54,21 +53,26 @@ class DeepSeekPlanner:
         self.usage = usage
         self.brain = brain or BrainSettings(settings.instance_dir / "brain.json")
 
-    def create_discovery_dag(self, objective: str) -> TaskDag:
+    def create_discovery_dag(self, objective: str,
+                              project_agents: list | None = None) -> TaskDag:
         """创建只读项目发现图；相关专业 Agent 会在所选工作空间内并行过滤候选项目。"""
 
-        selected_agents = self._agents_for_discovery(objective)
-        labels = {
-            "frontend-agent": "前端项目",
-            "backend-agent": "业务后端项目",
-            "netty-agent": "Netty/传输项目",
-        }
+        # 动态 Agent 列表
+        if project_agents:
+            selected = [
+                a for a in project_agents
+                if getattr(a, 'agent_type', '') not in ('brain',)
+            ]
+        else:
+            selected = []
         tasks = []
-        for agent in selected_agents:
-            label = labels[agent]
+        for agent_obj in selected:
+            agent_name = agent_obj.name if hasattr(agent_obj, 'name') else str(agent_obj)
+            label = getattr(agent_obj, 'display_name', agent_name)
+            sub_dir = getattr(agent_obj, 'sub_dir', '.')
             tasks.append(
                 DagTask(
-                    id=f"workspace-discovery-{agent.removesuffix('-agent')}",
+                    id=f"workspace-discovery-{agent_name}",
                     title=f"搜索并过滤{label}",
                     objective=(
                         f"在用户选择的整个工作空间中递归搜索与目标相关的{label}，不要假设固定目录名。"
@@ -78,8 +82,8 @@ class DeepSeekPlanner:
                         "匹配理由、关键入口、现有接口或协议、推荐 write_scope，以及需要主脑"
                         "协调的跨项目问题。若没有合适项目，也要明确说明搜索范围和排除依据。"
                     )[:4000],
-                    agent=agent,
-                    write_scope=[],
+                    agent=agent_obj.name if hasattr(agent_obj, 'name') else str(agent_obj),
+                    write_scope=[sub_dir] if sub_dir and sub_dir != '.' else [],
                 )
             )
         return TaskDag(summary="并行搜索工作空间并过滤候选项目", tasks=tasks)
@@ -91,6 +95,7 @@ class DeepSeekPlanner:
         run_id: str | None = None,
         continuation_context: str = "",
         discovery_results: list[AgentResult] | None = None,
+        project_agents: list | None = None,
     ) -> TaskDag:
         """基于项目发现结果生成实施 DAG；未设置密钥时返回代表性演示图。"""
 
@@ -108,12 +113,24 @@ class DeepSeekPlanner:
             indent=2,
         )
         brain = self.brain.current()
+        # 动态生成 Agent 路由提示词
+        agent_guard = ""
+        if project_agents:
+            agent_list = []
+            for a in project_agents:
+                name = getattr(a, 'name', str(a))
+                dtype = getattr(a, 'display_name', name)
+                sd = getattr(a, 'sub_dir', '.')
+                agent_list.append(f"- {name}: {dtype}（工作子目录: {sd}）")
+            agent_guard = "可用的执行 Agent：\n" + "\n".join(agent_list) + "\n\n只允许把执行任务交给以上列出的 Agent。\n每个 Agent 的 write_scope 必须使用其指定的工作子目录。"
+        guard = STRUCTURE_GUARD_BASE + "\n\n" + agent_guard
+
         response = client.chat.completions.create(
             model=self.settings.deepseek_model,
             messages=[
                 {
                     "role": "system",
-                    "content": f"{brain.planning_prompt}\n\n{STRUCTURE_GUARD}",
+                    "content": f"{brain.planning_prompt}\n\n{guard}",
                 },
                 {
                     "role": "user",
@@ -138,86 +155,10 @@ class DeepSeekPlanner:
         dag = TaskDag.model_validate_json(content)
         return self._enforce_requested_agents(dag, objective)
 
-    @classmethod
-    def _agents_for_discovery(cls, objective: str) -> list[str]:
-        """显式领域只搜索相关项目；目标含糊时让三个专业视角共同过滤工作空间。"""
-
-        lowered = objective.lower().replace(" ", "")
-        requested = {
-            "frontend-agent": "前后端" in lowered
-            or any(word in lowered for word in ("前端", "frontend", "vue", "react", "页面")),
-            "backend-agent": "前后端" in lowered
-            or any(
-                word in lowered
-                for word in ("后端", "backend", "flask", "spring", "服务端", "api")
-            ),
-            "netty-agent": "netty" in lowered or "协议" in lowered or "tcp" in lowered,
-        }
-        exclusions = {
-            "frontend-agent": any(
-                phrase in lowered for phrase in ("不用前端", "不要前端", "仅后端", "只改后端")
-            ),
-            "backend-agent": any(
-                phrase in lowered for phrase in ("不用后端", "不要后端", "仅前端", "只改前端")
-            ),
-            "netty-agent": any(
-                phrase in lowered for phrase in ("不用netty", "不要netty", "排除netty")
-            ),
-        }
-        explicit = any(requested.values())
-        selected = [
-            agent
-            for agent in ("frontend-agent", "backend-agent", "netty-agent")
-            if not exclusions[agent] and (requested[agent] or not explicit)
-        ]
-        if selected:
-            return selected
-        # 类似“分析协议但不用 Netty”的表述可能同时命中领域词与排除词；此时仍让
-        # 未被排除的专业 Agent 搜索，而不是生成一个无节点的发现图。
-        return [agent for agent in requested if not exclusions[agent]]
-
-    @staticmethod
-    def _workspace_context(workspace_root: str | None) -> str:
-        """只读取两层路径名称，帮助主脑识别前端、后端和 Netty 子项目。"""
-
-        if not workspace_root:
-            return "未提供工作区目录"
-        root = Path(workspace_root)
-        ignored = {
-            ".git",
-            ".env",
-            ".venv",
-            "node_modules",
-            "dist",
-            "build",
-            "__pycache__",
-            "instance",
-        }
-        lines: list[str] = []
-        try:
-            children = sorted(root.iterdir(), key=lambda item: item.name.lower())[:80]
-            for child in children:
-                if child.name in ignored:
-                    continue
-                lines.append(f"- {child.name}{'/' if child.is_dir() else ''}")
-                if not child.is_dir():
-                    continue
-                try:
-                    nested = sorted(
-                        (item for item in child.iterdir() if item.name not in ignored),
-                        key=lambda item: item.name.lower(),
-                    )[:30]
-                    lines.extend(
-                        f"  - {item.name}{'/' if item.is_dir() else ''}" for item in nested
-                    )
-                except OSError:
-                    lines.append("  - [无法读取]")
-        except OSError:
-            return "工作区目录无法读取"
-        return "\n".join(lines) or "工作区为空"
 
     @classmethod
-    def _enforce_requested_agents(cls, dag: TaskDag, objective: str) -> TaskDag:
+    def _enforce_requested_agents(cls, dag: TaskDag, objective: str,
+                                   project_agents: list | None = None) -> TaskDag:
         """把用户明确点名的领域从软提示提升为确定性的 DAG 约束。"""
 
         lowered = objective.lower().replace(" ", "")
@@ -235,6 +176,7 @@ class DeepSeekPlanner:
             ),
         }
         requested = {
+            "knowledge-agent": any(w in lowered for w in ("知识", "knowledge", "文档", "规范")),
             "frontend-agent": "前后端" in lowered
             or any(word in lowered for word in ("前端", "frontend", "vue", "react", "页面")),
             "backend-agent": "前后端" in lowered
@@ -268,6 +210,7 @@ class DeepSeekPlanner:
             for phrase in ("看看", "分析", "审查", "了解", "干了啥", "做了什么", "不要动", "不用动")
         )
         domain_details = {
+            "knowledge-agent": ("knowledge", "知识库管理", ["."]),
             "frontend-agent": ("frontend", "前端项目", ["."]),
             "backend-agent": ("backend", "后端项目", ["."]),
             "netty-agent": ("netty", "Netty 数据链路", ["."]),
@@ -291,7 +234,7 @@ class DeepSeekPlanner:
                         "先根据前置项目发现结果确定真实项目根目录，只处理本领域并给出"
                         "可供主脑汇总的明确结果。"
                     ),
-                    agent=agent,
+                    agent=agent_obj.name if hasattr(agent_obj, 'name') else str(agent_obj),
                     depends_on=[],
                     write_scope=[] if read_only else write_scope,
                 )
@@ -349,7 +292,7 @@ class DeepSeekPlanner:
         return content
 
     @staticmethod
-    def _demo_dag(objective: str) -> TaskDag:
+    def _demo_dag(objective: str, project_agents: list | None = None) -> TaskDag:
         """演示模式用三个执行 Agent 验证并行分发和结果汇合。"""
 
         short_objective = objective[:800]
@@ -359,32 +302,7 @@ class DeepSeekPlanner:
                 "演示共享契约：跨项目实现应先约定接口路径、方法、请求/响应字段与错误行为；"
                 "真实模式由 DeepSeek 根据项目发现结果生成具体契约。"
             ),
-            tasks=[
-                DagTask(
-                    id="backend",
-                    title="实现并验证后端能力",
-                    objective=f"按主脑拆解实现后端部分并完成后端测试：{short_objective}",
-                    agent="backend-agent",
-                    write_scope=["."],
-                ),
-                DagTask(
-                    id="frontend",
-                    title="实现并验证前端体验",
-                    objective=f"按主脑拆解实现前端部分并完成前端检查：{short_objective}",
-                    agent="frontend-agent",
-                    write_scope=["."],
-                ),
-                DagTask(
-                    id="netty-transport",
-                    title="实现并验证 Netty 数据链路",
-                    objective=(
-                        "按主脑拆解实现 Netty 数据接收、协议解析和编码发送，"
-                        f"并完成相关测试：{short_objective}"
-                    ),
-                    agent="netty-agent",
-                    write_scope=["."],
-                ),
-            ],
+            tasks=demo_tasks,
         )
 
     @staticmethod

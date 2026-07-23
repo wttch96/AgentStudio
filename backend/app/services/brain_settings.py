@@ -43,7 +43,9 @@ DEFAULT_SUMMARY_PROMPT = """
 
 
 class BrainSettings:
-    def __init__(self, config_path: Path, defaults_path: Path | None = None) -> None:
+    def __init__(self, store=None, defaults_path: Path | None = None,
+                 config_path: Path | None = None) -> None:
+        self.store = store
         self.config_path = config_path
         self.defaults_path = defaults_path
         self.defaults = self._load_defaults()
@@ -66,13 +68,20 @@ class BrainSettings:
 
     def current(self) -> BrainConfiguration:
         with self._lock:
-            if not self.config_path.exists():
-                return self.defaults.model_copy()
-            try:
-                payload = json.loads(self.config_path.read_text(encoding="utf-8"))
-                return BrainConfiguration.model_validate(payload)
-            except (OSError, ValueError, json.JSONDecodeError):
-                return self.defaults.model_copy()
+            # 自动迁移：首次调用时从旧 JSON 文件迁移到 SQLite
+            if self.store and self.config_path and self.config_path.exists():
+                self.store.migrate_config_from_file("brain", str(self.config_path))
+            if self.store:
+                data = self.store.get_config("brain")
+                if data:
+                    return BrainConfiguration.model_validate(data)
+            if self.config_path and self.config_path.exists():
+                try:
+                    payload = json.loads(self.config_path.read_text(encoding="utf-8"))
+                    return BrainConfiguration.model_validate(payload)
+                except (OSError, ValueError, json.JSONDecodeError):
+                    pass
+            return self.defaults.model_copy()
 
     def default(self) -> BrainConfiguration:
         """返回版本库模板的副本，供配置页面显式恢复默认值。"""
@@ -81,11 +90,14 @@ class BrainSettings:
 
     def update(self, configuration: BrainConfiguration) -> BrainConfiguration:
         with self._lock:
-            self.config_path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = self.config_path.with_suffix(".json.tmp")
-            temporary.write_text(
-                json.dumps(configuration.model_dump(), ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
-            temporary.replace(self.config_path)
+            if self.store:
+                self.store.set_config("brain", configuration.model_dump())
+            elif self.config_path:
+                self.config_path.parent.mkdir(parents=True, exist_ok=True)
+                temporary = self.config_path.with_suffix(".json.tmp")
+                temporary.write_text(
+                    json.dumps(configuration.model_dump(), ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                temporary.replace(self.config_path)
         return configuration.model_copy()

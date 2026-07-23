@@ -396,4 +396,106 @@ function itemSequence(item: TimelineItem) {
               <span class="lane-status">{{ taskStatus(task.id) }}</span>
               <button
                 class="lane-collapse-button"
-                type="bu
+                type="button"
+                :aria-expanded="!isLaneCollapsed(task.id)"
+                :aria-controls="`lane-events-${task.id}`"
+                :title="isLaneCollapsed(task.id) ? '展开泳道' : '折叠泳道'"
+                @click="toggleLane(task.id)"
+              >
+                {{ isLaneCollapsed(task.id) ? '⌄' : '⌃' }}
+              </button>
+            </div>
+          </header>
+
+          <div
+            v-show="!isLaneCollapsed(task.id)"
+            :id="`lane-events-${task.id}`"
+            class="lane-events"
+          >
+            <article v-for="item in groupedTaskEvents(task.id)" :key="item.key" class="lane-event">
+              <div class="lane-event-marker" :class="item.event.type.replace('.', '-')" aria-hidden="true">
+                {{ icon(item.event) }}
+              </div>
+              <div class="lane-event-body">
+                <div>
+                  <strong>{{ itemTitle(item) }}</strong>
+                  <span>{{ itemSequence(item) }}</span>
+                </div>
+                <p
+                  v-if="!['tool.started', 'agent.failed'].includes(item.event.type) && detail(item.event)"
+                >
+                  {{ detail(item.event) }}
+                </p>
+                <div v-if="item.event.type === 'agent.failed'" class="agent-failure-detail">
+                  <div>
+                    <strong>{{ failureCategory(item.event) }}</strong>
+                    <span>{{ item.event.payload.summary ?? '节点未能完成' }}</span>
+                  </div>
+                  <pre>{{ failureReason(item.event) }}</pre>
+                </div>
+                <details v-if="item.event.type === 'tool.started'" class="tool-call-details">
+                  <summary>查看 {{ item.events.length }} 次调用参数</summary>
+                  <div class="tool-call-list">
+                    <section v-for="(call, index) in item.events" :key="call.sequence">
+                      <span>第 {{ index + 1 }} 次 · #{{ call.sequence }}</span>
+                      <pre>{{ JSON.stringify(call.payload.input ?? {}, null, 2) }}</pre>
+                    </section>
+                  </div>
+                </details>
+              </div>
+            </article>
+            <div v-if="taskEvents(task.id).length === 0" class="lane-waiting">
+              <span /> 等待调度器启动
+            </div>
+          </div>
+        </article>
+      </div>
+
+      <div class="flow-junction merge-junction" :class="waveStatus(wave.tasks)">
+        <span class="junction-symbol" aria-hidden="true">⌄</span>
+        <div>
+          <strong>并行结果汇流</strong>
+          <small>{{ waveSummary(wave.tasks) }}</small>
+        </div>
+      </div>
+
+      <div
+        v-if="wave.tasks.some(isDiscoveryTask) && decisionEvents.length"
+        class="flow-decision"
+      >
+        <article
+          v-for="event in decisionEvents"
+          :key="event.sequence"
+          class="orchestrator-event"
+          :class="{ 'planning-active': event.type === 'planner.started' && planningActive }"
+        >
+          <div class="flow-event-icon" aria-hidden="true">{{ icon(event) }}</div>
+          <div>
+            <strong>{{ title(event) }}</strong>
+            <p v-if="detail(event)">{{ detail(event) }}</p>
+            <div v-if="event.type === 'planner.started' && planningActive" class="planning-progress" aria-hidden="true">
+              <i />
+            </div>
+          </div>
+          <span>#{{ event.sequence }}</span>
+        </article>
+      </div>
+    </div>
+
+    <div v-if="finishEvents.length" class="flow-finish">
+      <article
+        v-for="event in finishEvents"
+        :key="event.sequence"
+        class="orchestrator-event"
+        :class="{ 'run-failure-detail': event.type === 'run.failed' }"
+      >
+        <div class="flow-event-icon" aria-hidden="true">{{ icon(event) }}</div>
+        <div>
+          <strong>{{ title(event) }}</strong>
+          <p v-if="detail(event)">{{ detail(event) }}</p>
+        </div>
+        <span>#{{ event.sequence }}</span>
+      </article>
+    </div>
+  </section>
+</template>

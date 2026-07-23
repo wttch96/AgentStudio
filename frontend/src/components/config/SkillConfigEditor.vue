@@ -3,7 +3,7 @@ import { reactive, ref, watch } from 'vue'
 import { api } from '../../api/client'
 import type { SkillProfile } from '../../types'
 
-const props = defineProps<{ skills: SkillProfile[] }>()
+const props = defineProps<{ skills: SkillProfile[]; projectId: string }>()
 const emit = defineEmits<{ saved: [] }>()
 const selectedName = ref('__new__')
 const saving = ref(false)
@@ -19,7 +19,7 @@ async function select(name: string) {
   selectedName.value = name
   if (name === '__new__') return reset()
   try {
-    Object.assign(form, await api.skill(name))
+    Object.assign(form, await api.skill(name, props.projectId || undefined))
   } catch (error) {
     message.value = error instanceof Error ? error.message : '读取 Skill 失败'
   }
@@ -30,10 +30,10 @@ async function save() {
   message.value = ''
   try {
     if (selectedName.value === '__new__') {
-      await api.createSkill({ ...form })
+      await api.createSkill({ ...form, project_id: props.projectId || '' })
       selectedName.value = form.name
     } else {
-      await api.updateSkill(form.name, { description: form.description, content: form.content })
+      await api.updateSkill(form.name, { description: form.description, content: form.content }, props.projectId || undefined)
     }
     message.value = 'Skill 已保存，可在 Agent 配置中关联。'
     emit('saved')

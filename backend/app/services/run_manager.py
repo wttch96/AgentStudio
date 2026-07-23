@@ -16,7 +16,7 @@ from app.domain.models import DagTask, TaskDag
 from app.events.publisher import EventPublisher
 from app.orchestration.graph import build_graph
 from app.planning.deepseek_planner import DeepSeekPlanner
-from app.services.run_commands import AGENT_SCOPES, RunCommand, parse_run_command
+from app.services.run_commands import RunCommand, parse_run_command
 from app.services.scheduler_settings import SchedulerSettings
 from app.storage.sqlite_store import SQLiteStore
 from app.services.workspace_settings import WorkspaceSettings
@@ -53,7 +53,8 @@ class RunManager:
         self._agent_pause_events: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
 
-    def start(self, objective: str, parent_run_id: str | None = None) -> dict:
+    def start(self, objective: str, parent_run_id: str | None = None,
+              project_id: str | None = None) -> dict:
         command = parse_run_command(objective)
         parent = self.store.get_run(parent_run_id) if parent_run_id else None
         if parent_run_id and not parent:
@@ -92,6 +93,7 @@ class RunManager:
                 self.interrupt_router,
                 self.memory_manager,
                 self.store.get_run(run_id).get("conversation_id", run_id),
+                project_id,
             ),
             name=f"run-{run_id[:8]}",
             daemon=True,
@@ -142,6 +144,7 @@ class RunManager:
         interrupt_router: InterruptRouter | None = None,
         memory_manager: MemoryManager | None = None,
         conversation_id: str = "",
+        project_id: str | None = None,
     ) -> None:
         started_at_iso = datetime.now(timezone.utc).isoformat()
         self.store.update_run(run_id, "running", started_at=started_at_iso)
@@ -166,7 +169,16 @@ class RunManager:
             except Exception:
                 pass  # checkpoint 失败不阻塞主流程
 
-            graph = build_graph(self.planner, self.executor, self.events, cancel_event, checkpointer, interrupt_router, memory_manager)
+            # 加载项目 Agent 列表
+            project_agents = []
+            if project_id:
+                try:
+                    agent_profiles = self.executor.registry.load_project_agents(project_id)
+                    project_agents = list(agent_profiles.values())
+                except Exception:
+                    pass
+
+            graph = build_graph(self.planner, self.executor, self.events, cancel_event, checkpointer, interrupt_router, memory_manager, project_agents)
             output = graph.invoke(
                 {
                     "run_id": run_id,
@@ -238,7 +250,7 @@ class RunManager:
                         title=f"直接交给 {command.agent}",
                         objective=command.instruction,
                         agent=command.agent,
-                        write_scope=AGENT_SCOPES[command.agent],
+                        write_scope=["."],
                     )
                 ],
             )

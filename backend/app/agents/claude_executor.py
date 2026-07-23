@@ -45,6 +45,7 @@ class ClaudeAgentExecutor:
         workspace_root: str,
         max_turns: int | None = None,
         timeout_seconds: int | None = None,
+        project_id: str | None = None,
     ) -> AgentResult:
         if cancel_event.is_set():
             return self._cancelled(task)
@@ -72,7 +73,7 @@ class ClaudeAgentExecutor:
         max_turns: int,
         timeout_seconds: int,
     ) -> AgentResult:
-        profile = self.registry.get(task.agent)
+        profile = self.registry.get(project_id or "", task.agent)
         dependency_context = "\n".join(
             f"- {result.task_id}: {result.summary}" for result in dependency_results
         ) or "无前置任务"
@@ -224,7 +225,7 @@ class ClaudeAgentExecutor:
 
         import time
 
-        profile = self.registry.get(task.agent)
+        profile = self.registry.get(project_id or "", task.agent)
         steps = [
             ("tool.started", {"tool": "Read", "summary": "检查相关目录和约束"}),
         ]

@@ -51,6 +51,7 @@ def build_graph(
     checkpointer=None,
     interrupt_router: object | None = None,
     memory_manager: object | None = None,
+    project_agents: list | None = None,
 ):
     def plan(state: GraphState) -> GraphState:
         run_id = state["run_id"]

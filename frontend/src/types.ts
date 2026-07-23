@@ -25,12 +25,16 @@ export interface RunEvent {
 }
 
 export interface AgentProfile {
+  id: string
   name: string
+  display_name?: string
   description: string
   tools: string[]
   skills: string[]
   skill_count: number
   builtin: boolean
+  sub_dir?: string
+  project_id?: string
 }
 
 export interface AgentDetail extends AgentProfile {
@@ -175,4 +179,79 @@ export interface InterruptCommand {
   target_task: string | null
   instruction: string
   created_at: string
+}
+
+
+// ==================== 知识库类型 ====================
+
+export interface KnowledgeEntry {
+  id: string
+  title: string
+  content: string
+  category: string
+  tags: string[]
+  source: string
+  score: number
+  created_at: string
+  expires_at: string | null
+  updated_at: string
+  relations?: KnowledgeRelation[]
+  _rrf_score?: number
+}
+
+export interface KnowledgeRelation {
+  id?: string
+  source_id: string
+  target_id: string
+  relation_type: string
+  created_at?: string
+}
+
+export interface KnowledgeStats {
+  total: number
+  by_category: Record<string, number>
+  expired: number
+  relations: number
+}
+
+
+// ==================== 多项目类型 ====================
+
+export interface Project {
+  id: string
+  name: string
+  root_dir: string
+  description: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ProjectAgent {
+  id: string
+  project_id: string
+  name: string
+  display_name: string
+  description: string
+  template_id: string | null
+  agent_type: 'brain' | 'rag' | 'claude'
+  sub_dir: string
+  system_prompt: string
+  tools: string[]
+  skills: string[]
+  is_required: boolean
+  sort_order: number
+}
+
+export interface AgentTemplate {
+  id: string
+  name: string
+  display_name: string
+  description: string
+  category: string
+  agent_type: string
+  default_sub_dir: string
+  default_prompt: string
+  default_tools: string[]
+  default_skills: string[]
+  is_builtin: boolean
 }

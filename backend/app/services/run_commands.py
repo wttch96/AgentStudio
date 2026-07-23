@@ -11,13 +11,7 @@ DIRECT_AGENTS = {
     "/backend": "backend-agent",
     "/netty": "netty-agent",
 }
-AGENT_SCOPES = {
-    # 定向命令主动跳过项目发现与 DeepSeek 规划，因此不能假定外部工作空间的
-    # 目录名称。专业 Agent 仍受自身领域提示约束，并在整个工作空间内定位目标。
-    "frontend-agent": ["."],
-    "backend-agent": ["."],
-    "netty-agent": ["."],
-}
+
 
 
 @dataclass(frozen=True, slots=True)

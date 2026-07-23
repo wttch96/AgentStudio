@@ -9,11 +9,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, model_validator
 
 
-AgentName = Literal[
-    "frontend-agent",
-    "backend-agent",
-    "netty-agent",
-]
+
 
 
 class DagTask(BaseModel):
@@ -22,7 +18,7 @@ class DagTask(BaseModel):
     id: str = Field(pattern=r"^[a-zA-Z0-9_-]+$")
     title: str = Field(min_length=1, max_length=120)
     objective: str = Field(min_length=1, max_length=4000)
-    agent: AgentName
+    agent: str  # 动态 agent 名称，由项目配置决定
     depends_on: list[str] = Field(default_factory=list)
     write_scope: list[str] = Field(default_factory=list)
 
@@ -198,3 +194,75 @@ class InterruptDecision(BaseModel):
     decision: Literal['apply', 'discard', 'defer']
     modified_instruction: str = ''
     target_nodes: list[str] = Field(default_factory=list)
+
+
+class KnowledgeEntry(BaseModel):
+    """知识库条目"""
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    title: str = Field(min_length=1, max_length=500)
+    content: str = Field(min_length=1, max_length=50000)
+    category: str = Field(default="general")
+    tags: list[str] = Field(default_factory=list)
+    source: str = ""
+    score: float = 0.0
+    expires_at: str | None = None
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+class KnowledgeRelation(BaseModel):
+    """知识关联"""
+    source_id: str
+    target_id: str
+    relation_type: str  # api_example / error_handling / dependency / related
+
+
+class KnowledgeFeedback(BaseModel):
+    """知识反馈"""
+    entry_id: str
+    feedback: Literal["up", "down"]
+
+
+# ==================== 多项目模型 ====================
+
+class Project(BaseModel):
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    name: str = Field(min_length=1, max_length=100)
+    root_dir: str = Field(min_length=1, max_length=4096)
+    description: str = ""
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+class ProjectAgent(BaseModel):
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    project_id: str
+    name: str = Field(min_length=1, max_length=64)
+    display_name: str = Field(min_length=1, max_length=100)
+    description: str = ""
+    template_id: str | None = None
+    agent_type: Literal["brain", "rag", "claude"]
+    sub_dir: str = ""
+    system_prompt: str = Field(min_length=10, max_length=30000)
+    tools: list[str] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
+    is_required: bool = False
+    sort_order: int = 0
+
+
+class AgentTemplate(BaseModel):
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    name: str = Field(min_length=1, max_length=64)
+    display_name: str = Field(min_length=1, max_length=100)
+    description: str = ""
+    category: str = Field(default="other")
+    agent_type: str = "claude"
+    default_sub_dir: str = ""
+    default_prompt: str = Field(min_length=10, max_length=30000)
+    default_tools: list[str] = Field(default_factory=list)
+    default_skills: list[str] = Field(default_factory=list)
+    is_builtin: bool = True
+
+
+class CreateProjectRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    root_dir: str = Field(min_length=1, max_length=4096)
+    description: str = ""

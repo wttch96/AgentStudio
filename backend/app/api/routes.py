@@ -20,6 +20,13 @@ from app.domain.configuration import (
 )
 from app.domain.models import (
     CreateRunRequest,
+    CreateProjectRequest,
+    Project,
+    ProjectAgent,
+    AgentTemplate,
+    KnowledgeEntry,
+    KnowledgeRelation,
+    KnowledgeFeedback,
     InterruptAction,
     InterruptCommand,
     InterruptTarget,
@@ -55,19 +62,42 @@ def status():
 
 @api.get("/agents")
 def agents():
-    return jsonify({"items": services().registry.list_public()})
+    project_id = request.args.get("project_id", "")
+    return jsonify({"items": services().registry.list_public(project_id)})
 
 
 @api.get("/agents/<name>")
 def get_agent(name: str):
+    project_id = request.args.get("project_id", "")
+    if not project_id:
+        return jsonify({"error": "需要指定 project_id"}), 400
     try:
-        return jsonify(services().registry.get_public(name))
+        agent_profiles = services().registry.load_project_agents(project_id)
+        profile = agent_profiles.get(name)
+        if not profile:
+            return jsonify({"error": f"Agent {name} 不存在"}), 404
+        return jsonify({
+            "id": getattr(profile, "id", ""),
+            "name": profile.name,
+            "display_name": profile.display_name,
+            "description": profile.description,
+            "prompt": profile.prompt,
+            "tools": list(profile.tools),
+            "skills": list(profile.skills),
+            "skill_count": len(profile.skills),
+            "sub_dir": profile.sub_dir,
+            "is_required": profile.is_required,
+        })
     except ValueError as error:
         return jsonify({"error": str(error)}), 404
 
 
 @api.put("/agents/<name>")
 def update_agent(name: str):
+    # Agent 配置现在通过 /api/projects/<id>/agents/<id> 管理
+    return jsonify({"error": "请使用 /api/projects/<id>/agents/<id> 更新项目 Agent"}), 400
+# old update_agent placeholder
+def _old_update_agent(name: str):
     try:
         payload = AgentUpdate.model_validate(request.get_json(silent=True) or {})
         unknown_skills = set(payload.skills) - services().skills.names()
@@ -83,12 +113,18 @@ def update_agent(name: str):
 
 @api.get("/skills")
 def skills():
+    project_id = request.args.get("project_id", "")
+    if project_id:
+        return jsonify({"items": services().skills.list_project(project_id)})
     return jsonify({"items": services().skills.list_public()})
 
 
 @api.get("/skills/<name>")
 def get_skill(name: str):
+    project_id = request.args.get("project_id", "")
     try:
+        if project_id:
+            return jsonify(services().skills.get_project(project_id, name))
         return jsonify(services().skills.get_public(name))
     except ValueError as error:
         return jsonify({"error": str(error)}), 404
@@ -98,7 +134,12 @@ def get_skill(name: str):
 def create_skill():
     try:
         payload = SkillCreate.model_validate(request.get_json(silent=True) or {})
-        skill = services().skills.create(**payload.model_dump())
+        data = request.get_json(silent=True) or {}
+        project_id = data.get("project_id", "")
+        if project_id:
+            skill = services().skills.create_project(project_id, **payload.model_dump())
+        else:
+            skill = services().skills.create(**payload.model_dump())
         return jsonify(skill), 201
     except ValidationError as error:
         return jsonify({"error": "Skill 配置无效", "details": error.errors()}), 400
@@ -110,7 +151,11 @@ def create_skill():
 def update_skill(name: str):
     try:
         payload = SkillUpdate.model_validate(request.get_json(silent=True) or {})
-        skill = services().skills.update(name, **payload.model_dump())
+        project_id = request.args.get("project_id", "")
+        if project_id:
+            skill = services().skills.update_project(project_id, name, **payload.model_dump())
+        else:
+            skill = services().skills.update(name, **payload.model_dump())
         return jsonify(skill)
     except ValidationError as error:
         return jsonify({"error": "Skill 配置无效", "details": error.errors()}), 400
@@ -300,6 +345,204 @@ def resume_run(run_id: str):
     decision = payload.get("decision", "apply")
     services().interrupt_router.resolve(run_id, command_id, decision)
     return jsonify({"accepted": True}), 202
+
+
+# ==================== 知识库 API ====================
+
+@api.get("/knowledge")
+def search_knowledge():
+    """搜索知识：?q=关键词&category=&top_k=10"""
+    q = request.args.get("q", "")
+    category = request.args.get("category")
+    top_k = request.args.get("top_k", default=10, type=int)
+    project_id = request.args.get("project_id", "")
+    if not q:
+        items = services().knowledge_store.list(category=category, project_id=project_id)
+    else:
+        items = services().knowledge_store.search(q, category=category, top_k=top_k, project_id=project_id)
+    return jsonify({"items": items})
+
+
+@api.get("/knowledge/<entry_id>")
+def get_knowledge(entry_id: str):
+    entry = services().knowledge_store.get(entry_id)
+    if not entry:
+        return jsonify({"error": "知识条目不存在"}), 404
+    entry["relations"] = services().knowledge_store.get_relations(entry_id)
+    return jsonify(entry)
+
+
+@api.post("/knowledge")
+def create_knowledge():
+    try:
+        payload = KnowledgeEntry.model_validate(request.get_json(silent=True) or {})
+    except ValidationError as error:
+        return jsonify({"error": "知识条目无效", "details": error.errors()}), 400
+    data = request.get_json(silent=True) or {}
+    entry_id = services().knowledge_store.add(
+        title=payload.title, content=payload.content,
+        category=payload.category, tags=payload.tags,
+        source=payload.source, expires_at=payload.expires_at,
+        project_id=data.get("project_id", ""),
+    )
+    return jsonify({"id": entry_id}), 201
+
+
+@api.put("/knowledge/<entry_id>")
+def update_knowledge(entry_id: str):
+    payload = request.get_json(silent=True) or {}
+    ok = services().knowledge_store.update(entry_id, **payload)
+    if not ok:
+        return jsonify({"error": "知识条目不存在或无可更新字段"}), 404
+    return jsonify({"id": entry_id})
+
+
+@api.delete("/knowledge/<entry_id>")
+def delete_knowledge(entry_id: str):
+    ok = services().knowledge_store.delete(entry_id)
+    if not ok:
+        return jsonify({"error": "知识条目不存在"}), 404
+    return "", 204
+
+
+@api.get("/knowledge/<entry_id>/relations")
+def get_knowledge_relations(entry_id: str):
+    return jsonify({"items": services().knowledge_store.get_relations(entry_id)})
+
+
+@api.post("/knowledge/relations")
+def create_knowledge_relation():
+    try:
+        payload = KnowledgeRelation.model_validate(request.get_json(silent=True) or {})
+    except ValidationError as error:
+        return jsonify({"error": "关联无效", "details": error.errors()}), 400
+    rid = services().knowledge_store.add_relation(
+        payload.source_id, payload.target_id, payload.relation_type,
+    )
+    return jsonify({"id": rid}), 201
+
+
+@api.post("/knowledge/<entry_id>/feedback")
+def add_knowledge_feedback(entry_id: str):
+    try:
+        payload = KnowledgeFeedback.model_validate(request.get_json(silent=True) or {})
+    except ValidationError as error:
+        return jsonify({"error": "反馈无效", "details": error.errors()}), 400
+    services().knowledge_store.add_feedback(entry_id, payload.feedback)
+    score = services().knowledge_store.store.get_knowledge_score(entry_id)
+    return jsonify({"entry_id": entry_id, "score": score})
+
+
+@api.get("/knowledge-stats")
+def knowledge_stats():
+    project_id = request.args.get("project_id", "")
+    return jsonify(services().knowledge_store.stats(project_id=project_id))
+
+
+@api.post("/knowledge/cleanup")
+def cleanup_knowledge():
+    count = services().knowledge_store.cleanup()
+    return jsonify({"cleaned": count})
+
+
+# ==================== 项目管理 ====================
+
+@api.get("/projects")
+def list_projects():
+    return jsonify({"items": services().project_manager.list_projects()})
+
+
+@api.post("/projects")
+def create_project():
+    try:
+        payload = CreateProjectRequest.model_validate(request.get_json(silent=True) or {})
+    except ValidationError as error:
+        return jsonify({"error": "项目参数无效", "details": error.errors()}), 400
+    try:
+        project = services().project_manager.create_project(
+            payload.name, payload.root_dir, payload.description,
+        )
+        return jsonify(project), 201
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+
+
+@api.get("/projects/<project_id>")
+def get_project(project_id: str):
+    project = services().project_manager.get_project(project_id)
+    if not project:
+        return jsonify({"error": "项目不存在"}), 404
+    return jsonify(project)
+
+
+@api.delete("/projects/<project_id>")
+def delete_project(project_id: str):
+    if not services().project_manager.delete_project(project_id):
+        return jsonify({"error": "项目不存在"}), 404
+    return "", 204
+
+
+@api.get("/projects/<project_id>/agents")
+def list_project_agents(project_id: str):
+    return jsonify({"items": services().project_manager.list_agents(project_id)})
+
+
+@api.post("/projects/<project_id>/agents")
+def add_project_agent(project_id: str):
+    data = request.get_json(silent=True) or {}
+    template_id = data.get("template_id", "")
+    if not template_id:
+        return jsonify({"error": "需要指定 template_id"}), 400
+    try:
+        agent = services().project_manager.add_agent(
+            project_id, template_id,
+            sub_dir=data.get("sub_dir", ""),
+            custom_prompt=data.get("system_prompt", ""),
+            display_name=data.get("display_name", ""),
+        )
+        return jsonify(agent), 201
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+
+
+@api.put("/projects/<project_id>/agents/<agent_id>")
+def update_project_agent(project_id: str, agent_id: str):
+    payload = request.get_json(silent=True) or {}
+    result = services().project_manager.update_agent(project_id, agent_id, payload)
+    if not result:
+        return jsonify({"error": "Agent 不存在"}), 404
+    services().executor.registry.invalidate(project_id)
+    return jsonify(result)
+
+
+@api.delete("/projects/<project_id>/agents/<agent_id>")
+def delete_project_agent(project_id: str, agent_id: str):
+    try:
+        ok = services().project_manager.delete_agent(project_id, agent_id)
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    if not ok:
+        return jsonify({"error": "Agent 不存在"}), 404
+    services().executor.registry.invalidate(project_id)
+    return "", 204
+
+
+# ==================== 模板管理 ====================
+
+@api.get("/templates")
+def list_templates():
+    category = request.args.get("category")
+    return jsonify({"items": services().project_manager.list_templates(category)})
+
+
+@api.post("/templates")
+def create_template():
+    try:
+        payload = AgentTemplate.model_validate(request.get_json(silent=True) or {})
+    except ValidationError as error:
+        return jsonify({"error": "模板参数无效", "details": error.errors()}), 400
+    tid = services().project_manager.create_template(payload.model_dump())
+    return jsonify(tid), 201
 
 
 @api.get("/runs/<run_id>/stream")

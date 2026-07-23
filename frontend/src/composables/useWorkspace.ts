@@ -15,6 +15,8 @@ interface WorkspaceState {
   runs: Run[]
   activeRun: Run | null
   events: RunEvent[]
+  projectId: string
+  projectName: string
   agents: AgentProfile[]
   skills: SkillProfile[]
   status: SystemStatus | null
@@ -30,6 +32,9 @@ const state = reactive<WorkspaceState>({
   runs: [],
   activeRun: null,
   events: [],
+  projectId: '',
+  projectName: '',
+
   agents: [],
   skills: [],
   status: null,
@@ -50,8 +55,8 @@ export function useWorkspace() {
     try {
       const [status, agents, skills, runs] = await Promise.all([
         api.status(),
-        api.agents(),
-        api.skills(),
+        api.agents(state.projectId || undefined),
+        api.skills(state.projectId || undefined),
         api.runs(),
       ])
       state.status = status
@@ -69,10 +74,14 @@ export function useWorkspace() {
   }
 
   async function refreshConfiguration() {
-    const [agents, skills, status] = await Promise.all([api.agents(), api.skills(), api.status()])
-    state.agents = agents
-    state.skills = skills
-    state.status = status
+    try {
+      const [agents, skills, status] = await Promise.all([api.agents(state.projectId || undefined), api.skills(state.projectId || undefined), api.status()])
+      state.agents = agents
+      state.skills = skills
+      state.status = status
+    } catch {
+      // 后台刷新失败不覆盖已有数据
+    }
   }
 
   async function refreshDeepSeekBalance(refresh = false) {

@@ -7,8 +7,10 @@ defineProps<{
   status: SystemStatus | null
   leftPanelOpen: boolean
   rightPanelOpen: boolean
+  projectName?: string
 }>()
-defineEmits<{ configure: []; toggleLeft: []; toggleRight: [] }>()
+defineEmits<{ configure: []; toggleLeft: []; toggleRight: []; switchProject: [] }>()
+
 
 const theme = useTheme()
 const isDark = ref(theme.get() === 'dark')
@@ -50,6 +52,9 @@ function toggleTheme() {
     </button>
     <button class="theme-toggle" type="button" :title="isDark ? '切换到浅色模式' : '切换到深色模式'" @click="toggleTheme">
       {{ isDark ? '☀' : '☽' }}
+    </button>
+    <button class="header-action" type="button" @click="$emit('switchProject')">
+      {{ projectName || '项目管理' }}
     </button>
     <button class="header-action" type="button" @click="$emit('configure')">配置中心</button>
     <div v-if="status" class="connection-chip" :class="{ demo: status.demo_mode }">

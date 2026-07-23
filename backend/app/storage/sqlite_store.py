@@ -132,6 +132,90 @@ class SQLiteStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_interrupt_run
                 ON interrupt_commands(run_id, status);
+                CREATE TABLE IF NOT EXISTS projects (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    root_dir TEXT NOT NULL,
+                    description TEXT DEFAULT '',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS project_agents (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    description TEXT DEFAULT '',
+                    template_id TEXT,
+                    agent_type TEXT NOT NULL CHECK(agent_type IN ('brain','rag','claude')),
+                    sub_dir TEXT DEFAULT '',
+                    system_prompt TEXT NOT NULL,
+                    tools TEXT NOT NULL DEFAULT '[]',
+                    skills TEXT NOT NULL DEFAULT '[]',
+                    is_required INTEGER NOT NULL DEFAULT 0,
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(project_id, name)
+                );
+                CREATE TABLE IF NOT EXISTS agent_templates (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL UNIQUE,
+                    display_name TEXT NOT NULL,
+                    description TEXT DEFAULT '',
+                    category TEXT NOT NULL,
+                    agent_type TEXT NOT NULL DEFAULT 'claude',
+                    default_sub_dir TEXT DEFAULT '',
+                    default_prompt TEXT NOT NULL,
+                    default_tools TEXT NOT NULL DEFAULT '[]',
+                    default_skills TEXT NOT NULL DEFAULT '[]',
+                    is_builtin INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS configs (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS knowledge_entries (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL DEFAULT '',
+                    title TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    category TEXT NOT NULL DEFAULT 'general',
+                    tags TEXT NOT NULL DEFAULT '[]',
+                    source TEXT DEFAULT '',
+                    score REAL NOT NULL DEFAULT 0.0,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    expires_at TEXT,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS knowledge_relations (
+                    id TEXT PRIMARY KEY,
+                    source_id TEXT NOT NULL REFERENCES knowledge_entries(id) ON DELETE CASCADE,
+                    target_id TEXT NOT NULL REFERENCES knowledge_entries(id) ON DELETE CASCADE,
+                    relation_type TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(source_id, target_id, relation_type)
+                );
+                CREATE TABLE IF NOT EXISTS knowledge_feedback (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    entry_id TEXT NOT NULL REFERENCES knowledge_entries(id) ON DELETE CASCADE,
+                    feedback TEXT NOT NULL CHECK(feedback IN ('up', 'down')),
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+CREATE TABLE IF NOT EXISTS project_skills (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL,
+                    description TEXT DEFAULT '',
+                    content TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(project_id, name)
+                );
+CREATE INDEX IF NOT EXISTS idx_interrupt_run
+                ON interrupt_commands(run_id, status);
                 """
             )
             columns = {
@@ -150,6 +234,12 @@ class SQLiteStore:
                 )
             if "started_at" not in columns:
                 connection.execute("ALTER TABLE runs ADD COLUMN started_at TEXT")
+            if "project_id" not in columns:
+                connection.execute("ALTER TABLE runs ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE SET NULL")
+            # Migrate knowledge_entries: add project_id column if missing
+            kn_columns = {row["name"] for row in connection.execute("PRAGMA table_info(knowledge_entries)").fetchall()}
+            if "project_id" not in kn_columns:
+                connection.execute("ALTER TABLE knowledge_entries ADD COLUMN project_id TEXT NOT NULL DEFAULT ''")
             # 老数据视为各自对话的第一轮，迁移后即可作为后续任务的上游。
             connection.execute(
                 "UPDATE runs SET conversation_id = id WHERE conversation_id IS NULL"
@@ -600,3 +690,226 @@ class SQLiteStore:
     def _deserialize_memory(row: dict[str, Any]) -> dict[str, Any]:
         row["structured_data"] = json.loads(row.get("structured_data", "{}"))
         return row
+
+    # ==================== 配置存储 ====================
+
+    def get_config(self, key):
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT value FROM configs WHERE key = ?", (key,)
+            ).fetchone()
+        return json.loads(row["value"]) if row else None
+
+    def set_config(self, key, value):
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO configs(key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP",
+                (key, json.dumps(value, ensure_ascii=False)),
+            )
+
+    def list_configs(self):
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT key, updated_at FROM configs ORDER BY key"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def migrate_config_from_file(self, key, file_path):
+        import os
+        if not os.path.isfile(file_path):
+            return False
+        if self.get_config(key) is not None:
+            return False
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            self.set_config(key, data)
+            os.remove(file_path)
+            return True
+        except Exception:
+            return False
+
+    # ==================== 知识库 CRUD ====================
+
+    def insert_knowledge(self, record):
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO knowledge_entries("
+                "id, project_id, title, content, category, tags, source, score, expires_at, created_at, updated_at"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+                (
+                    record["id"], record.get("project_id", ""),
+                    record["title"], record["content"],
+                    record.get("category", "general"),
+                    json.dumps(record.get("tags", []), ensure_ascii=False),
+                    record.get("source", ""), record.get("score", 0.0),
+                    record.get("expires_at"), record.get("created_at", ""),
+                ),
+            )
+            row = connection.execute("SELECT last_insert_rowid()").fetchone()
+            connection.execute(
+                "INSERT INTO knowledge_fts(rowid, title, content, category, tags) VALUES (?,?,?,?,?)",
+                (row[0], record["title"], record["content"],
+                 record.get("category", "general"),
+                 json.dumps(record.get("tags", []), ensure_ascii=False)),
+            )
+        return record["id"]
+
+    def update_knowledge(self, entry_id, updates):
+        allowed = {"title", "content", "category", "tags", "score", "expires_at"}
+        fields = {k: v for k, v in updates.items() if k in allowed}
+        if not fields:
+            return False
+        if "tags" in fields and not isinstance(fields["tags"], str):
+            fields["tags"] = json.dumps(fields["tags"], ensure_ascii=False)
+        set_clause = ", ".join("{} = ?".format(k) for k in fields)
+        set_clause += ", updated_at = CURRENT_TIMESTAMP"
+        values = list(fields.values()) + [entry_id]
+        with self._connect() as connection:
+            cursor = connection.execute(
+                f"UPDATE knowledge_entries SET {set_clause} WHERE id = ?", values
+            )
+            if cursor.rowcount == 0:
+                return False
+            if "title" in fields or "content" in fields:
+                row = connection.execute(
+                    "SELECT rowid FROM knowledge_entries WHERE id = ?", (entry_id,)
+                ).fetchone()
+                if row:
+                    connection.execute(
+                        "UPDATE knowledge_fts SET title=?, content=?, category=?, tags=? WHERE rowid=?",
+                        (fields.get("title", ""), fields.get("content", ""),
+                         fields.get("category", "general"),
+                         fields.get("tags", "[]"), row["rowid"]),
+                    )
+        return True
+
+    def delete_knowledge(self, entry_id):
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT rowid FROM knowledge_entries WHERE id = ?", (entry_id,)
+            ).fetchone()
+            if not row:
+                return False
+            connection.execute("DELETE FROM knowledge_fts WHERE rowid = ?", (row["rowid"],))
+            connection.execute("DELETE FROM knowledge_entries WHERE id = ?", (entry_id,))
+        return True
+
+    def get_knowledge(self, entry_id):
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM knowledge_entries WHERE id = ?", (entry_id,)
+            ).fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        result["tags"] = json.loads(result.get("tags", "[]"))
+        return result
+
+    def search_knowledge_fts(self, query, category=None, limit=20, project_id=""):
+        conditions = ["knowledge_fts MATCH ?"]
+        params = [query]
+        if project_id:
+            conditions.append("knowledge_entries.project_id = ?")
+            params.append(project_id)
+        if category:
+            conditions.append("knowledge_entries.category = ?")
+            params.append(category)
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT knowledge_entries.id FROM knowledge_fts "
+                "JOIN knowledge_entries ON knowledge_fts.rowid = knowledge_entries.rowid "
+                f"WHERE {' AND '.join(conditions)} ORDER BY rank LIMIT ?",
+                params + [limit],
+            ).fetchall()
+        return [row["id"] for row in rows]
+
+    def cleanup_expired_knowledge(self):
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT id, rowid FROM knowledge_entries "
+                "WHERE expires_at IS NOT NULL AND expires_at < datetime('now')"
+            ).fetchall()
+            count = 0
+            for row in rows:
+                connection.execute("DELETE FROM knowledge_fts WHERE rowid = ?", (row["rowid"],))
+                connection.execute("DELETE FROM knowledge_entries WHERE id = ?", (row["id"],))
+                count += 1
+        return count
+
+    def list_knowledge(self, category=None, limit=50, offset=0, project_id=""):
+        conditions = []
+        params = []
+        if project_id:
+            conditions.append("project_id = ?")
+            params.append(project_id)
+        if category:
+            conditions.append("category = ?")
+            params.append(category)
+        where = "WHERE " + " AND ".join(conditions) if conditions else ""
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"SELECT * FROM knowledge_entries {where} "
+                "ORDER BY score DESC, updated_at DESC LIMIT ? OFFSET ?",
+                params + [limit, offset],
+            ).fetchall()
+        results = []
+        for row in rows:
+            r = dict(row)
+            r["tags"] = json.loads(r.get("tags", "[]"))
+            results.append(r)
+        return results
+
+    def knowledge_stats(self):
+        with self._connect() as connection:
+            total = connection.execute("SELECT COUNT(*) as cnt FROM knowledge_entries").fetchone()
+            by_cat = connection.execute(
+                "SELECT category, COUNT(*) as cnt FROM knowledge_entries GROUP BY category"
+            ).fetchall()
+            expired = connection.execute(
+                "SELECT COUNT(*) as cnt FROM knowledge_entries "
+                "WHERE expires_at IS NOT NULL AND expires_at < datetime('now')"
+            ).fetchone()
+            relations = connection.execute("SELECT COUNT(*) as cnt FROM knowledge_relations").fetchone()
+        return {
+            "total": total["cnt"],
+            "by_category": {r["category"]: r["cnt"] for r in by_cat},
+            "expired": expired["cnt"],
+            "relations": relations["cnt"],
+        }
+
+    def add_knowledge_relation(self, source_id, target_id, relation_type):
+        rid = uuid.uuid4().hex
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO knowledge_relations(id, source_id, target_id, relation_type) "
+                "VALUES (?, ?, ?, ?)",
+                (rid, source_id, target_id, relation_type),
+            )
+        return rid
+
+    def get_knowledge_relations(self, entry_id):
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM knowledge_relations "
+                "WHERE source_id = ? OR target_id = ? ORDER BY created_at DESC",
+                (entry_id, entry_id),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def add_knowledge_feedback(self, entry_id, feedback):
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO knowledge_feedback(entry_id, feedback) VALUES (?, ?)",
+                (entry_id, feedback),
+            )
+            connection.execute(
+                "UPDATE knowledge_entries SET score = ("
+                "SELECT COALESCE("
+                "CAST(SUM(CASE WHEN feedback='up' THEN 1 ELSE 0 END) AS REAL) / "
+                "NULLIF(COUNT(*), 0) * 100, 0"
+                ") FROM knowledge_feedback WHERE entry_id = ?"
+                ") WHERE id = ?",
+                (entry_id, entry_id),
+            )
