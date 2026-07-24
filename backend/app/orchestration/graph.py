@@ -46,6 +46,7 @@ class GraphState(TypedDict, total=False):
     wave_index: int
     agent_max_turns: int
     agent_timeout_seconds: int
+    project_id: str
     final_answer: str
     # LangMem 长期记忆写入的会话摘要
     session_summary: str
@@ -339,6 +340,7 @@ def build_graph(
             workspace_root=state["workspace_root"],
             max_turns=state["agent_max_turns"],
             timeout_seconds=state["agent_timeout_seconds"],
+            project_id=state.get("project_id", ""),
         )
         duration_ms = int(time.time() * 1000) - started_ms
         result.started_at = started_at
@@ -377,92 +379,4 @@ def build_graph(
         )
         return {}
 
-    def compact_memory(state: GraphState) -> GraphState:
-        """每个 wave 结束后，按滑动窗口策略压缩 Agent 消息历史。"""
-        if memory_manager is None:
-            return {}
-        try:
-            results = state.get("results", [])
-            active_ids = state.get("active_task_ids", [])
-            conversation_id = state.get("run_id", "")
-            for result in results:
-                r = AgentResult.model_validate(result) if isinstance(result, dict) else result
-                messages = [{"role": "assistant", "content": r.summary}]
-                memory_manager.compress_agent_messages(r.agent, conversation_id, messages)
-            events.emit(
-                state["run_id"], "memory.compacted",
-                payload={"wave": state.get("wave_index", 0), "agents": active_ids},
-            )
-        except Exception:
-            pass
-        return {}
-
-    def extract_memory(state: GraphState) -> GraphState:
-        """全部执行完成后，用 LangMem 提取跨会话长期记忆。"""
-        if memory_manager is None:
-            return {}
-        try:
-            results_raw = state.get("results", [])
-            session_summary = state.get("session_summary", state.get("final_answer", ""))
-            memory_manager.extract_long_term_memory(
-                state["run_id"], state["run_id"],
-                session_summary=str(session_summary)[:4000],
-                agent_results=list(results_raw)[-20:] if results_raw else None,
-            )
-            events.emit(
-                state["run_id"], "memory.extracted",
-                payload={"conversation_id": state["run_id"]},
-            )
-        except Exception:
-            pass
-        return {}
-
-    def route_after_barrier(state: GraphState) -> str:
-        return "replan_after_discovery" if state.get("stage") == "discovery" else "scheduler"
-
-    def synthesize(state: GraphState) -> GraphState:
-        """汇流所有 Agent 结果，不调用 LLM——主脑在需要时自行创建验收任务。"""
-        results = [AgentResult.model_validate(item) for item in state.get("results", [])]
-        # 汇总所有完成/失败的结果
-        parts: list[str] = []
-        for r in results:
-            icon = "✓" if r.status == "completed" else "✗" if r.status == "failed" else "-"
-            parts.append(f"{icon} {r.agent}: {r.summary[:300]}")
-        final_answer = "\n".join(parts) if parts else "无执行结果"
-        events.emit(
-            state["run_id"], "run.summary",
-            payload={"text": final_answer, "result_count": len(results)},
-        )
-        return {
-            "final_answer": final_answer,
-            "session_summary": final_answer[:4000],
-        }
-
-    builder = StateGraph(GraphState)
-    builder.add_node("plan", plan)
-    builder.add_node("interrupt_check", interrupt_check)
-    builder.add_node("scheduler", scheduler)
-    builder.add_node("replan_after_discovery", replan_after_discovery)
-    builder.add_node("worker", worker)
-    builder.add_node("barrier", barrier)
-    builder.add_node("compact_memory", compact_memory)
-    builder.add_node("extract_memory", extract_memory)
-    builder.add_node("synthesize", synthesize)
-    builder.add_edge(START, "plan")
-    builder.add_edge("plan", "interrupt_check")
-    builder.add_edge("interrupt_check", "scheduler")
-    builder.add_conditional_edges(
-        "scheduler", route_tasks, ["worker", "synthesize"]
-    )
-    # 同一 super-step 的 worker 全部完成后，只触发一次显式汇流屏障。
-    builder.add_edge("worker", "barrier")
-    builder.add_edge("barrier", "compact_memory")
-    builder.add_conditional_edges(
-        "compact_memory",
-        route_after_barrier,
-        ["replan_after_discovery", "interrupt_check"],
-    )
-    builder.add_edge("replan_after_discovery", "interrupt_check")
-    builder.add_edge("synthesize", "extract_memory")
-    builder.add_edge("extract_memory", END)
-    return builder.compile(checkpointer=checkpointer) if checkpointer else builder.compile()
+    def compact_memory(state: Graph

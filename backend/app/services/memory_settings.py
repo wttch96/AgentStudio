@@ -10,8 +10,6 @@ from app.domain.configuration import MemoryConfiguration
 
 
 DEFAULT_MEMORY_CONFIG = MemoryConfiguration(
-    agent_sliding_window=20,
-    planner_sliding_window=40,
     compress_trigger_tokens=8000,
     compress_keep_recent=20,
     summarizer_model="deepseek-chat",

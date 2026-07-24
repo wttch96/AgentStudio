@@ -1,5 +1,7 @@
 <script setup lang="ts">
+import { onMounted, ref } from 'vue'
 import type { AgentProfile, DeepSeekBalance, DeepSeekUsage, RunEvent } from '../types'
+import { api } from '../api/client'
 
 const props = defineProps<{
   agents: AgentProfile[]
@@ -7,8 +9,16 @@ const props = defineProps<{
   deepseekBalance: DeepSeekBalance | null
   deepseekUsage: DeepSeekUsage | null
   balanceLoading: boolean
+  projectId: string
 }>()
 defineEmits<{ refreshBalance: [] }>()
+const knowledgeTotal = ref(0)
+onMounted(async () => {
+  try {
+    const stats = await api.knowledgeStats(props.projectId || undefined)
+    knowledgeTotal.value = stats.total
+  } catch { /* ignore */ }
+})
 
 function currencySymbol(currency: string) {
   if (currency === 'CNY') return '¥'
@@ -109,7 +119,7 @@ function ragActivity() {
   const searches = props.events.filter(e => e.agent_id && e.type === 'tool.started' && e.payload?.tool === 'search_knowledge').length
   const adds = props.events.filter(e => e.agent_id && e.type === 'tool.started' && e.payload?.tool === 'add_knowledge').length
   const started = props.events.some(e => e.agent_id && e.type === 'agent.started' && props.agents.some(a => a.name === e.agent_id && a.agent_type === 'rag'))
-  return { searches, adds, active: started }
+  return { searches, adds, active: started, total: knowledgeTotal.value }
 }
 function ragStatus() {
   const events = props.events
@@ -183,6 +193,8 @@ function memoryStatus() {
           <p>知识检索 · 内容录入 · 关联管理 · 综合问答</p>
           <div class="agent-meta">
             <span class="mini-status"><i />{{ ragStatus() }}</span>
+            <span>{{ ragActivity().searches }} 次检索</span>
+            <span>知识库 {{ ragActivity().total }} 条</span>
             <span>{{ ragActivity().searches }} 次检索</span>
             <span v-if="ragActivity().adds">{{ ragActivity().adds }} 条录入</span>
           </div>

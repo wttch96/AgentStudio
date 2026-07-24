@@ -148,8 +148,6 @@ export interface MemoryRecord {
 }
 
 export interface MemoryConfiguration {
-  agent_sliding_window: number
-  planner_sliding_window: number
   compress_trigger_tokens: number
   compress_keep_recent: number
   summarizer_model: string
@@ -182,6 +180,77 @@ export interface InterruptCommand {
 }
 
 
+// ==================== 对话与思考流程类型 ====================
+
+export interface MemoryCompactionRecord {
+  wave: number
+  agentsCompacted: string[]
+  tokenCountBefore: number | null
+  tokenCountAfter: number | null
+  timestamp: string
+}
+
+export interface ConversationTurn {
+  id: string
+  runId: string
+  userMessage: string
+  brainResponse: string | null
+  thinkingText: string | null
+  status: 'thinking' | 'executing' | 'responding' | 'complete' | 'error'
+  planTasks: PlanTask[]
+  waveCount: number
+  memoryEvents: MemoryCompactionRecord[]
+  createdAt: string
+  completedAt: string | null
+}
+
+export interface StreamingState {
+  activeTurnId: string | null
+  thinkingText: string
+  responseText: string
+  isStreaming: boolean
+}
+
+export type UnifiedDagNodeType = 'conversation' | 'plan' | 'task' | 'memory' | 'synthesis'
+
+export interface UnifiedDagNode {
+  id: string
+  type: UnifiedDagNodeType
+  label: string
+  sub: string
+  depth: number
+  x: number
+  y: number
+  w: number
+  h: number
+  status: string
+  isStart?: boolean
+  isEnd?: boolean
+  task?: PlanTask
+  conversationTurn?: ConversationTurn
+  memoryRecord?: MemoryCompactionRecord
+  expandable: boolean
+}
+
+export interface ActiveAgent {
+  name: string
+  taskId: string
+  title: string
+  status: 'running' | 'completed' | 'failed'
+  startedAt: string | null
+}
+
+// ==================== Fork 类型 ====================
+
+export interface ForkPreview {
+  sourceRunId: string
+  sourceObjective: string
+  turnCount: number
+  memoryStats: MemoryStats
+  recentMemories: Array<{ phase: string; summary: string }>
+}
+
+
 // ==================== 知识库类型 ====================
 
 export interface KnowledgeEntry {
@@ -191,6 +260,7 @@ export interface KnowledgeEntry {
   category: string
   tags: string[]
   source: string
+  source_type: string  // "manual" | "import" | "auto"
   score: number
   created_at: string
   expires_at: string | null

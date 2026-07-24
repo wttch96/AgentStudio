@@ -14,7 +14,10 @@ from app.services.deepseek_usage import DeepSeekUsageService
 
 
 STRUCTURE_GUARD_BASE = """
-请把任务输出为有向无环任务图，严格遵守以下协议：
+如果用户的问题是简单对话、概念解释、或者你能直接回答的内容，直接返回纯文本回复，**不要输出 JSON，不要创建任务**。
+
+只有在确实需要 Agent 执行具体操作时，才把任务输出为有向无环任务图。
+需要 Agent 操作时输出任务图，严格遵守以下协议：
 
 1. 只使用可用 Agent 列表中列出的精确名称，不要编造 agent 名。
 2. 分析和编码任务分配给 Claude/DeepSeek Agent；RAG Agent 随时可用于检索或存储知识。
@@ -357,97 +360,3 @@ class DeepSeekPlanner:
                             "upstream_context": guidance,
                             "dag": dag.model_dump(),
                             "results": [result.model_dump() for result in results],
-                        },
-                        ensure_ascii=False,
-                    ),
-                },
-            ],
-            temperature=0.1,
-        )
-        if self.usage:
-            self.usage.record(response, phase="synthesis", run_id=run_id)
-        content = response.choices[0].message.content
-        if not content:
-            raise RuntimeError("DeepSeek 返回了空汇总")
-        return content
-
-    @staticmethod
-    def _workspace_context(workspace_root: str | None) -> str:
-        """生成工作空间的结构概览，帮助主脑理解目录布局。"""
-        if not workspace_root:
-            return "未提供工作空间路径"
-        root = Path(workspace_root)
-        if not root.is_dir():
-            return f"工作空间路径不存在: {workspace_root}"
-        lines = [f"工作空间根目录: {workspace_root}"]
-        try:
-            entries = sorted(root.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower()))
-            for entry in entries[:40]:
-                marker = "/" if entry.is_dir() else ""
-                lines.append(f"  {entry.name}{marker}")
-            remaining = len(entries) - 40
-            if remaining > 0:
-                lines.append(f"  ... 还有 {remaining} 项")
-        except PermissionError:
-            lines.append("  (无权限读取目录)")
-        return "\n".join(lines)
-
-    @staticmethod
-    def _demo_dag(objective: str, project_agents: list | None = None) -> TaskDag:
-        """演示模式用执行 Agent 验证并行分发和结果汇合。"""
-
-        short_objective = objective[:800]
-        demo_tasks = [
-            DagTask(
-                id="demo-analyze",
-                title="分析项目结构（演示）",
-                objective=f"分析当前工作空间结构并撰写简要发现报告。用户目标：{short_objective}",
-                agent="flask-backend" if any(
-                    a for a in (project_agents or [])
-                    if getattr(a, 'name', '') == 'flask-backend'
-                ) else "flask-backend",
-                write_scope=[],
-            ),
-            DagTask(
-                id="demo-code",
-                title="代码实施（演示）",
-                objective=f"基于分析结果选择最佳实现方案并说明理由。用户目标：{short_objective}",
-                agent="vue-frontend" if any(
-                    a for a in (project_agents or [])
-                    if getattr(a, 'name', '') == 'vue-frontend'
-                ) else "vue-frontend",
-                depends_on=["demo-analyze"],
-                write_scope=["frontend"],
-            ),
-            DagTask(
-                id="demo-verify",
-                title="验证总结（演示）",
-                objective=f"验证前两步结果并汇总报告。用户目标：{short_objective}",
-                agent="vue-frontend" if any(
-                    a for a in (project_agents or [])
-                    if getattr(a, 'name', '') == 'vue-frontend'
-                ) else "vue-frontend",
-                depends_on=["demo-code"],
-                write_scope=[],
-            ),
-        ]
-        return TaskDag(
-            summary=f"Around '{short_objective[:60]}' - demo task graph",
-            coordination_contract=(
-                "演示共享契约：跨项目实现应先约定接口路径、方法、请求/响应字段与错误行为；"
-                "真实模式由 DeepSeek 根据项目发现结果生成具体契约。"
-            ),
-            tasks=demo_tasks,
-        )
-
-    @staticmethod
-    def _demo_summary(dag: TaskDag, results: list[AgentResult]) -> str:
-        result_by_id = {result.task_id: result for result in results}
-        lines = [f"任务计划：{dag.summary}", ""]
-        for task in dag.tasks:
-            result = result_by_id.get(task.id)
-            if result:
-                lines.append(f"- [{result.status}] {task.title}：{result.summary}")
-            else:
-                lines.append(f"- [skipped] {task.title}：依赖失败或运行已取消")
-        return "\n".join(lines)

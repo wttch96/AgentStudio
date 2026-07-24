@@ -22,11 +22,6 @@ from app.storage.sqlite_store import SQLiteStore
 from app.services.workspace_settings import WorkspaceSettings
 from app.services.memory_manager import MemoryManager
 from app.services.interrupt_router import InterruptRouter
-import sqlite3
-import tempfile
-from pathlib import Path
-from app.services.memory_manager import MemoryManager
-from app.services.interrupt_router import InterruptRouter
 
 
 class RunManager:
@@ -93,6 +88,48 @@ class RunManager:
         thread.start()
         return run
 
+    def fork(self, source_run_id: str, objective_override: str | None = None,
+             project_id: str | None = None) -> dict:
+        """从已完成任务中分叉，创建新的对话分支并携带记忆上下文。"""
+        source = self.store.get_run(source_run_id)
+        if not source:
+            raise ValueError("源任务不存在")
+        if source.get("status") not in ("completed", "failed", "cancelled"):
+            raise RuntimeError("源任务尚未结束，请等待完成后再分叉")
+
+        import uuid
+        new_run_id = uuid.uuid4().hex
+        objective = (objective_override or source.get("objective", "")).strip()
+        root = str(self.workspace_settings.current())
+
+        # 通过 store 创建新 run（新 conversation_id）+ 检索记忆
+        run = self.store.fork_run(source_run_id, new_run_id, objective, root)
+        memory_context = run.pop("_memory_context", "")
+
+        scheduler = self.scheduler_settings.current()
+        cancel_event = threading.Event()
+        with self._lock:
+            self._cancel_events[new_run_id] = cancel_event
+
+        thread = threading.Thread(
+            target=self._execute,
+            args=(
+                new_run_id, objective, self.workspace_settings.current(),
+                scheduler, cancel_event,
+                memory_context,  # guidance = 继承的记忆上下文
+                None,  # preset_dag
+                False,  # direct_mode
+                self.interrupt_router,
+                self.memory_manager,
+                new_run_id,  # conversation_id = 新分支
+                project_id,
+            ),
+            name=f"run-{new_run_id[:8]}",
+            daemon=True,
+        )
+        thread.start()
+        return run
+
     def cancel(self, run_id: str) -> bool:
         run = self.store.get_run(run_id)
         if not run or run["status"] in {"completed", "failed", "cancelled"}:
@@ -151,16 +188,6 @@ class RunManager:
             },
         )
         try:
-            # 创建 SqliteSaver checkpointer 用于短期记忆（图状态 checkpoint）
-            checkpoint_db = Path(workspace_root) / '.agent-studio-checkpoints.db'
-            checkpointer = None
-            try:
-                conn = sqlite3.connect(str(checkpoint_db), check_same_thread=False)
-                from langgraph.checkpoint.sqlite import SqliteSaver
-                checkpointer = SqliteSaver(conn)
-            except Exception:
-                pass  # checkpoint 失败不阻塞主流程
-
             # 加载项目 Agent 列表（未指定 project_id 时加载全部项目的 Agent）
             project_agents = []
             try:
@@ -183,7 +210,7 @@ class RunManager:
             except Exception:
                 pass
 
-            graph = build_graph(self.planner, self.executor, self.events, cancel_event, checkpointer, interrupt_router, memory_manager, project_agents, deepseek_executor=self.deepseek_executor, rag_executor=self.rag_executor)
+            graph = build_graph(self.planner, self.executor, self.events, cancel_event, None, interrupt_router, memory_manager, project_agents, deepseek_executor=self.deepseek_executor, rag_executor=self.rag_executor)
             output = graph.invoke(
                 {
                     "run_id": run_id,
@@ -194,6 +221,7 @@ class RunManager:
                     "workspace_root": str(workspace_root),
                     "agent_max_turns": scheduler.agent_max_turns,
                     "agent_timeout_seconds": scheduler.agent_timeout_seconds,
+                    "project_id": project_id or "",
                     "results": [],
                 },
                 {
@@ -204,7 +232,6 @@ class RunManager:
             )
             final_answer = output.get("final_answer", "")
             status = "cancelled" if cancel_event.is_set() else "completed"
-            # 短期记忆：SqliteSaver 已在 graph 编译时注入，自动 checkpoint 每个节点状态
             # 长期记忆：运行结束后用 LangMem 提取跨会话记忆
             if memory_manager and conversation_id:
                 try:

@@ -108,7 +108,7 @@ class RAGAgentExecutor:
                 if not results:
                     return "No matching knowledge entries found."
                 return "\n\n---\n".join(
-                    f"[{r.get('id','')[:8]}] {r.get('title','')}\n{r.get('content','')[:1000]}"
+                    f"[{r.get('id','')[:8]}] {r.get('title','')} [{r.get('source_type','manual')}]\n{r.get('content','')[:1000]}"
                     for r in results
                 )
             except Exception as e:
@@ -117,99 +117,4 @@ class RAGAgentExecutor:
         def get_knowledge(entry_id: str) -> str:
             """Get full details of a knowledge entry by ID."""
             try:
-                entry = ks.get(entry_id)
-                if not entry:
-                    return f"Entry {entry_id} not found."
-                return f"Title: {entry.get('title')}\nCategory: {entry.get('category')}\n\n{entry.get('content','')}"
-            except Exception as e:
-                return f"Get error: {e}"
-
-        def add_knowledge(title: str, content: str, category: str = "general") -> str:
-            """Add a new knowledge entry to the knowledge base."""
-            try:
-                eid = ks.add(title=title, content=content, category=category, project_id=pid)
-                return f"Knowledge entry created: {eid}"
-            except Exception as e:
-                return f"Add error: {e}"
-
-        def list_knowledge(category: str = "") -> str:
-            """List knowledge entries, optionally filtered by category."""
-            try:
-                results = ks.list(category=category or None, limit=20, project_id=pid)
-                if not results:
-                    return "No knowledge entries found."
-                return "\n".join(
-                    f"- [{r.get('id','')[:8]}] {r.get('title','')} ({r.get('category','')})"
-                    for r in results
-                )
-            except Exception as e:
-                return f"List error: {e}"
-
-        search_knowledge.__name__ = "search_knowledge"
-        get_knowledge.__name__ = "get_knowledge"
-        add_knowledge.__name__ = "add_knowledge"
-        list_knowledge.__name__ = "list_knowledge"
-
-        tools = [search_knowledge, get_knowledge, add_knowledge, list_knowledge]
-
-        llm = ChatOpenAI(
-            model=self.settings.deepseek_model,
-            api_key=self.settings.deepseek_api_key,
-            base_url=self.settings.deepseek_base_url,
-            temperature=0.1,
-        )
-
-        agent = create_agent(
-            model=llm,
-            tools=tools,
-            system_prompt=system_prompt,
-        )
-
-        started_at = datetime.now(timezone.utc).isoformat()
-        self.events.emit(
-            run_id, "agent.started",
-            agent_id=task.agent, task_id=task.id,
-            payload={"title": task.title, "objective": task.objective, "started_at": started_at},
-        )
-
-        try:
-            async with asyncio.timeout(timeout_seconds):
-                result = await agent.ainvoke({
-                    "messages": [{"role": "user", "content": task_prompt}],
-                })
-            messages = result.get("messages", [])
-            output = ""
-            for msg in reversed(messages):
-                if hasattr(msg, "content") and getattr(msg, "type", "") == "ai":
-                    output = str(msg.content) if msg.content else ""
-                    if output:
-                        break
-            self.events.emit(
-                run_id, "agent.message",
-                agent_id=task.agent, task_id=task.id,
-                payload={"text": output},
-            )
-            return AgentResult(
-                task_id=task.id, agent=task.agent, status="completed",
-                summary=output[:6000] or "RAG Agent 已完成，但没有返回文本摘要。",
-            )
-        except TimeoutError:
-            return AgentResult(
-                task_id=task.id, agent=task.agent, status="failed",
-                summary="RAG Agent 执行超时",
-                error=f"超过 {timeout_seconds} 秒",
-            )
-        except Exception as error:
-            error_detail = f"{type(error).__name__}: {str(error) or repr(error)}"
-            return AgentResult(
-                task_id=task.id, agent=task.agent, status="failed",
-                summary="RAG Agent 执行失败",
-                error=error_detail,
-            )
-
-    @staticmethod
-    def _cancelled(task: DagTask) -> AgentResult:
-        return AgentResult(
-            task_id=task.id, agent=task.agent, status="cancelled",
-            summary="任务已按用户请求取消",
-        )
+       

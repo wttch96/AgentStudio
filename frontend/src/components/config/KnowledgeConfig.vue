@@ -15,6 +15,16 @@ const loading = ref(false)
 const showForm = ref(false)
 const editing = reactive({ id: '', title: '', content: '', category: 'general', tags: '', expires_at: '' })
 
+// Import file
+const showImport = ref(false)
+const importCategory = ref('general')
+const importPath = ref('')
+const importing = ref(false)
+const importResult = ref<{ imported: number; total_blocks: number; source: string } | null>(null)
+const dirs = ref<{ name: string; path: string }[]>([])
+const files = ref<{ name: string; path: string }[]>([])
+const currentDir = ref('')
+
 async function search() {
   loading.value = true
   message.value = ''
@@ -91,6 +101,57 @@ function startEdit(entry?: KnowledgeEntry) {
   showForm.value = true
 }
 
+// ── 文件导入 ──
+
+async function openImport() {
+  importResult.value = null
+  importPath.value = ''
+  currentDir.value = ''
+  showImport.value = true
+  await browseDir('')
+}
+
+async function browseDir(dir: string) {
+  try {
+    const result = await api.browseWorkspace(dir || undefined)
+    dirs.value = result.directories
+    files.value = result.files || []
+    currentDir.value = result.current
+  } catch {
+    dirs.value = []
+    files.value = []
+  }
+}
+
+function selectFile(name: string) {
+  const base = currentDir.value ? currentDir.value + '/' : ''
+  importPath.value = base + name
+}
+
+function parentDir() {
+  if (!currentDir.value) return
+  const parts = currentDir.value.split('/')
+  parts.pop()
+  browseDir(parts.join('/'))
+}
+
+async function doImport() {
+  if (!importPath.value.trim()) return
+  importing.value = true
+  message.value = ''
+  try {
+    importResult.value = await api.knowledgeImport(importPath.value.trim(), importCategory.value, props.projectId)
+    message.value = `成功导入 ${importResult.value.imported} 条知识`
+    showImport.value = false
+    await search()
+    await loadStats()
+  } catch (e) {
+    message.value = e instanceof Error ? e.message : '导入失败'
+  } finally {
+    importing.value = false
+  }
+}
+
 onMounted(() => { search(); loadStats() })
 </script>
 
@@ -105,6 +166,7 @@ onMounted(() => { search(); loadStats() })
       </select>
       <button type="button" @click="search" :disabled="loading">{{ loading ? '搜索中…' : '搜索' }}</button>
       <button type="button" class="add-btn" @click="startEdit()">+ 新增</button>
+      <button type="button" class="import-btn" @click="openImport">📄 导入文件</button>
     </div>
 
     <!-- Stats -->
@@ -122,6 +184,9 @@ onMounted(() => { search(); loadStats() })
       <article v-for="item in items" :key="item.id" class="k-entry">
         <div class="k-entry-header">
           <strong>{{ item.title }}</strong>
+          <span class="k-source-type" :class="'st-' + (item.source_type || 'manual')">
+            {{ item.source_type === 'auto' ? '🤖 自学' : item.source_type === 'import' ? '📄 导入' : '✍️ 手动' }}
+          </span>
           <span class="k-category">{{ item.category }}</span>
           <span class="k-score">{{ item.score.toFixed(0) }}%</span>
         </div>
@@ -163,17 +228,84 @@ onMounted(() => { search(); loadStats() })
         </div>
       </div>
     </div>
+
+    <!-- Import file dialog -->
+    <div v-if="showImport" class="k-form-overlay" @click.self="showImport = false">
+      <div class="k-form import-dialog">
+        <h3>📄 从文件导入知识</h3>
+        <p class="import-hint">选择 .md / .txt 文件，Markdown 将按 ## 标题自动拆分为多条知识。</p>
+
+        <label>分类
+          <select v-model="importCategory">
+            <option value="general">通用</option>
+            <option value="api">API</option>
+            <option value="code">代码示例</option>
+            <option value="naming">命名规范</option>
+            <option value="error">错误处理</option>
+            <option value="deployment">部署</option>
+          </select>
+        </label>
+
+        <!-- Path display -->
+        <div class="import-path-row">
+          <label>文件路径</label>
+          <div class="path-input-row">
+            <input v-model="importPath" type="text" placeholder="选择文件或直接输入路径…" />
+            <button v-if="currentDir" type="button" class="dir-up" @click="parentDir">⬆ 上级</button>
+          </div>
+        </div>
+
+        <!-- Directory browser -->
+        <div class="dir-browser">
+          <div v-if="currentDir" class="dir-current">📁 {{ currentDir || '/' }}</div>
+          <div v-if="dirs.length === 0 && files.length === 0 && !currentDir" class="dir-empty">加载中…</div>
+          <div class="dir-list">
+            <button
+              v-for="d in dirs"
+              :key="d.path"
+              type="button"
+              class="dir-entry"
+              @click="selectFile(d.name); browseDir(d.path)"
+            >
+              <span class="dir-icon">📁</span>
+              <span>{{ d.name }}</span>
+            </button>
+            <button
+              v-for="f in files"
+              :key="f.path"
+              type="button"
+              class="dir-entry file-entry"
+              @click="importPath = f.path"
+            >
+              <span class="dir-icon">📄</span>
+              <span>{{ f.name }}</span>
+            </button>
+          </div>
+          <div v-if="dirs.length === 0 && files.length === 0 && currentDir" class="dir-empty">此目录为空。请选择其他目录，或直接在路径框输入文件路径。</div>
+        </div>
+
+        <div class="k-form-actions">
+          <button @click="doImport" :disabled="!importPath.trim() || importing">
+            {{ importing ? '导入中…' : '导入' }}
+          </button>
+          <button class="cancel" @click="showImport = false">取消</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .knowledge-panel { padding: 0.5rem 0; }
-.knowledge-search { display: flex; gap: 0.5rem; margin-bottom: 0.75rem; }
-.knowledge-search input { flex: 1; padding: 0.4rem 0.6rem; border: 1px solid var(--separator-soft); border-radius: 6px; background: var(--surface); color: var(--label); font-size: 0.8rem; }
+.knowledge-search { display: flex; gap: 0.5rem; margin-bottom: 0.75rem; flex-wrap: wrap; }
+.knowledge-search input { flex: 1; min-width: 120px; padding: 0.4rem 0.6rem; border: 1px solid var(--separator-soft); border-radius: 6px; background: var(--surface); color: var(--label); font-size: 0.8rem; }
 .knowledge-search select { padding: 0.4rem; border: 1px solid var(--separator-soft); border-radius: 6px; background: var(--surface); color: var(--label); font-size: 0.8rem; }
-.knowledge-search button { padding: 0.4rem 0.8rem; border: 0; border-radius: 6px; background: var(--blue); color: #fff; cursor: pointer; font-size: 0.8rem; }
+.knowledge-search button { padding: 0.4rem 0.8rem; border: 0; border-radius: 6px; color: #fff; cursor: pointer; font-size: 0.8rem; white-space: nowrap; }
+.knowledge-search button:not(.add-btn):not(.import-btn) { background: var(--blue); }
 .knowledge-search button:disabled { opacity: 0.5; }
 .add-btn { background: var(--green) !important; }
+.import-btn { background: rgba(191, 90, 242, 0.7) !important; }
+.import-btn:hover { background: rgba(191, 90, 242, 0.9) !important; }
 
 .knowledge-stats { display: flex; gap: 1rem; font-size: 0.7rem; color: var(--secondary); margin-bottom: 0.5rem; }
 .expired-warn { color: var(--orange); }
@@ -186,6 +318,10 @@ onMounted(() => { search(); loadStats() })
 .k-entry-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.3rem; }
 .k-entry-header strong { font-size: 0.8rem; }
 .k-category { font-size: 0.6rem; background: var(--blue-soft); color: var(--blue); padding: 0.1rem 0.4rem; border-radius: 4px; }
+.k-source-type { font-size: 0.6rem; padding: 0.1rem 0.4rem; border-radius: 4px; }
+.st-manual { background: rgba(100, 210, 140, 0.15); color: var(--green); }
+.st-import { background: rgba(191, 90, 242, 0.12); color: rgba(191, 90, 242, 1); }
+.st-auto { background: rgba(255, 159, 10, 0.12); color: var(--orange); }
 .k-score { font-size: 0.65rem; color: var(--secondary); margin-left: auto; }
 .k-content { font-size: 0.72rem; color: var(--secondary); margin: 0.25rem 0; line-height: 1.4; }
 .k-meta { font-size: 0.6rem; color: var(--tertiary); margin-bottom: 0.3rem; }
@@ -203,4 +339,21 @@ onMounted(() => { search(); loadStats() })
 .k-form-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
 .k-form-actions button { padding: 0.4rem 0.8rem; border: 0; border-radius: 6px; background: var(--blue); color: #fff; cursor: pointer; }
 .k-form-actions .cancel { background: var(--surface-hover); color: var(--label); }
+
+/* Import dialog */
+.import-dialog { width: 550px; }
+.import-hint { font-size: 0.72rem; color: var(--secondary); margin: 0; }
+.import-path-row label { font-size: 0.65rem; color: var(--secondary); }
+.path-input-row { display: flex; gap: 0.4rem; }
+.path-input-row input { flex: 1; }
+.dir-up { padding: 0.3rem 0.6rem; border: 1px solid var(--separator-soft); border-radius: 6px; background: var(--surface); color: var(--secondary); cursor: pointer; font-size: 0.7rem; }
+.dir-browser { max-height: 250px; overflow-y: auto; border: 1px solid var(--separator-soft); border-radius: 8px; padding: 0.5rem; background: var(--surface); }
+.dir-current { font-size: 0.7rem; color: var(--blue); margin-bottom: 0.35rem; font-weight: 600; }
+.dir-list { display: flex; flex-direction: column; gap: 2px; }
+.dir-entry { display: flex; align-items: center; gap: 0.4rem; width: 100%; padding: 0.35rem 0.5rem; border: 0; border-radius: 5px; background: transparent; color: var(--label); cursor: pointer; font-size: 0.75rem; text-align: left; }
+.dir-entry:hover { background: var(--surface-hover); }
+.file-entry { color: var(--secondary); }
+.file-entry:hover { background: rgba(191, 90, 242, 0.12); color: rgba(191, 90, 242, 1); }
+.dir-icon { font-size: 0.9rem; }
+.dir-empty { font-size: 0.65rem; color: var(--tertiary); padding: 0.5rem; text-align: center; }
 </style>

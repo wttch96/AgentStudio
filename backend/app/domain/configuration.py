@@ -63,8 +63,6 @@ class SchedulerConfiguration(BaseModel):
 class MemoryConfiguration(BaseModel):
     """记忆系统可编辑配置；新增 run 读取，改动实时生效。"""
 
-    agent_sliding_window: int = Field(default=20, ge=5, le=100)
-    planner_sliding_window: int = Field(default=40, ge=10, le=200)
     compress_trigger_tokens: int = Field(default=8000, ge=2000, le=50000)
     compress_keep_recent: int = Field(default=20, ge=5, le=50)
     summarizer_model: str = Field(default='deepseek-chat', min_length=1, max_length=100)

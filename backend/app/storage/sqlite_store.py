@@ -186,6 +186,7 @@ class SQLiteStore:
                     category TEXT NOT NULL DEFAULT 'general',
                     tags TEXT NOT NULL DEFAULT '[]',
                     source TEXT DEFAULT '',
+                    source_type TEXT NOT NULL DEFAULT 'manual',
                     score REAL NOT NULL DEFAULT 0.0,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     expires_at TEXT,
@@ -264,10 +265,14 @@ CREATE INDEX IF NOT EXISTS idx_interrupt_run
                 connection.execute("ALTER TABLE runs ADD COLUMN started_at TEXT")
             if "project_id" not in columns:
                 connection.execute("ALTER TABLE runs ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE SET NULL")
+            if "forked_from_run_id" not in columns:
+                connection.execute("ALTER TABLE runs ADD COLUMN forked_from_run_id TEXT")
             # Migrate knowledge_entries: add project_id column if missing
             kn_columns = {row["name"] for row in connection.execute("PRAGMA table_info(knowledge_entries)").fetchall()}
             if "project_id" not in kn_columns:
                 connection.execute("ALTER TABLE knowledge_entries ADD COLUMN project_id TEXT NOT NULL DEFAULT ''")
+            if "source_type" not in kn_columns:
+                connection.execute("ALTER TABLE knowledge_entries ADD COLUMN source_type TEXT NOT NULL DEFAULT 'manual'")
             # 老数据视为各自对话的第一轮，迁移后即可作为后续任务的上游。
             connection.execute(
                 "UPDATE runs SET conversation_id = id WHERE conversation_id IS NULL"
@@ -307,6 +312,66 @@ CREATE INDEX IF NOT EXISTS idx_interrupt_run
                 ),
             )
         return self.get_run(run_id) or {}
+
+    def fork_run(
+        self,
+        source_run_id: str,
+        new_run_id: str,
+        objective: str,
+        workspace_root: str,
+    ) -> dict[str, Any]:
+        """从源 run fork 出新分支：新的 conversation_id + 继承记忆上下文。"""
+        source = self.get_run(source_run_id)
+        if not source:
+            raise ValueError("源任务不存在")
+        source_conv_id = source.get("conversation_id", source_run_id)
+        memories = self.query_memories(source_conv_id, limit=20) or []
+        memory_context = self._format_memories_as_context(memories)
+        with self._connect() as connection:
+            conversation_id = new_run_id
+            connection.execute(
+                "INSERT INTO runs(id, objective, workspace_root, parent_run_id, "
+                "conversation_id, turn_index, forked_from_run_id, status) "
+                "VALUES (?, ?, ?, NULL, ?, 1, ?, 'queued')",
+                (new_run_id, objective, workspace_root, conversation_id, source_run_id),
+            )
+        run = self.get_run(new_run_id) or {}
+        run["_memory_context"] = memory_context
+        run["_memory_count"] = len(memories)
+        return run
+
+    def get_fork_preview(self, source_run_id: str) -> dict[str, Any] | None:
+        """返回 fork 预览：源对话的记忆统计。"""
+        source = self.get_run(source_run_id)
+        if not source:
+            return None
+        conv_id = source.get("conversation_id", source_run_id)
+        stats = self.get_memory_stats(conv_id)
+        memories = self.query_memories(conv_id, limit=5) or []
+        return {
+            "source_run_id": source_run_id,
+            "source_objective": source.get("objective", ""),
+            "turn_count": source.get("turn_index", 1),
+            "memory_stats": stats,
+            "recent_memories": [
+                {"phase": m.get("phase", ""), "summary": (m.get("summary", "") or "")[:200]}
+                for m in memories
+            ],
+        }
+
+    @staticmethod
+    def _format_memories_as_context(memories: list[dict]) -> str:
+        """将记忆列表格式化为可注入的上下文文本。"""
+        if not memories:
+            return ""
+        lines = ["[从历史对话中继承的记忆]"]
+        for m in memories:
+            phase = m.get("phase", "")
+            summary = m.get("summary", "") or ""
+            level = m.get("level", "")
+            if summary.strip():
+                lines.append(f"- [{level}/{phase}] {summary[:300]}")
+        return "\n".join(lines)
 
     def run_ancestry(self, run_id: str, limit: int = 8) -> list[dict[str, Any]]:
         """读取从最早到最近的上游链，并防御脏数据造成的循环。"""
@@ -765,14 +830,15 @@ CREATE INDEX IF NOT EXISTS idx_interrupt_run
         with self._connect() as connection:
             connection.execute(
                 "INSERT INTO knowledge_entries("
-                "id, project_id, title, content, category, tags, source, score, expires_at, created_at, updated_at"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+                "id, project_id, title, content, category, tags, source, source_type, score, expires_at, created_at, updated_at"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
                 (
                     record["id"], record.get("project_id", ""),
                     record["title"], record["content"],
                     record.get("category", "general"),
                     json.dumps(record.get("tags", []), ensure_ascii=False),
-                    record.get("source", ""), record.get("score", 0.0),
+                    record.get("source", ""), record.get("source_type", "manual"),
+                    record.get("score", 0.0),
                     record.get("expires_at"), record.get("created_at", ""),
                 ),
             )

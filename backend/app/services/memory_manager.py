@@ -66,12 +66,6 @@ class StrategyEngine:
         """按衰减率降低记忆重要性。"""
         return max(0.1, current * self.config.importance_decay_rate)
 
-    def sliding_window_size(self, level: str) -> int:
-        """返回该层级的滑动窗口大小。"""
-        if level == "agent":
-            return self.config.agent_sliding_window
-        return self.config.planner_sliding_window
-
 
 class MemoryManager:
     """基于 LangMem 的分层记忆管理器。
@@ -202,21 +196,21 @@ class MemoryManager:
         conversation_id: str,
         messages: list[dict],
     ) -> list[dict]:
-        """Agent 层压缩：策略引擎判断是否需要压缩。"""
+        """Agent 层压缩：Token 超阈值时用 LLM 压缩全部历史为摘要。
+
+        压缩失败时保留全部原始消息，绝不丢弃数据。
+        """
         token_count = sum(len(str(m.get("content", ""))) // 2 for m in messages)
         if not self.strategy.should_compress(token_count):
             return messages
 
-        keep = self.strategy.sliding_window_size("agent")
-        if len(messages) <= keep:
+        summary = self._summarize_chunk(messages)
+
+        # 压缩失败（fallback 摘要质量太低）→ 保留全部原始消息，不丢弃
+        if not summary or summary == self._fallback_summary(messages):
             return messages
 
-        # 前半部分 -> 摘要，保留最近 N 条
-        old = messages[:-keep]
-        recent = messages[-keep:]
-        summary = self._summarize_chunk(old)
-
-        # 持久化
+        # 持久化压缩记录
         self.store.insert_memory({
             "id": uuid.uuid4().hex,
             "run_id": "",
@@ -226,15 +220,15 @@ class MemoryManager:
             "phase": "compression",
             "summary": summary,
             "token_count_before": token_count,
-            "token_count_after": len(summary) // 2 + keep * 100,
+            "token_count_after": len(summary) // 2,
             "importance": 0.4,
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
 
+        # 摘要 + 最后几条消息保持上下文连贯
+        keep_recent = min(len(messages), self.config.compress_keep_recent)
+        recent = messages[-keep_recent:] if keep_recent > 0 else []
         return [{"role": "system", "content": f"[历史摘要]\n{summary}"}, *recent]
-
-    # ── 主脑层：结构化提取 ─────────────────────────────
-
     def extract_planner_memory(
         self,
         run_id: str,

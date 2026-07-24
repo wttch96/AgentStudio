@@ -286,6 +286,30 @@ def cancel_run(run_id: str):
 
 
 @api.get("/runs/<run_id>/events")
+
+@api.post("/runs/<run_id>/fork")
+def fork_run(run_id: str):
+    """从已完成的任务中分叉（fork），携带记忆上下文开启新对话分支。"""
+    source = services().store.get_run(run_id)
+    if not source:
+        return jsonify({"error": "源任务不存在"}), 404
+    if source.get("status") not in ("completed", "failed", "cancelled"):
+        return jsonify({"error": "源任务尚未结束，请等待完成后再分叉"}), 409
+    data = request.get_json(silent=True) or {}
+    objective = (data.get("objective") or source.get("objective", "")).strip()
+    if not objective:
+        return jsonify({"error": "目标不能为空"}), 400
+    try:
+        run = services().runs.fork(run_id, objective_override=objective)
+        preview = services().store.get_fork_preview(run_id)
+        return jsonify({**run, "fork_preview": preview}), 202
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+    except RuntimeError as error:
+        return jsonify({"error": str(error)}), 409
+
+
+@api.get("/runs/<run_id>/events")
 def list_events(run_id: str):
     after = max(0, request.args.get("after", default=0, type=int))
     return jsonify({"items": services().store.list_events(run_id, after)})
@@ -405,6 +429,23 @@ def delete_knowledge(entry_id: str):
         return jsonify({"error": "知识条目不存在"}), 404
     return "", 204
 
+
+@api.post("/knowledge/import")
+def import_knowledge():
+    """从工作区文件导入知识：读取 .md/.txt 文件，按标题拆分并批量创建条目。"""
+    data = request.get_json(silent=True) or {}
+    filepath = (data.get("filepath") or "").strip()
+    category = (data.get("category") or "general").strip()
+    project_id = (data.get("project_id") or "").strip()
+    if not filepath:
+        return jsonify({"error": "filepath 不能为空"}), 400
+    try:
+        result = services().knowledge_store.import_file(filepath, category, project_id=project_id)
+        return jsonify(result), 201
+    except FileNotFoundError:
+        return jsonify({"error": f"文件不存在: {filepath}"}), 404
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
 
 @api.get("/knowledge/<entry_id>/relations")
 def get_knowledge_relations(entry_id: str):

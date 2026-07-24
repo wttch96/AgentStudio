@@ -8,7 +8,17 @@ const emit = defineEmits<{ saved: [] }>()
 const selectedName = ref('__new__')
 const saving = ref(false)
 const message = ref('')
+const toast = ref('')
+const toastError = ref(false)
+let toastTimer: ReturnType<typeof setTimeout> | null = null
 const form = reactive<Required<SkillProfile>>({ name: '', description: '', content: '' })
+
+function showToast(text: string, isError = false) {
+  toast.value = text
+  toastError.value = isError
+  if (toastTimer) clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => { toast.value = '' }, 3000)
+}
 
 function reset() {
   Object.assign(form, { name: '', description: '', content: '' })
@@ -35,10 +45,11 @@ async function save() {
     } else {
       await api.updateSkill(form.name, { description: form.description, content: form.content }, props.projectId || undefined)
     }
-    message.value = 'Skill 已保存，可在 Agent 配置中关联。'
+    showToast('Skill 已保存，可在 Agent 配置中关联。')
     emit('saved')
   } catch (error) {
-    message.value = error instanceof Error ? error.message : '保存失败'
+    const msg = error instanceof Error ? error.message : '保存失败'
+    showToast(msg, true)
   } finally {
     saving.value = false
   }
@@ -50,8 +61,6 @@ watch(
     if (selectedName.value !== '__new__' && !skills.some((item) => item.name === selectedName.value)) reset()
   },
 )
-// 切换项目时重置选中和表单
-watch(() => props.projectId, () => { reset(); selectedName.value = '__new__' })
 </script>
 
 <template>
@@ -95,6 +104,12 @@ watch(() => props.projectId, () => { reset(); selectedName.value = '__new__' })
       <span :class="{ error: message.includes('失败') }">{{ message }}</span>
       <button type="button" :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存 Skill' }}</button>
     </div>
+
+    <!-- Toast -->
+    <Transition name="toast">
+      <div v-if="toast" :class="['skill-toast', { 'toast-error': toastError }]" role="alert">
+        {{ toast }}
+      </div>
+    </Transition>
   </div>
 </template>
-

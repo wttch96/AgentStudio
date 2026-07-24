@@ -80,45 +80,14 @@ ANTHROPIC_AUTH_TOKEN=PROXY_MANAGED
 | **长期** | LangMem MemoryStoreManager + ThreadExtractor | 执行完成后 |
 | **策略** | StrategyEngine 配置驱动 | token/轮次/闲置阈值 |
 
-## 项目结构
+## 数据存储
 
-```
-├── frontend/src/components/
-│   ├── ChatHistory.vue      对话历史
-│   ├── DagGraph.vue          DAG 流程图
-│   ├── EventTimeline.vue     执行时间线
-│   ├── PromptComposer.vue    聊天输入 + 中断
-│   ├── AgentInspector.vue    右侧 Agent 状态 + Token 统计
-│   └── config/               配置中心 7 标签页
-├── backend/app/
-│   ├── agents/               Claude/DeepSeek/RAG 三执行器
-│   ├── orchestration/graph.py LangGraph 图 (含 memory 节点)
-│   ├── planning/             DeepSeek DAG 编排器
-│   ├── services/             项目/知识库/记忆/配置
-│   └── storage/              SQLite (FTS5 + 触发器)
-├── config/                   默认配置
-├── start.sh / stop.sh
-└── .env.example
-```
+所有数据存储在项目目录下的 SQLite 文件中，不依赖外部数据库。
 
-## Token 优化
+### 数据库文件
 
-- 提示词内置 RTK 指令 (`rtk` 前缀节省 60-90% CLI token)
-- 右侧面板实时显示每个 Agent 输入/输出 token
-- 工具调用建议只读取需要的文件片段
-
-## API
-
-| 端点 | 说明 |
-|------|------|
-| `GET/POST/DELETE /api/projects` | 项目 CRUD |
-| `GET/POST/PUT/DELETE /api/projects/{id}/agents` | 项目 Agent |
-| `GET/POST/PUT/DELETE /api/templates` | 模板管理 |
-| `GET/POST/PUT/DELETE /api/knowledge` | 知识库 |
-| `GET/POST/PUT /api/skills` | Skill |
-| `GET/PUT /api/brain` | 主脑配置 |
-| `POST/GET/DELETE /api/runs` | 任务运行 |
-| `POST /api/runs/{id}/interrupt` | 中断/注入 |
-| `GET/PUT /api/memory` | 记忆配置 |
-| `GET/PUT /api/scheduler` | 调度配置 |
-| `GET /api/template-center` | 模板中心 |
+| 文件 | 用途 | 管理方 |
+|------|------|--------|
+| `backend/instance/agents-manager.db` | **主数据库** — 项目、Agent、模板、知识库、记忆、配置、用量 | `SQLiteStore` |
+| `.agent-studio-checkpoints.db` | **执行状态快照** — LangGraph 图状态、中断恢复点 | `SqliteSaver` (LangGraph) |
+| `*.db-shm` / `*.db-wal` | SQLite WAL 模式共享内存和预写

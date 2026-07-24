@@ -8,10 +8,11 @@ import SkillConfigEditor from './SkillConfigEditor.vue'
 import WorkspaceConfigEditor from './WorkspaceConfigEditor.vue'
 import MemoryConfigEditor from './MemoryConfig.vue'
 import RAGConfigEditor from './RAGConfigEditor.vue'
+import KnowledgeConfig from './KnowledgeConfig.vue'
 
 defineProps<{ agents: AgentProfile[]; skills: SkillProfile[]; projectId: string }>()
 defineEmits<{ close: []; saved: [] }>()
-const tab = ref<'brain' | 'rag' | 'agents' | 'skills' | 'workspace' | 'scheduler' | 'memory'>('brain')
+const tab = ref<'brain' | 'rag' | 'knowledge' | 'agents' | 'skills' | 'workspace' | 'scheduler' | 'memory'>('brain')
 </script>
 
 <template>
@@ -25,8 +26,9 @@ const tab = ref<'brain' | 'rag' | 'agents' | 'skills' | 'workspace' | 'scheduler
         <button type="button" aria-label="关闭配置中心" @click="$emit('close')">×</button>
       </header>
       <nav class="config-tabs" aria-label="配置类型">
-<button type="button" :class="{ active: tab === 'brain' }" @click="tab = 'brain'">主脑配置</button>
+        <button type="button" :class="{ active: tab === 'brain' }" @click="tab = 'brain'">主脑配置</button>
         <button type="button" :class="{ active: tab === 'rag' }" @click="tab = 'rag'">RAG 配置</button>
+        <button type="button" :class="{ active: tab === 'knowledge' }" @click="tab = 'knowledge'">知识库</button>
         <button type="button" :class="{ active: tab === 'agents' }" @click="tab = 'agents'">Agent 配置</button>
         <button type="button" :class="{ active: tab === 'skills' }" @click="tab = 'skills'">Skill 编辑</button>
         <button type="button" :class="{ active: tab === 'workspace' }" @click="tab = 'workspace'">工作目录</button>
@@ -35,6 +37,7 @@ const tab = ref<'brain' | 'rag' | 'agents' | 'skills' | 'workspace' | 'scheduler
       </nav>
       <BrainConfigEditor v-if="tab === 'brain'" @saved="$emit('saved')" />
       <RAGConfigEditor v-else-if="tab === 'rag'" :agents="agents" :project-id="projectId" @saved="$emit('saved')" />
+      <KnowledgeConfig v-else-if="tab === 'knowledge'" :project-id="projectId" />
       <AgentConfigEditor v-else-if="tab === 'agents'" :agents="agents" :skills="skills" :project-id="projectId" @saved="$emit('saved')" />
       <SkillConfigEditor v-else-if="tab === 'skills'" :skills="skills" :project-id="projectId" @saved="$emit('saved')" />
       <WorkspaceConfigEditor v-else-if="tab === 'workspace'" @saved="$emit('saved')" />

@@ -48,7 +48,7 @@ export const api = {
     const p = projectId ? '?project_id=' + encodeURIComponent(projectId) : ''
     return request<Required<SkillProfile>>(`/skills/${name}${p}`)
   },
-  createSkill: (payload: Required<SkillProfile>) =>
+  createSkill: (payload: Required<SkillProfile> & { project_id?: string }) =>
     request<Required<SkillProfile>>('/skills', { method: 'POST', body: JSON.stringify(payload) }),
   updateSkill: (name: string, payload: Omit<Required<SkillProfile>, 'name'>, projectId?: string) => {
     const p = projectId ? '?project_id=' + encodeURIComponent(projectId) : ''
@@ -67,7 +67,7 @@ export const api = {
   updateWorkspace: (path: string) =>
     request<{ path: string }>('/workspace', { method: 'PUT', body: JSON.stringify({ path }) }),
   browseWorkspace: (path?: string) =>
-    request<{ current: string; parent: string | null; directories: { name: string; path: string }[] }>(
+    request<{ current: string; parent: string | null; directories: { name: string; path: string }[]; files: { name: string; path: string }[] }>(
       `/workspace/directories${path ? `?path=${encodeURIComponent(path)}` : ''}`,
     ),
   scheduler: () => request<SchedulerConfiguration>('/scheduler'),
@@ -92,6 +92,11 @@ export const api = {
       body: JSON.stringify({ objective, parent_run_id: parentRunId }),
     }),
   cancelRun: (id: string) => request<{ accepted: boolean }>(`/runs/${id}/cancel`, { method: 'POST' }),
+  forkRun: (runId: string, objective?: string) =>
+    request<Run & { fork_preview: Record<string, unknown> | null }>(`/runs/${runId}/fork`, {
+      method: 'POST',
+      body: JSON.stringify({ objective }),
+    }),
   memoryConfig: () => request<MemoryConfiguration>('/memory'),
   updateMemoryConfig: (payload: MemoryConfiguration) =>
     request<MemoryConfiguration>('/memory', {
@@ -130,6 +135,11 @@ export const api = {
     request<{ id: string }>('/knowledge/' + id, { method: 'PUT', body: JSON.stringify(payload) }),
   knowledgeDelete: (id: string) =>
     fetch(API_BASE + '/knowledge/' + id, { method: 'DELETE' }).then(r => { if (!r.ok) throw new Error('删除失败') }),
+  knowledgeImport: (filepath: string, category?: string, projectId?: string) =>
+    request<{ imported: number; total_blocks: number; entries: string[]; source: string }>('/knowledge/import', {
+      method: 'POST',
+      body: JSON.stringify({ filepath, category, project_id: projectId }),
+    }),
   knowledgeFeedback: (id: string, feedback: 'up' | 'down') =>
     request<{ entry_id: string; score: number }>('/knowledge/' + id + '/feedback', { method: 'POST', body: JSON.stringify({ entry_id: id, feedback }) }),
   knowledgeRelations: (id: string) =>

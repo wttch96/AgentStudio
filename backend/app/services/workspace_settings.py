@@ -52,21 +52,32 @@ class WorkspaceSettings:
     def browse(self, value: str | None = None) -> dict[str, object]:
         root = self._validate(value) if value else self.current()
         directories: list[dict[str, str]] = []
+        files: list[dict[str, str]] = []
         try:
             children = sorted(
-                (item for item in root.iterdir() if item.is_dir()),
-                key=lambda item: item.name.lower(),
+                root.iterdir(),
+                key=lambda item: (not item.is_dir(), item.name.lower()),
             )
-            directories = [
-                {"name": item.name, "path": str(item)} for item in children[:300]
-            ]
+            for item in children:
+                if item.name.startswith("."):
+                    continue
+                if item.is_dir():
+                    directories.append({"name": item.name, "path": str(item)})
+                elif item.is_file():
+                    suffix = item.suffix.lower()
+                    if suffix in (".md", ".markdown", ".txt", ".json", ".yaml", ".yml", ".py", ".js", ".ts", ".vue", ".html", ".css", ".toml", ".cfg", ".ini", ".env"):
+                        files.append({"name": item.name, "path": str(item)})
+                if len(directories) >= 300:
+                    break
         except PermissionError:
             directories = []
+            files = []
         parent = root.parent if root.parent != root else None
         return {
             "current": str(root),
             "parent": str(parent) if parent else None,
             "directories": directories,
+            "files": files,
         }
 
     @staticmethod

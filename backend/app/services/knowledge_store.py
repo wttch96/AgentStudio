@@ -27,19 +27,95 @@ class KnowledgeStore:
 
     def add(self, title: str, content: str, category: str = "general",
             tags: list[str] | None = None, source: str = "",
+            source_type: str = "manual",
             expires_at: str | None = None, score: float = 0.0,
             project_id: str = "") -> str:
-        """添加知识条目，返回 entry_id。"""
+        """添加知识条目，返回 entry_id。
+        source_type: "manual" (用户手动), "import" (文件导入), "auto" (Agent 自学)
+        """
         entry_id = uuid.uuid4().hex
         self.store.insert_knowledge({
             "id": entry_id, "title": title, "content": content,
             "category": category, "tags": tags or [],
-            "source": source, "score": score,
+            "source": source, "source_type": source_type,
+            "score": score,
             "expires_at": expires_at,
             "project_id": project_id,
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
         return entry_id
+    def import_file(self, filepath: str, category: str = "general",
+                    project_id: str = "") -> dict:
+        """从工作区文件导入知识。按 Markdown 标题拆分为多个条目。"""
+        from pathlib import Path
+        path = Path(filepath)
+        if path.is_absolute():
+            full_path = path.resolve()
+        else:
+            root = self.settings.workspace_root
+            full_path = (root / filepath).resolve()
+        if not full_path.is_file():
+            raise FileNotFoundError(f"文件不存在: {filepath}")
+
+        raw = full_path.read_text(encoding="utf-8", errors="replace")
+        if not raw.strip():
+            raise ValueError("文件内容为空")
+
+        lines = raw.splitlines()
+        stem = full_path.stem
+        suffix = full_path.suffix.lower()
+        is_md = suffix in (".md", ".markdown")
+        NL = chr(10)
+
+        entries = []
+        if is_md and any(line.startswith("## ") for line in lines):
+            # Markdown: 按 ## 标题拆分为多个条目
+            current_title = stem
+            current_lines = []
+            for line in lines:
+                if line.startswith("# ") and not current_lines:
+                    current_title = line[2:].strip()
+                elif line.startswith("## "):
+                    if current_lines:
+                        content = NL.join(current_lines).strip()
+                        if content:
+                            entries.append({"title": current_title, "content": content[:50000]})
+                    current_title = line[3:].strip()
+                    current_lines = []
+                else:
+                    current_lines.append(line)
+            if current_lines:
+                content = NL.join(current_lines).strip()
+                if content:
+                    entries.append({"title": current_title, "content": content[:50000]})
+        else:
+            # 普通文本：整个文件作为一个条目
+            title = stem
+            for line in lines:
+                if line.startswith("# "):
+                    title = line[2:].strip()
+                    break
+            entries.append({"title": title, "content": raw[:50000]})
+
+        imported = 0
+        imported_ids = []
+        for entry in entries:
+            if not entry["content"].strip():
+                continue
+            eid = self.add(
+                title=entry["title"], content=entry["content"],
+                category=category, source=filepath, source_type="import",
+                project_id=project_id,
+            )
+            imported_ids.append(eid)
+            imported += 1
+
+        return {
+            "imported": imported,
+            "total_blocks": len(entries),
+            "entries": imported_ids,
+            "source": filepath,
+        }
 
     def update(self, entry_id: str, **fields: Any) -> bool:
         return self.store.update_knowledge(entry_id, fields)

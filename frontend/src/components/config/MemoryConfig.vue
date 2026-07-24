@@ -5,8 +5,6 @@ import type { MemoryConfiguration } from '../../types'
 
 const emit = defineEmits<{ saved: [] }>()
 const configuration = reactive<MemoryConfiguration>({
-  agent_sliding_window: 20,
-  planner_sliding_window: 40,
   compress_trigger_tokens: 8000,
   compress_keep_recent: 20,
   summarizer_model: 'deepseek-chat',
@@ -21,27 +19,15 @@ const message = ref('')
 // ── 短期记忆字段 ──
 const shortTermFields = [
   {
-    key: 'agent_sliding_window' as const,
-    label: 'Agent 滑动窗口',
-    help: '每个 Agent 保留的最近消息条数。超出后触发 LLM 摘要压缩，旧消息压缩为摘要注入上下文。',
-    min: 5, max: 100, unit: '条',
-  },
-  {
-    key: 'planner_sliding_window' as const,
-    label: '主脑滑动窗口',
-    help: 'DeepSeek 主脑保留的最近消息条数。主脑需要更大窗口来理解跨任务上下文。',
-    min: 10, max: 200, unit: '条',
-  },
-  {
     key: 'compress_trigger_tokens' as const,
     label: '压缩触发阈值',
-    help: '当消息的估算 token 数超过此值，LangGraph 节点自动触发记忆压缩。',
+    help: '当消息的估算 token 数超过此值，LangGraph 节点自动触发 LLM 压缩全部历史为摘要。',
     min: 2000, max: 50000, unit: 'tokens', step: 500,
   },
   {
     key: 'compress_keep_recent' as const,
     label: '压缩保留条数',
-    help: '压缩时始终保留最近 N 条消息原文不被摘要替代，保证近期对话完整性。',
+    help: '压缩后始终保留最近 N 条消息原文不被摘要替代，保证近期对话上下文连贯。',
     min: 5, max: 50, unit: '条',
   },
 ]
@@ -91,7 +77,7 @@ onMounted(load)
         <span class="junction-symbol" aria-hidden="true">&#x26A1;</span>
         <div>
           <strong>短期记忆 · 会话内</strong>
-          <p>控制单个会话内的 Agent 和主脑记忆窗口、滑动窗口压缩策略。由 LangGraph 节点在每轮 wave 后自动执行。</p>
+          <p>控制单个会话内的消息压缩策略。Token 超阈值时用 LLM 压缩全部历史为摘要注入上下文，压缩失败则保留全部原始消息不丢失。</p>
         </div>
       </div>
 
@@ -140,10 +126,10 @@ onMounted(load)
       <div class="memory-estimate">
         <strong>短期记忆预估</strong>
         <div class="estimate-grid">
-          <div><span>Agent 层</span><span>~{{ configuration.agent_sliding_window * 200 }} tokens / agent</span></div>
-          <div><span>主脑层</span><span>~{{ configuration.planner_sliding_window * 200 }} tokens</span></div>
           <div><span>压缩触发</span><span>{{ configuration.compress_trigger_tokens.toLocaleString() }} tokens</span></div>
+          <div><span>保留最近</span><span>{{ configuration.compress_keep_recent }} 条消息</span></div>
           <div><span>摘要开销</span><span>~200-500 tokens / 次</span></div>
+          <div><span>压缩策略</span><span>LLM 摘要（不丢数据）</span></div>
         </div>
       </div>
     </section>
