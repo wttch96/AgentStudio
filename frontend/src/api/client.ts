@@ -86,10 +86,10 @@ export const api = {
   deepseekBalance: (refresh = false) =>
     request<DeepSeekBalance>(`/deepseek/balance${refresh ? '?refresh=1' : ''}`),
   deepseekUsage: () => request<DeepSeekUsage>('/deepseek/usage'),
-  createRun: (objective: string, parentRunId?: string) =>
+  createRun: (objective: string, parentRunId?: string, projectId?: string) =>
     request<Run>('/runs', {
       method: 'POST',
-      body: JSON.stringify({ objective, parent_run_id: parentRunId }),
+      body: JSON.stringify({ objective, parent_run_id: parentRunId, project_id: projectId }),
     }),
   cancelRun: (id: string) => request<{ accepted: boolean }>(`/runs/${id}/cancel`, { method: 'POST' }),
   forkRun: (runId: string, objective?: string) =>

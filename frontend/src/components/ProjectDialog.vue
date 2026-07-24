@@ -34,12 +34,39 @@ const detailAgents = ref<ProjectAgent[]>([])
 
 async function browseDir(path?: string) {
   try {
-    const data = await api.browseWorkspace(path)
+    const target = path || rootDir.value || undefined
+    const data = await api.browseWorkspace(target)
     dirs.value = data.directories
     dirParent.value = data.parent
     dirCurrent.value = data.current
     dirPath.value = data.current
-  } catch { /* */ }
+  } catch (e) {
+    console.warn('browseDir failed:', e)
+  }
+}
+
+async function pickLocalFolder() {
+  try {
+    const dirHandle = await (window as any).showDirectoryPicker()
+    rootDir.value = dirHandle.name
+    await browseDir(dirHandle.name)
+  } catch (e: any) {
+    if (e.name === 'AbortError') return
+    // showDirectoryPicker API not available → 使用隐藏的 input 回退
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.webkitdirectory = true
+    input.onchange = async () => {
+      if (input.files && input.files.length > 0) {
+        // 从 file.webkitRelativePath 提取根目录路径
+        const relativePath = input.files[0].webkitRelativePath
+        const dirName = relativePath.split('/')[0]
+        rootDir.value = dirName
+        await browseDir(dirName)
+      }
+    }
+    input.click()
+  }
 }
 
 function selectDir(path: string) { rootDir.value = path; dirPath.value = path }
@@ -144,8 +171,8 @@ onMounted(async () => {
 
         <label>项目根目录
           <div class="pm-dir-input">
-            <input v-model="rootDir" placeholder="选择或输入目录" />
-            <button type="button" @click="browseDir(dirPath)">浏览</button>
+            <input v-model="rootDir" placeholder="请直接输入本地文件夹路径，例如 /Users/wttch/Desktop" @keyup.enter="browseDir(rootDir)" />
+            <button type="button" @click="pickLocalFolder">选择文件夹</button>
           </div>
         </label>
 

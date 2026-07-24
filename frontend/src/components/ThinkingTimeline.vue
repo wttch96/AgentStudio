@@ -913,7 +913,8 @@ function convLabel(isUser: boolean) {
   margin-top: 10px;
   overflow: hidden;
   border-radius: 2px;
-  background: rgba(10,132,255,.13);
+  background: rgba(10,132,255,.18);
+  border: 1px solid rgba(10,132,255,.12);
 }
 
 .thinking-timeline .planning-progress i {

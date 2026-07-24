@@ -14,9 +14,19 @@ from app.services.deepseek_usage import DeepSeekUsageService
 
 
 STRUCTURE_GUARD_BASE = """
-如果用户的问题是简单对话、概念解释、或者你能直接回答的内容，直接返回纯文本回复，**不要输出 JSON，不要创建任务**。
+你是 Agent Studio 的主脑编排器。**少即是多**——不要为简单问题创建任务。
 
-只有在确实需要 Agent 执行具体操作时，才把任务输出为有向无环任务图。
+## 输出规则（首要）
+
+如果用户的请求是以下类型，**必须直接输出纯文本回复**，不需要 JSON，不需要创建任务：
+- 闲聊对话（"你好"、"你是谁"、"今天怎么样"）
+- 概念解释（"什么是 xxx"、"解释一下 xxx"）
+- 能从训练数据直接回答的知识性问题
+- 对计划/结果的追问澄清
+- 纯分析建议，不涉及代码读写
+
+**只有在确实需要 Agent 执行具体操作时**，才输出 JSON 任务图。
+
 需要 Agent 操作时输出任务图，严格遵守以下协议：
 
 1. 只使用可用 Agent 列表中列出的精确名称，不要编造 agent 名。
@@ -26,12 +36,34 @@ STRUCTURE_GUARD_BASE = """
 5. 无真实依赖的任务可以并行；有数据或逻辑依赖时建立 depends_on。
 6. write_scope 使用 Agent 声明的工作目录，没有工作目录的 Agent 不限制写入范围。
 7. 每个 Agent 自己完成测试和自检，不创建独立测试 Agent。
-8. 输出严格 JSON，符合提供的 schema。
-9. 不要把跨领域工作全部塞给一个 Agent；与目标无关的 Agent 不要调用。
-10. 上游上下文是已有任务的延续，结合上游理解指代；不要重复已完成的工作。
-11. 不要创建 workspace-discovery- 前缀的任务（发现阶段已完成）。
-12. 跨项目接口写入 coordination_contract。
+8. 不要把跨领域工作全部塞给一个 Agent；与目标无关的 Agent 不要调用。
+9. 上游上下文是已有任务的延续，结合上游理解指代；不要重复已完成的工作。
+10. 不要创建 workspace-discovery- 前缀的任务（发现阶段已完成）。
+11. 跨项目接口写入 coordination_contract。
+12. 输出 JSON 时不要用 markdown 代码块包裹，直接输出纯 JSON 对象。
 """.strip()
+
+
+def _fallback_dag(objective: str, project_agents: list | None = None) -> TaskDag:
+    """当 JSON 解析失败时的兜底方案。"""
+    agent = "brain"
+    if project_agents:
+        for a in project_agents:
+            if getattr(a, 'agent_type', '') in ('claude', 'deepseek'):
+                agent = getattr(a, 'name', 'brain')
+                break
+    return TaskDag(
+        summary=f"围绕{objective[:60]}的自动规划",
+        tasks=[
+            DagTask(
+                id="auto-plan",
+                title="主脑直接分析",
+                objective=f"用户目标：{objective}。由主脑直接分析工作空间并给出方案。",
+                agent=agent,
+                write_scope=[],
+            )
+        ],
+    )
 
 
 class DeepSeekPlanner:
@@ -140,7 +172,14 @@ class DeepSeekPlanner:
             messages=[
                 {
                     "role": "system",
-                    "content": f"{brain.orchestration_prompt}\n\n{guard}",
+                    "content": (
+                        f"{brain.orchestration_prompt}\n\n"
+                        "【重要】你是主脑，不是执行 Agent。对于简单问答/概念解释/闲聊，直接输出纯文本，绝不输出 JSON。\n"
+                        f"{guard}\n\n"
+                        "【输出规则】\n"
+                        "- 不需要 Agent 操作 → 直接输出纯文本（一句话回答）\n"
+                        "- 需要 Agent 操作 → 输出纯 JSON 对象（不要用 markdown 包裹）\n"
+                    ),
                 },
                 {
                     "role": "user",
@@ -151,11 +190,12 @@ class DeepSeekPlanner:
                         f"专业 Agent 的工作空间搜索与项目过滤结果：\n{discovery_context or '[]'}\n\n"
                         f"工作区结构索引（仅用于补充，不得覆盖 Agent 的过滤证据）：\n"
                         f"{self._workspace_context(workspace_root)}\n\n"
-                        f"必须符合这个 JSON Schema：\n{json.dumps(schema, ensure_ascii=False)}"
+                        f"现在判断：这个用户目标需要 Agent 执行具体操作（如读写文件/搜索/编码）吗？\n"
+                        f"如果不需要，请用纯文本直接回答用户。如果需要，请按以下 Schema 输出 JSON 任务图：\n"
+                        f"{json.dumps(schema, ensure_ascii=False)}"
                     ),
                 },
             ],
-            response_format={"type": "json_object"},
             temperature=0.1,
         )
         if self.usage:
@@ -163,21 +203,23 @@ class DeepSeekPlanner:
         content = response.choices[0].message.content
         if not content:
             raise RuntimeError("DeepSeek 返回了空计划")
-        try:
-            dag = TaskDag.model_validate_json(content)
-        except Exception:
-            # DeepSeek 可能返回空 tasks 或格式异常，使用兜底方案
+        # 尝试解析 JSON 任务图；如果返回的是纯文本或混合内容，提取 JSON 部分
+        content_stripped = content.strip()
+        # DeepSeek 有时会在 JSON 前加文字说明，或在 JSON 后追加
+        # 找到第一个 { 和最后一个 }
+        json_start = content_stripped.find("{")
+        json_end = content_stripped.rfind("}")
+        if json_start != -1 and json_end > json_start:
+            json_part = content_stripped[json_start:json_end + 1]
+            try:
+                dag = TaskDag.model_validate_json(json_part)
+            except Exception:
+                dag = _fallback_dag(objective, project_agents)
+        else:
+            # 纯文本：主脑选择直接回答，不创建任务
             dag = TaskDag(
-                summary=f"围绕{objective[:60]}的自动规划",
-                tasks=[
-                    DagTask(
-                        id="auto-plan",
-                        title="主脑直接分析",
-                        objective=f"用户目标：{objective}。由主脑直接分析工作空间并给出方案。",
-                        agent=(project_agents[0].name if project_agents and hasattr(project_agents[0], 'name') else "brain"),
-                        write_scope=[],
-                    )
-                ],
+                summary=content_stripped[:1000],
+                tasks=[],
             )
         return self._enforce_requested_agents(dag, objective, project_agents)
 
@@ -207,6 +249,10 @@ class DeepSeekPlanner:
     def _enforce_requested_agents(cls, dag: TaskDag, objective: str,
                                    project_agents: list | None = None) -> TaskDag:
         """把用户明确点名的领域从软提示提升为确定性的 DAG 约束。"""
+
+        # 主脑选择直接回复（没有任务），不做修改直接返回
+        if not dag.tasks:
+            return dag
 
         renamed = {}
         if project_agents:
@@ -309,8 +355,9 @@ class DeepSeekPlanner:
             existing_ids.add(task_id)
             present.add(agent)
 
-        # 兜底: 过滤/重命名后若 tasks 为空，至少保留一个脑力分析任务
-        if not tasks:
+        # 兜底: 只有当用户明确点名了领域但 tasks 被意外清空时，才补上强制任务
+        # 如果用户没有点名（闲聊/概念题），保留空 tasks（主脑直接回答了）
+        if not tasks and has_explicit_scope:
             fallback_agent = backend_agent if backend_agent != "backend-agent" else (
                 frontend_agent if frontend_agent != "frontend-agent" else "brain"
             )
@@ -360,3 +407,97 @@ class DeepSeekPlanner:
                             "upstream_context": guidance,
                             "dag": dag.model_dump(),
                             "results": [result.model_dump() for result in results],
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+            ],
+            temperature=0.1,
+        )
+        if self.usage:
+            self.usage.record(response, phase="synthesis", run_id=run_id)
+        content = response.choices[0].message.content
+        if not content:
+            raise RuntimeError("DeepSeek 返回了空汇总")
+        return content
+
+    @staticmethod
+    def _workspace_context(workspace_root: str | None) -> str:
+        """生成工作空间的结构概览，帮助主脑理解目录布局。"""
+        if not workspace_root:
+            return "未提供工作空间路径"
+        root = Path(workspace_root)
+        if not root.is_dir():
+            return f"工作空间路径不存在: {workspace_root}"
+        lines = [f"工作空间根目录: {workspace_root}"]
+        try:
+            entries = sorted(root.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower()))
+            for entry in entries[:40]:
+                marker = "/" if entry.is_dir() else ""
+                lines.append(f"  {entry.name}{marker}")
+            remaining = len(entries) - 40
+            if remaining > 0:
+                lines.append(f"  ... 还有 {remaining} 项")
+        except PermissionError:
+            lines.append("  (无权限读取目录)")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _demo_dag(objective: str, project_agents: list | None = None) -> TaskDag:
+        """演示模式用执行 Agent 验证并行分发和结果汇合。"""
+
+        short_objective = objective[:800]
+        demo_tasks = [
+            DagTask(
+                id="demo-analyze",
+                title="分析项目结构（演示）",
+                objective=f"分析当前工作空间结构并撰写简要发现报告。用户目标：{short_objective}",
+                agent="flask-backend" if any(
+                    a for a in (project_agents or [])
+                    if getattr(a, 'name', '') == 'flask-backend'
+                ) else "flask-backend",
+                write_scope=[],
+            ),
+            DagTask(
+                id="demo-code",
+                title="代码实施（演示）",
+                objective=f"基于分析结果选择最佳实现方案并说明理由。用户目标：{short_objective}",
+                agent="vue-frontend" if any(
+                    a for a in (project_agents or [])
+                    if getattr(a, 'name', '') == 'vue-frontend'
+                ) else "vue-frontend",
+                depends_on=["demo-analyze"],
+                write_scope=["frontend"],
+            ),
+            DagTask(
+                id="demo-verify",
+                title="验证总结（演示）",
+                objective=f"验证前两步结果并汇总报告。用户目标：{short_objective}",
+                agent="vue-frontend" if any(
+                    a for a in (project_agents or [])
+                    if getattr(a, 'name', '') == 'vue-frontend'
+                ) else "vue-frontend",
+                depends_on=["demo-code"],
+                write_scope=[],
+            ),
+        ]
+        return TaskDag(
+            summary=f"Around '{short_objective[:60]}' - demo task graph",
+            coordination_contract=(
+                "演示共享契约：跨项目实现应先约定接口路径、方法、请求/响应字段与错误行为；"
+                "真实模式由 DeepSeek 根据项目发现结果生成具体契约。"
+            ),
+            tasks=demo_tasks,
+        )
+
+    @staticmethod
+    def _demo_summary(dag: TaskDag, results: list[AgentResult]) -> str:
+        result_by_id = {result.task_id: result for result in results}
+        lines = [f"任务计划：{dag.summary}", ""]
+        for task in dag.tasks:
+            result = result_by_id.get(task.id)
+            if result:
+                lines.append(f"- [{result.status}] {task.title}：{result.summary}")
+            else:
+                lines.append(f"- [skipped] {task.title}：依赖失败或运行已取消")
+        return "\n".join(lines)

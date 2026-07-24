@@ -8,6 +8,9 @@ export default defineConfig({
     host: '127.0.0.1',
     port: 5173,
     strictPort: true,
+    headers: {
+      'Permissions-Policy': 'local-fonts=(self)',
+    },
     // 浏览器只访问前端同源地址；代理目标仍是仅监听回环地址的 Flask。
     proxy: {
       '/api': {

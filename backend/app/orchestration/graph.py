@@ -63,6 +63,7 @@ def build_graph(
     project_agents: list | None = None,
     deepseek_executor=None,
     rag_executor=None,
+    file_agent_executor=None,
 ):
     def plan(state: GraphState) -> GraphState:
         run_id = state["run_id"]
@@ -90,13 +91,16 @@ def build_graph(
             )
             stage = "execution"
         else:
-            events.emit(
-                run_id,
-                "workspace.discovery_started",
-                payload={"workspace_root": state["workspace_root"]},
+            # 有项目 Agent 时，直接让主脑 judge + 规划（跳过 discovery stage）
+            # 主脑通过 prompt 自行判断：直接回答 → 空 tasks，需操作 → 1~N tasks
+            dag = planner.create_dag(
+                state["objective"],
+                state["workspace_root"],
+                run_id=run_id,
+                guidance=state.get("guidance", ""),
+                project_agents=project_agents,
             )
-            dag = planner.create_discovery_dag(state["objective"], project_agents=project_agents)
-            stage = "discovery"
+            stage = "execution"
         events.emit(
             run_id,
             "plan.created",
@@ -320,6 +324,8 @@ def build_graph(
             active_executor = deepseek_executor
         elif agent_type == "rag" and rag_executor:
             active_executor = rag_executor
+        elif agent_type == "file-ops" and file_agent_executor:
+            active_executor = file_agent_executor
         else:
             active_executor = executor
 
@@ -343,8 +349,9 @@ def build_graph(
             project_id=state.get("project_id", ""),
         )
         duration_ms = int(time.time() * 1000) - started_ms
-        result.started_at = started_at
-        result.duration_ms = duration_ms
+        if result is not None:
+            result.started_at = started_at
+            result.duration_ms = duration_ms
         events.emit(
             state["run_id"],
             "agent.completed" if result.status == "completed" else "agent.failed",
@@ -379,4 +386,94 @@ def build_graph(
         )
         return {}
 
-    def compact_memory(state: Graph
+    def compact_memory(state: GraphState) -> GraphState:
+        """每个 wave 结束后，按滑动窗口策略压缩 Agent 消息历史。"""
+        if memory_manager is None:
+            return {}
+        try:
+            results = state.get("results", [])
+            active_ids = state.get("active_task_ids", [])
+            conversation_id = state.get("run_id", "")
+            for result in results:
+                r = AgentResult.model_validate(result) if isinstance(result, dict) else result
+                messages = [{"role": "assistant", "content": r.summary}]
+                memory_manager.compress_agent_messages(r.agent, conversation_id, messages)
+            events.emit(
+                state["run_id"], "memory.compacted",
+                payload={"wave": state.get("wave_index", 0), "agents": active_ids},
+            )
+        except Exception:
+            pass
+        return {}
+
+    def extract_memory(state: GraphState) -> GraphState:
+        """全部执行完成后，用 LangMem 提取跨会话长期记忆。"""
+        if memory_manager is None:
+            return {}
+        try:
+            results_raw = state.get("results", [])
+            session_summary = state.get("session_summary", state.get("final_answer", ""))
+            memory_manager.extract_long_term_memory(
+                state["run_id"], state["run_id"],
+                session_summary=str(session_summary)[:4000],
+                agent_results=list(results_raw)[-20:] if results_raw else None,
+            )
+            events.emit(
+                state["run_id"], "memory.extracted",
+                payload={"conversation_id": state["run_id"]},
+            )
+        except Exception:
+            pass
+        return {}
+
+    def route_after_barrier(state: GraphState) -> str:
+        # 直接回到 scheduler，不再区分 discovery/execution stage
+        return "interrupt_check"
+
+    def synthesize(state: GraphState) -> GraphState:
+        """汇流所有 Agent 结果。如果没有任务被执行（主脑直接回答），使用 DAG summary 作为最终答案。"""
+        results = [AgentResult.model_validate(item) for item in state.get("results", [])]
+        if not results:
+            # 主脑选择了直接回复（纯文本），没有创建任何任务
+            dag_raw = state.get("dag", {})
+            dag = TaskDag.model_validate(dag_raw) if dag_raw else None
+            final_answer = dag.summary if dag else "无执行结果"
+        else:
+            parts: list[str] = []
+            for r in results:
+                icon = "✓" if r.status == "completed" else "✗" if r.status == "failed" else "-"
+                parts.append(f"{icon} {r.agent}: {r.summary[:300]}")
+            final_answer = "\n".join(parts) if parts else "无执行结果"
+        events.emit(
+            state["run_id"], "run.summary",
+            payload={"text": final_answer, "result_count": len(results)},
+        )
+        return {
+            "final_answer": final_answer,
+            "session_summary": final_answer[:4000],
+        }
+
+    builder = StateGraph(GraphState)
+    builder.add_node("plan", plan)
+    builder.add_node("interrupt_check", interrupt_check)
+    builder.add_node("scheduler", scheduler)
+    builder.add_node("replan_after_discovery", replan_after_discovery)
+    builder.add_node("worker", worker)
+    builder.add_node("barrier", barrier)
+    builder.add_node("extract_memory", extract_memory)
+    builder.add_node("synthesize", synthesize)
+    builder.add_edge(START, "plan")
+    builder.add_edge("plan", "interrupt_check")
+    builder.add_edge("interrupt_check", "scheduler")
+    builder.add_conditional_edges(
+        "scheduler", route_tasks, ["worker", "synthesize"]
+    )
+    # 同一 super-step 的 worker 全部完成后，只触发一次显式汇流屏障。
+    builder.add_edge("worker", "barrier")
+    builder.add_conditional_edges(
+        "barrier", route_after_barrier, ["interrupt_check"]
+    )
+    builder.add_edge("replan_after_discovery", "interrupt_check")
+    builder.add_edge("synthesize", "extract_memory")
+    builder.add_edge("extract_memory", END)
+    return builder.compile(checkpointer=checkpointer) if checkpointer else builder.compile()

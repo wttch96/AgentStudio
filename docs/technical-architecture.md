@@ -25,31 +25,29 @@ Frontend (Vue 3 + TS) ←→ Flask API ←→ ServiceContainer (DI)
 | `claude` | ClaudeAgentExecutor | worker 节点 | Read/Write/Edit/Glob/Grep/Bash/Skill |
 | `deepseek` | DeepSeekAgentExecutor | worker 节点 | 同上 (LangChain `create_agent`) |
 | `rag` | RAGAgentExecutor | worker 节点 | search/get/add/list_knowledge |
+| `file-ops` | FileAgentExecutor | worker 节点 | copy/move/delete/read/write/list/search (FileManagementToolkit) |
 
 Graph worker 按 `agent_type` 分发到对应 executor。
+
+> **Agent 智能路由**：主脑 (DeepSeek) 先判断用户目标是否需要 Agent 操作。闲聊/概念解释等直接输出纯文本 (0 tasks → 0 agent)；读写/编码等操作输出 JSON 任务图 (1~N tasks)。
 
 ## 执行流
 
 ```
-START → plan → interrupt_check → scheduler → [worker×N] → barrier → compact_memory
+START → plan → interrupt_check → scheduler → [worker×N] → barrier
                                                                     ↓
-                                          replan_after_discovery ←─┘  (discovery)
-                                                                    ↓
-                                          interrupt_check → scheduler → [worker×N]
-                                                                    ↓
-                                          barrier → compact_memory → ...  
+                                          interrupt_check ←─────────┘
                                                                     ↓
                                           synthesize → extract_memory → END
 ```
 
-- **plan**: 主脑分析目标，生成发现 DAG 或直接进入执行
+- **plan**: 主脑分析目标，直接生成任务图（不再区分 discovery/execution 阶段）
 - **interrupt_check**: 每轮检查中断指令；`inject` 类型直接注入 guidance 不暂停
-- **scheduler**: 冻结本轮就绪任务集
+- **scheduler**: 冻结本轮就绪任务集；无任务时直接路由到 synthesize
 - **worker**: Send 并行分发到对应 executor
 - **barrier**: 本轮汇流
-- **compact_memory**: 滑动窗口压缩
+- **synthesize**: 拼接 Agent 结果；无 Agent 结果时直接使用主脑的纯文本回复
 - **extract_memory**: LangMem 长期提取
-- **synthesize**: 拼接 Agent 结果（不调 LLM）
 
 ## 记忆系统
 

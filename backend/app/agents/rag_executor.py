@@ -116,5 +116,13 @@ class RAGAgentExecutor:
 
         def get_knowledge(entry_id: str) -> str:
             """Get full details of a knowledge entry by ID."""
-            try:
+            entry = ks.get(entry_id)
+            if not entry:
+                return f"Knowledge entry {entry_id} not found."
+            return (
+                f"Title: {entry.get('title', '')}\n"
+                f"Category: {entry.get('category', '')}\n"
+                f"Source: {entry.get('source_type', 'manual')}\n"
+                f"Content:\n{entry.get('content', '')[:2000]}"
+            )
        

@@ -341,7 +341,7 @@ export function useWorkspace() {
 
   async function _startRun(objective: string) {
     try {
-      const run = await api.createRun(objective, state.activeRun?.id)
+      const run = await api.createRun(objective, state.activeRun?.id, state.projectId || undefined)
       state.runs.unshift(run)
       state.activeRun = run
       state.events = []

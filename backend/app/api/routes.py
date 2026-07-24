@@ -241,7 +241,8 @@ def create_run():
         return jsonify({"error": "请求内容无效", "details": error.errors()}), 400
     try:
         return jsonify(
-            services().runs.start(payload.objective, payload.parent_run_id)
+            services().runs.start(payload.objective, payload.parent_run_id,
+                                  project_id=payload.project_id)
         ), 202
     except RuntimeError as error:
         return jsonify({"error": str(error)}), 409

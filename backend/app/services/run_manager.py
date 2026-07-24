@@ -37,6 +37,7 @@ class RunManager:
         interrupt_router: InterruptRouter | None = None,
         deepseek_executor=None,
         rag_executor=None,
+        file_agent_executor=None,
     ) -> None:
         self.store = store
         self.events = events
@@ -48,6 +49,7 @@ class RunManager:
         self.interrupt_router = interrupt_router
         self.deepseek_executor = deepseek_executor
         self.rag_executor = rag_executor
+        self.file_agent_executor = file_agent_executor
         self._cancel_events: dict[str, threading.Event] = {}
         self._agent_pause_events: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
@@ -61,7 +63,7 @@ class RunManager:
         scheduler = self.scheduler_settings.current()
         run_id = uuid.uuid4().hex
         preset_dag = self._preset_dag(command, parent_run_id)
-        run = self.store.create_run(run_id, objective, str(root), parent_run_id)
+        run = self.store.create_run(run_id, objective, str(root), parent_run_id, project_id)
         cancel_event = threading.Event()
         with self._lock:
             self._cancel_events[run_id] = cancel_event
@@ -210,7 +212,7 @@ class RunManager:
             except Exception:
                 pass
 
-            graph = build_graph(self.planner, self.executor, self.events, cancel_event, None, interrupt_router, memory_manager, project_agents, deepseek_executor=self.deepseek_executor, rag_executor=self.rag_executor)
+            graph = build_graph(self.planner, self.executor, self.events, cancel_event, None, interrupt_router, memory_manager, project_agents, deepseek_executor=self.deepseek_executor, rag_executor=self.rag_executor, file_agent_executor=self.file_agent_executor)
             output = graph.invoke(
                 {
                     "run_id": run_id,

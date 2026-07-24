@@ -60,6 +60,7 @@
 | `backend/app/agents/__init__.py` | Agent 基类与分派逻辑 |
 | `backend/app/agents/claude_executor.py` | Claude Agent 执行器 (Claude Agent SDK) |
 | `backend/app/agents/deepseek_executor.py` | DeepSeek Agent 执行器 (LangChain) |
+| `backend/app/agents/file_agent_executor.py` | 纯文件操作 Agent (FileManagementToolkit + DeepSeek) |
 | `backend/app/agents/rag_executor.py` | RAG Agent 执行器 (知识检索) |
 | `backend/app/agents/registry.py` | Agent 注册表 (按项目缓存) |
 | `backend/app/agents/skill_registry.py` | Skill 注册表 |
@@ -176,8 +177,11 @@
 |------|------|------|----------|
 | **Claude Agent** | Claude Agent SDK | Read/Write/Edit/Glob/Grep/Bash/Skill | 有 |
 | **DeepSeek Agent** | LangChain + DeepSeek | 同上 | 无 |
+| **文件操作 Agent** | LangChain + DeepSeek + FileManagementToolkit | copy/move/delete/read/write/list/search | 有 |
 | **RAG Agent** | LangChain + DeepSeek | search/get/add/list_knowledge | 无 |
 | **主脑** | DeepSeek API | DAG 编排 | — |
+
+> **智能路由**：主脑对简单问答直接纯文本回复 (0 Agent)，仅在实际需要读写/搜索/编码时创建任务。
 
 ## 记忆系统
 

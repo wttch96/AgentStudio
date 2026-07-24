@@ -284,6 +284,7 @@ CREATE INDEX IF NOT EXISTS idx_interrupt_run
         objective: str,
         workspace_root: str,
         parent_run_id: str | None = None,
+        project_id: str | None = None,
     ) -> dict[str, Any]:
         with self._connect() as connection:
             conversation_id = run_id
@@ -301,7 +302,7 @@ CREATE INDEX IF NOT EXISTS idx_interrupt_run
                 turn_index = int(parent["turn_index"] or 1) + 1
             connection.execute(
                 "INSERT INTO runs(id, objective, workspace_root, parent_run_id, "
-                "conversation_id, turn_index, status) VALUES (?, ?, ?, ?, ?, ?, 'queued')",
+                "conversation_id, turn_index, project_id, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued')",
                 (
                     run_id,
                     objective,
@@ -309,6 +310,7 @@ CREATE INDEX IF NOT EXISTS idx_interrupt_run
                     parent_run_id,
                     conversation_id,
                     turn_index,
+                    project_id or '',
                 ),
             )
         return self.get_run(run_id) or {}

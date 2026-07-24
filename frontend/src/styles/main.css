@@ -239,7 +239,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 3px
 .orchestrator-event p { margin: 5px 0 0; color: var(--secondary); font-size: .625rem; line-height: 1.55; white-space: pre-wrap; }
 .orchestrator-event.planning-active { margin: 3px 0 12px; padding: 12px 14px; border: 1px solid rgba(10,132,255,.2); border-radius: 12px; background: rgba(10,132,255,.08); }
 .orchestrator-event.planning-active .flow-event-icon { top: 9px; left: -40px; animation: planner-pulse 1.8s ease-in-out infinite; }
-.planning-progress { position: relative; height: 3px; margin-top: 10px; overflow: hidden; border-radius: 2px; background: rgba(10,132,255,.13); }
+.planning-progress { position: relative; height: 3px; margin-top: 10px; overflow: hidden; border-radius: 2px; background: rgba(10,132,255,.18); border: 1px solid rgba(10,132,255,.12); }
 .planning-progress i { position: absolute; width: 34%; height: 100%; border-radius: inherit; background: linear-gradient(90deg, transparent, #64d2ff, transparent); animation: planner-progress 1.7s ease-in-out infinite; }
 .run-failure-detail { margin: 4px 0 10px; padding: 11px 13px; border: 1px solid rgba(255,69,58,.25); border-radius: 11px; background: rgba(255,69,58,.08); }
 .run-failure-detail .flow-event-icon { background: rgba(255,69,58,.14); color: var(--red); }

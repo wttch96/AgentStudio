@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Literal
-import uuid
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -29,7 +28,7 @@ class TaskDag(BaseModel):
 
     summary: str = Field(min_length=1, max_length=1000)
     coordination_contract: str = Field(default="", max_length=12_000)
-    tasks: list[DagTask] = Field(min_length=1, max_length=20)
+    tasks: list[DagTask] = Field(default_factory=list, min_length=0, max_length=20)
 
     @model_validator(mode="after")
     def validate_graph(self) -> "TaskDag":
@@ -103,6 +102,7 @@ class RunEvent(BaseModel):
 class CreateRunRequest(BaseModel):
     objective: str = Field(min_length=2, max_length=20_000)
     parent_run_id: str | None = Field(default=None, min_length=1, max_length=100)
+    project_id: str | None = Field(default=None)
 
 
 # ==================== 分层记忆模型 ====================
@@ -147,4 +147,123 @@ class AgentMemoryState(BaseModel):
 
 
 class PlannerMemoryState(BaseModel):
-    """主脑�
+    """主脑的完整记忆状态"""
+    conversation_id: str
+    task_history_count: int = 0
+    decision_log: list[dict[str, Any]] = Field(default_factory=list)
+    agent_capability_notes: dict[str, Any] = Field(default_factory=dict)
+    project_structure_notes: dict[str, Any] = Field(default_factory=dict)
+    contract_history: list[str] = Field(default_factory=list)
+    last_updated: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+
+
+# ==================== 中断机制模型 ====================
+
+class InterruptTarget(str, Enum):
+    ALL = 'all'
+    AGENT = 'agent'
+    PLANNER = 'planner'
+
+
+class InterruptAction(str, Enum):
+    PAUSE = 'pause'
+    INJECT = 'inject'
+    REPLAN = 'replan'
+    ABORT = 'abort'
+    RESUME = 'resume'
+
+
+class InterruptCommand(BaseModel):
+    """用户发送的中断指令"""
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    run_id: str
+    target: InterruptTarget
+    action: InterruptAction
+    target_agent: str | None = None
+    target_task: str | None = None
+    instruction: str = ''
+    created_at: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+
+
+class InterruptDecision(BaseModel):
+    """中断处理决策"""
+    command_id: str
+    decision: Literal['apply', 'discard', 'defer']
+    modified_instruction: str = ''
+    target_nodes: list[str] = Field(default_factory=list)
+
+
+class KnowledgeEntry(BaseModel):
+    """知识库条目"""
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    title: str = Field(min_length=1, max_length=500)
+    content: str = Field(min_length=1, max_length=50000)
+    category: str = Field(default="general")
+    tags: list[str] = Field(default_factory=list)
+    source: str = ""
+    score: float = 0.0
+    expires_at: str | None = None
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+class KnowledgeRelation(BaseModel):
+    """知识关联"""
+    source_id: str
+    target_id: str
+    relation_type: str  # api_example / error_handling / dependency / related
+
+
+class KnowledgeFeedback(BaseModel):
+    """知识反馈"""
+    entry_id: str
+    feedback: Literal["up", "down"]
+
+
+# ==================== 多项目模型 ====================
+
+class Project(BaseModel):
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    name: str = Field(min_length=1, max_length=100)
+    root_dir: str = Field(min_length=1, max_length=4096)
+    description: str = ""
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+class ProjectAgent(BaseModel):
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    project_id: str
+    name: str = Field(min_length=1, max_length=64)
+    display_name: str = Field(min_length=1, max_length=100)
+    description: str = ""
+    template_id: str | None = None
+    agent_type: Literal["brain", "rag", "claude", "deepseek", "file-ops"]
+    sub_dir: str = ""
+    system_prompt: str = Field(min_length=10, max_length=30000)
+    tools: list[str] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
+    is_required: bool = False
+    sort_order: int = 0
+
+
+class AgentTemplate(BaseModel):
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    name: str = Field(min_length=1, max_length=64)
+    display_name: str = Field(min_length=1, max_length=100)
+    description: str = ""
+    category: str = Field(default="other")
+    agent_type: str = "claude"
+    default_sub_dir: str = ""
+    default_prompt: str = Field(min_length=10, max_length=30000)
+    default_tools: list[str] = Field(default_factory=list)
+    default_skills: list[str] = Field(default_factory=list)
+    is_builtin: bool = True
+
+
+class CreateProjectRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    root_dir: str = Field(min_length=1, max_length=4096)
+    description: str = ""
