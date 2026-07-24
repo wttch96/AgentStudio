@@ -90,6 +90,8 @@ class AgentRegistry:
                 for row in rows:
                     profiles = self.load_project_agents(row["project_id"])
                     for p in profiles.values():
+                        if p.agent_type in ("brain", "deepseek"):
+                            continue
                         result.append({
                             "id": p.id,
                             "name": p.name, "display_name": p.display_name,
@@ -97,7 +99,6 @@ class AgentRegistry:
                             "tools": list(p.tools), "skills": list(p.skills),
                             "skill_count": len(p.skills), "is_required": p.is_required,
                             "sub_dir": p.sub_dir, "project_id": row["project_id"],
-                            "agent_type": p.agent_type,
                         })
             return result
         profiles = self.load_project_agents(project_id)
@@ -115,7 +116,7 @@ class AgentRegistry:
                 "sub_dir": p.sub_dir,
             }
             for p in profiles.values()
-            if p.agent_type not in ("brain",)
+            if p.agent_type not in ("brain", "deepseek")
         ]
 
     def invalidate(self, project_id: str) -> None:

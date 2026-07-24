@@ -25,7 +25,7 @@ class Settings:
     frontend_port: int = 5173
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
-    deepseek_model: str = "deepseek-chat"
+    deepseek_model: str = "deepseek-v4-pro"
     # 仅用于本地费用估算，单位为美元 / 百万 token；价格变化时可通过 .env 覆盖。
     deepseek_cache_hit_price: float = 0.0028
     deepseek_cache_miss_price: float = 0.14
@@ -78,7 +78,7 @@ class Settings:
             frontend_port=int(os.getenv("FRONTEND_PORT", "5173")),
             deepseek_api_key=os.getenv("DEEPSEEK_API_KEY", ""),
             deepseek_base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
-            deepseek_model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
+            deepseek_model=os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro"),
             deepseek_cache_hit_price=float(
                 os.getenv("DEEPSEEK_CACHE_HIT_PRICE_USD_PER_MILLION", "0.0028")
             ),

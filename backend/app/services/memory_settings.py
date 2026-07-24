@@ -12,7 +12,7 @@ from app.domain.configuration import MemoryConfiguration
 DEFAULT_MEMORY_CONFIG = MemoryConfiguration(
     compress_trigger_tokens=8000,
     compress_keep_recent=20,
-    summarizer_model="deepseek-chat",
+    summarizer_model="deepseek-v4-pro",
     max_conversation_turns=100,
     session_archive_after_hours=24,
     importance_decay_rate=0.95,

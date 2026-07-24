@@ -2,7 +2,7 @@
 
 提供 copy/move/delete/read/write/list/search 等标准文件操作，
 通过 DeepSeek 推理自主组合工具完成任务。
-工具记录、事件发送等接口与现有 ClaudeAgentExecutor / DeepSeekAgentExecutor 完全一致。
+工具记录、事件发送等接口与现有 ClaudeAgentExecutor 完全一致。
 """
 
 from __future__ import annotations

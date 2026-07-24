@@ -148,7 +148,7 @@ class SQLiteStore:
                     display_name TEXT NOT NULL,
                     description TEXT DEFAULT '',
                     template_id TEXT,
-                    agent_type TEXT NOT NULL CHECK(agent_type IN ('brain','rag','claude','deepseek')),
+                    agent_type TEXT NOT NULL CHECK(agent_type IN ('brain','rag','claude','file-ops')),
                     sub_dir TEXT DEFAULT '',
                     system_prompt TEXT NOT NULL,
                     tools TEXT NOT NULL DEFAULT '[]',
@@ -413,7 +413,16 @@ CREATE INDEX IF NOT EXISTS idx_interrupt_run
     def list_runs(self, limit: int = 50) -> list[dict[str, Any]]:
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT * FROM runs ORDER BY created_at DESC, rowid DESC LIMIT ?", (limit,)
+                "SELECT * FROM runs WHERE parent_run_id IS NULL ORDER BY created_at DESC, rowid DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_runs_by_conversation(self, conversation_id: str) -> list[dict[str, Any]]:
+        """按 conversation_id 获取所有关联 runs，按 turn_index 排序。"""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM runs WHERE conversation_id = ? ORDER BY turn_index ASC",
+                (conversation_id,),
             ).fetchall()
         return [dict(row) for row in rows]
 

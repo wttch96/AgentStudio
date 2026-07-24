@@ -2,9 +2,8 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import AgentInspector from './components/AgentInspector.vue'
 import AppHeader from './components/AppHeader.vue'
-import DagGraph from './components/DagGraph.vue'
+import DagModal from './components/DagModal.vue'
 import StreamingChat from './components/StreamingChat.vue'
-import ThinkingTimeline from './components/ThinkingTimeline.vue'
 import PromptComposer from './components/PromptComposer.vue'
 import RunSidebar from './components/RunSidebar.vue'
 import ConfigCenter from './components/config/ConfigCenter.vue'
@@ -20,9 +19,8 @@ const showProjectDialog = ref(false)
 const leftPanelOpen = ref(true)
 const rightPanelOpen = ref(true)
 
-// DAG and timeline panel visibility
-const showDagPanel = ref(true)
-const showTimelinePanel = ref(true)
+// DAG modal
+const showDagModal = ref(false)
 
 // Project state
 const projects = ref<Project[]>([])
@@ -86,6 +84,13 @@ async function configurationSaved() {
   await workspace.refreshConfiguration()
 }
 
+// Conversation-aware summary for DAG button
+const dagStats = computed(() => {
+  const tasks = workspace.plan.value
+  const turns = workspace.state.conversationTurns
+  return `${turns.length}轮 ${tasks.length}任务`
+})
+
 onMounted(async () => {
   await loadProjects()
   if (projects.value.length > 0) {
@@ -122,14 +127,15 @@ onMounted(async () => {
 
     <main class="workspace">
       <div v-if="workspace.state.error" class="error-banner" role="alert">
-        <strong>连接出现问题</strong>
+        <strong>出错</strong>
         <span>{{ workspace.state.error }}</span>
+        <button type="button" class="error-dismiss" @click="workspace.state.error = ''" title="关闭">×</button>
       </div>
 
       <!-- No project selected -->
       <template v-if="!currentProject">
         <section class="welcome-panel">
-          <div class="welcome-symbol">&#x1F4E6;</div>
+          <div class="welcome-symbol">📦</div>
           <h2>欢迎使用 Agent Studio</h2>
           <p>选择一个项目开始，或创建新项目来配置 Agent 团队。</p>
           <div class="suggestion-grid">
@@ -157,10 +163,12 @@ onMounted(async () => {
           <!-- 历史对话 -->
           <StreamingChat
             :turns="workspace.state.conversationTurns"
+            :events="workspace.state.conversationEvents"
             :streaming="workspace.state.streamingState"
             :active-run-id="null"
             :is-running="false"
             @fork="forkRun"
+            @show-dag="showDagModal = true"
           />
 
           <section class="welcome-panel" style="min-height:120px">
@@ -171,77 +179,40 @@ onMounted(async () => {
           </section>
         </template>
 
-        <!-- 有活跃运行：流式对话 + 面板 -->
+        <!-- 有活跃运行：流式对话 -->
         <template v-else>
           <div class="run-status-bar">
-            <span class="eyebrow">
-              正在执行: {{ workspace.state.activeRun.objective.slice(0, 60) }}{{ workspace.state.activeRun.objective.length > 60 ? '…' : '' }}
-            </span>
-            <button class="stop-button" type="button" @click="workspace.cancelActiveRun()">
-              <span aria-hidden="true">&#x25A0;</span> 停止任务
-            </button>
+            <div class="run-status-left">
+              <span class="eyebrow">
+                正在执行: {{ workspace.state.activeRun.objective.slice(0, 60) }}{{ workspace.state.activeRun.objective.length > 60 ? '…' : '' }}
+              </span>
+            </div>
+            <div class="run-status-right">
+              <button
+                type="button"
+                class="dag-trigger-btn"
+                @click="showDagModal = true"
+                title="查看完整任务流程图"
+              >
+                <span aria-hidden="true">◇</span> DAG
+                <span class="dag-trigger-badge">{{ dagStats }}</span>
+              </button>
+              <button class="stop-button" type="button" @click="workspace.cancelActiveRun()">
+                <span aria-hidden="true">■</span> 停止任务
+              </button>
+            </div>
           </div>
 
           <!-- 主对话区域 -->
           <StreamingChat
             :turns="workspace.state.conversationTurns"
+            :events="workspace.state.conversationEvents"
             :streaming="workspace.state.streamingState"
             :active-run-id="workspace.state.activeRun?.id ?? null"
             :is-running="workspace.isRunning.value"
             @fork="forkRun"
+            @show-dag="showDagModal = true"
           />
-
-          <!-- 面板切换栏 -->
-          <div class="panel-toggle-bar">
-            <button
-              type="button"
-              class="panel-toggle-btn"
-              :class="{ active: showDagPanel }"
-              @click="showDagPanel = !showDagPanel"
-            >
-              <span aria-hidden="true">{{ showDagPanel ? '⌃' : '⌄' }}</span>
-              任务流程图
-              <span class="panel-toggle-badge">{{ workspace.plan.value.length }} 节点</span>
-            </button>
-            <button
-              type="button"
-              class="panel-toggle-btn"
-              :class="{ active: showTimelinePanel }"
-              @click="showTimelinePanel = !showTimelinePanel"
-            >
-              <span aria-hidden="true">{{ showTimelinePanel ? '⌃' : '⌄' }}</span>
-              思考流程
-              <span class="panel-toggle-badge">{{ workspace.state.events.length }} 事件</span>
-            </button>
-          </div>
-
-          <!-- DAG 图面板 -->
-          <div v-if="showDagPanel" class="dag-panel-wrapper">
-            <DagGraph
-              :tasks="workspace.plan.value"
-              :contract="workspace.planContract.value"
-              :events="workspace.state.events"
-              :turns="workspace.state.conversationTurns"
-              :memory-compactions="workspace.state.memoryCompactions"
-            />
-          </div>
-
-          <!-- 思考流程面板 -->
-          <div v-if="showTimelinePanel" class="timeline-panel-wrapper">
-            <ThinkingTimeline
-              :key="workspace.state.activeRun?.id"
-              :tasks="workspace.plan.value"
-              :events="workspace.state.events"
-              :turns="workspace.state.conversationTurns"
-              :memory-compactions="workspace.state.memoryCompactions"
-            />
-          </div>
-
-          <!-- 最终汇总 -->
-          <section v-if="workspace.state.activeRun.final_answer && !showTimelinePanel" class="final-answer">
-            <span class="eyebrow">最终汇总</span>
-            <pre>{{ workspace.state.activeRun.final_answer }}</pre>
-          </section>
         </template>
 
         <!-- 底部输入框始终存在 -->
@@ -272,7 +243,7 @@ onMounted(async () => {
 
     <AgentInspector
       :agents="workspace.state.agents"
-      :events="workspace.state.events"
+      :events="[...workspace.state.conversationEvents, ...workspace.state.events]"
       :deepseek-balance="workspace.state.deepseekBalance"
       :deepseek-usage="workspace.state.deepseekUsage"
       :balance-loading="workspace.state.balanceLoading"
@@ -295,6 +266,17 @@ onMounted(async () => {
       @created="onProjectCreated"
       @close="showProjectDialog = false; workspace.refreshConfiguration()"
     />
+
+    <!-- DAG Modal -->
+    <DagModal
+      :visible="showDagModal"
+      :tasks="workspace.plan.value"
+      :events="[...workspace.state.conversationEvents, ...workspace.state.events]"
+      :contract="workspace.planContract.value"
+      :turns="workspace.state.conversationTurns"
+      :memory-compactions="workspace.state.memoryCompactions"
+      @close="showDagModal = false"
+    />
   </div>
 </template>
 
@@ -307,65 +289,47 @@ onMounted(async () => {
   max-width: var(--content-width);
   margin: 0 auto 0.5rem;
   width: 100%;
+  flex-shrink: 0;
+  overflow: hidden;
 }
 
-/* Panel toggle bar */
-.panel-toggle-bar {
-  display: flex;
-  gap: 0.5rem;
-  max-width: var(--content-width);
-  margin: 0.75rem auto 0;
-  width: 100%;
-}
-
-.panel-toggle-btn {
+.run-status-left {
   display: flex;
   align-items: center;
-  gap: 0.35rem;
-  border: 0;
+}
+
+.run-status-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* DAG trigger button */
+.dag-trigger-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 12px;
+  border: 1px solid rgba(10, 132, 255, 0.25);
   border-radius: 8px;
-  padding: 0.45rem 0.75rem;
-  background: var(--surface);
-  color: var(--secondary);
-  cursor: pointer;
+  background: rgba(10, 132, 255, 0.08);
+  color: #64d2ff;
   font-size: 0.65rem;
   font-weight: 550;
-  border: 1px solid var(--separator-soft);
-  transition: background 0.15s, color 0.15s;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
 }
 
-.panel-toggle-btn:hover {
-  background: var(--surface-hover);
-  color: var(--label);
+.dag-trigger-btn:hover {
+  background: rgba(10, 132, 255, 0.16);
+  border-color: rgba(10, 132, 255, 0.45);
 }
 
-.panel-toggle-btn.active {
-  background: var(--blue-soft);
-  color: #64d2ff;
-  border-color: rgba(10, 132, 255, 0.25);
-}
-
-.panel-toggle-badge {
-  font-size: 0.55rem;
-  padding: 0.1rem 0.35rem;
+.dag-trigger-badge {
+  font-size: 0.5rem;
+  padding: 1px 5px;
   border-radius: 4px;
-  background: rgba(118, 118, 128, 0.18);
-}
-
-.panel-toggle-btn.active .panel-toggle-badge {
-  background: rgba(10, 132, 255, 0.18);
-}
-
-/* Panel wrappers */
-.dag-panel-wrapper,
-.timeline-panel-wrapper {
-  max-width: var(--content-width);
-  margin: 0.5rem auto 0;
-  width: 100%;
-}
-
-/* Adjust workspace padding: less bottom padding since chat fills the space */
-.workspace {
-  padding-bottom: 175px;
+  background: rgba(10, 132, 255, 0.15);
+  color: #64d2ff;
 }
 </style>

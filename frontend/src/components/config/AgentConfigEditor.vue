@@ -36,7 +36,7 @@ function reset() {
 }
 
 function agentTypeLabel(t: string) {
-  return t === 'claude' ? 'Claude Agent (SDK)' : t === 'rag' ? 'RAG Agent' : t === 'deepseek' ? 'DeepSeek Agent (LangChain)' : 'Agent'
+  return t === 'claude' ? 'Claude Agent (SDK)' : t === 'rag' ? 'RAG Agent' : t === 'file-ops' ? '文件操作 Agent' : 'Agent'
 }
 
 async function select(name: string) {

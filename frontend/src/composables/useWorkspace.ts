@@ -18,7 +18,7 @@ import type {
 interface WorkspaceState {
   runs: Run[]
   activeRun: Run | null
-  events: RunEvent[]
+  events: RunEvent[]          // 当前活跃 run 的事件（兼容旧引用）
   projectId: string
   projectName: string
   agents: AgentProfile[]
@@ -31,7 +31,11 @@ interface WorkspaceState {
   submitting: boolean
   error: string
   taskQueue: { id: string; objective: string }[]
-  // 新增：派生状态
+  // 新增：conversation 级别状态
+  conversationRootId: string | null
+  conversationRuns: Run[]
+  conversationEvents: RunEvent[]
+  // 派生状态
   conversationTurns: ConversationTurn[]
   streamingState: StreamingState
   memoryCompactions: MemoryCompactionRecord[]
@@ -56,7 +60,10 @@ const state = reactive<WorkspaceState>({
   submitting: false,
   error: '',
 
-  // 新增派生状态初始化
+  conversationRootId: null,
+  conversationRuns: [],
+  conversationEvents: [],
+
   conversationTurns: [],
   streamingState: {
     activeTurnId: null,
@@ -97,7 +104,11 @@ export function useWorkspace() {
 
   async function refreshConfiguration() {
     try {
-      const [agents, skills, status] = await Promise.all([api.agents(state.projectId || undefined), api.skills(state.projectId || undefined), api.status()])
+      const [agents, skills, status] = await Promise.all([
+        api.agents(state.projectId || undefined),
+        api.skills(state.projectId || undefined),
+        api.status(),
+      ])
       state.agents = agents
       state.skills = skills
       state.status = status
@@ -130,7 +141,35 @@ export function useWorkspace() {
     }
   }
 
-  // ==================== 派生状态：从 events 重建对话轮次 ====================
+  // ==================== Conversation 级别事件加载 ====================
+
+  async function loadConversationEvents(conversationId: string) {
+    try {
+      const data = await api.conversation(conversationId)
+      const allEvents: RunEvent[] = []
+      const allRuns: Run[] = []
+      for (const run of data.runs) {
+        allRuns.push(run as Run)
+        for (const ev of run.events) {
+          allEvents.push(ev)
+        }
+      }
+      state.conversationRuns = allRuns.sort(
+        (a, b) => (a.turn_index || 1) - (b.turn_index || 1),
+      )
+      state.conversationEvents = deduplicate(allEvents)
+      state.conversationRootId = data.runs[0]?.id || null
+      // 保持 events 引用指向当前活跃 run 的事件
+      const active = state.conversationRuns.find(r => r.id === state.activeRun?.id)
+      if (active) {
+        state.events = allEvents.filter(e => e.run_id === active.id)
+      }
+    } catch {
+      // 静默处理：可能后台还没启动
+    }
+  }
+
+  // ==================== 派生状态：从 conversation events 重建对话轮次 ====================
 
   function deriveConversationTurns(runs: Run[], events: RunEvent[]): ConversationTurn[] {
     // 按 run_id 分组 events
@@ -149,28 +188,34 @@ export function useWorkspace() {
       const planEvent = sorted.find((e) => e.type === 'plan.created')
       const planTasks: PlanTask[] = (planEvent?.payload.tasks as PlanTask[] | undefined) ?? []
 
-      // 提取思考文本（plan.created 事件的 summary 或 planner 相关信息）
+      // 提取思考文本 — 收集主脑的全部规划输出
       const plannerStarted = sorted.find((e) => e.type === 'planner.started')
-      const contractEvent = sorted.find((e) => e.type === 'brain.contract_created')
       const thinkingParts: string[] = []
       if (plannerStarted) thinkingParts.push('DeepSeek 主脑规划中…')
       if (planEvent) {
-        const stage = planEvent.payload.stage || 'execution'
         const summary = planEvent.payload.summary as string | undefined
         if (summary) thinkingParts.push(summary)
+        const contract = planEvent.payload.coordination_contract as string | undefined
+        if (contract) thinkingParts.push('共享契约：\n' + contract)
         thinkingParts.push(`生成 ${planTasks.length} 个任务`)
       }
-      if (contractEvent?.payload.text) {
-        thinkingParts.push('已生成共享接口契约')
+      // 收集 agent 执行过程中的所有文本输出作为思考过程
+      for (const e of sorted) {
+        if (e.type === 'agent.message' && typeof e.payload?.text === 'string') {
+          const txt = (e.payload.text as string).slice(0, 500)
+          if (txt.trim()) thinkingParts.push(`[${e.agent_id || 'agent'}]: ${txt}`)
+        }
       }
       const thinkingText = thinkingParts.length ? thinkingParts.join('\n') : null
 
-      // 提取大脑响应
+      // 提取大脑响应 — 包含主脑的最终汇总
       const summaryEvent = sorted.find((e) => e.type === 'run.summary')
       const brainSynthesizing = sorted.find((e) => e.type === 'brain.synthesizing')
+      const planSummary = (planEvent?.payload.summary as string) || ''
       const brainResponse = run.final_answer
         || (summaryEvent?.payload.text as string)
         || (brainSynthesizing?.payload.text as string)
+        || planSummary
         || null
 
       // 提取记忆压缩事件
@@ -251,8 +296,13 @@ export function useWorkspace() {
   }
 
   function refreshDerivedState() {
-    state.conversationTurns = deriveConversationTurns(state.runs, state.events)
-    state.memoryCompactions = state.events
+    // 使用 conversation 级别数据计算对话轮次
+    state.conversationTurns = deriveConversationTurns(
+      state.conversationRuns.length ? state.conversationRuns : (state.activeRun ? [state.activeRun] : []),
+      state.conversationEvents.length ? state.conversationEvents : state.events,
+    )
+    const allEvents = state.conversationEvents.length ? state.conversationEvents : state.events
+    state.memoryCompactions = allEvents
       .filter((e) => e.type === 'memory.compacted')
       .map((e) => ({
         wave: (e.payload.wave as number) || 0,
@@ -261,7 +311,7 @@ export function useWorkspace() {
         tokenCountAfter: (e.payload.token_count_after as number) || null,
         timestamp: e.timestamp,
       }))
-    state.activeAgents = deriveActiveAgents(state.events, plan.value)
+    state.activeAgents = deriveActiveAgents(allEvents, plan.value)
   }
 
   // ==================== 事件处理：处理所有事件类型更新派生状态 ====================
@@ -293,13 +343,20 @@ export function useWorkspace() {
           state.activeRun.status = terminal as Run['status']
           const text = event.payload.text
           if (typeof text === 'string') state.activeRun.final_answer = text
+          // 失败时提取错误原因
+          if (terminal === 'failed') {
+            const errorDetail = (event.payload.error as string) || (event.payload.summary as string) || event.payload.text as string || ''
+            if (typeof errorDetail === 'string' && errorDetail) {
+              state.error = errorDetail
+            }
+          }
           replaceRun(state.activeRun)
         }
         state.streamingState.isStreaming = false
         closeStream()
         void refreshDeepSeekBalance()
         void refreshDeepSeekUsage()
-        // 自动推进队列中的下一个任务
+        // 自动推进队列中的下一个任务 — 作为当前 conversation 的下一轮
         if (state.taskQueue.length > 0) {
           const next = state.taskQueue.shift()!
           void _startRun(next.objective)
@@ -325,6 +382,18 @@ export function useWorkspace() {
       const run = await api.run(runId)
       state.activeRun = run
       state.events = deduplicate(run.events)
+
+      // 加载同一 conversation 的所有 runs
+      const conversationId = run.conversation_id || run.id
+      if (run.conversation_runs && run.conversation_runs.length > 1) {
+        // 后端已附带 conversation 摘要，完整加载
+        await loadConversationEvents(conversationId)
+      } else {
+        state.conversationRuns = [run]
+        state.conversationEvents = [...state.events]
+        state.conversationRootId = null
+      }
+
       // 初始化流式状态
       state.streamingState = {
         activeTurnId: `turn-${run.id}`,
@@ -341,10 +410,35 @@ export function useWorkspace() {
 
   async function _startRun(objective: string) {
     try {
-      const run = await api.createRun(objective, state.activeRun?.id, state.projectId || undefined)
-      state.runs.unshift(run)
+      // 关键：如果有 conversation 上下文，以最后一轮为 parent 继续
+      let parentRunId: string | undefined
+      if (state.conversationRuns.length > 0) {
+        // 找到最后一个终态的 run
+        const lastDone = [...state.conversationRuns]
+          .reverse()
+          .find(r => ['completed', 'failed', 'cancelled'].includes(r.status))
+        parentRunId = lastDone?.id ?? state.activeRun?.id
+      } else if (state.activeRun && ['completed', 'failed', 'cancelled'].includes(state.activeRun.status)) {
+        parentRunId = state.activeRun.id
+      }
+
+      const run = await api.createRun(objective, parentRunId, state.projectId || undefined)
+      // 继续对话的轮次属于同一 conversation，不产生新的侧边栏条目
+      if (!parentRunId) {
+        state.runs.unshift(run)
+      }
       state.activeRun = run
       state.events = []
+
+      // 维护 conversation 状态
+      if (state.conversationRuns.length > 0) {
+        state.conversationRuns.push(run)
+      } else {
+        state.conversationRuns = [run]
+      }
+      state.conversationEvents = [...(state.conversationEvents.length ? state.conversationEvents : [])]
+      state.conversationRootId = state.conversationRuns[0].id
+
       state.streamingState = {
         activeTurnId: `turn-${run.id}`,
         thinkingText: '',
@@ -393,14 +487,17 @@ export function useWorkspace() {
     if (idx < 0) return
     const item = state.taskQueue[idx]
     state.taskQueue.splice(idx, 1)
-    // Cancel current and start this one (as continuation of same conversation)
     cancelActiveRun().then(() => _startRun(item.objective))
   }
 
   function beginNewRun() {
+    // 开始全新 conversation
     closeStream()
     state.activeRun = null
     state.events = []
+    state.conversationRuns = []
+    state.conversationEvents = []
+    state.conversationRootId = null
     state.streamingState = {
       activeTurnId: null,
       thinkingText: '',
@@ -428,6 +525,9 @@ export function useWorkspace() {
       await api.deleteRun(runId)
       const deletingActive = state.activeRun?.id === runId
       state.runs = state.runs.filter((run) => run.id !== runId)
+      // 从 conversation runs 中移除
+      state.conversationRuns = state.conversationRuns.filter(r => r.id !== runId)
+
       if (!deletingActive) {
         refreshDerivedState()
         return
@@ -443,6 +543,7 @@ export function useWorkspace() {
         isStreaming: false,
       }
       if (state.runs[0]) await selectRun(state.runs[0].id)
+      else beginNewRun()
     } catch (error) {
       state.error = error instanceof Error ? error.message : '删除运行失败'
     }
@@ -459,6 +560,13 @@ export function useWorkspace() {
       if (!state.events.some((item) => item.sequence === event.sequence)) {
         state.events.push(event)
       }
+      // 始终同步到 conversation events（保持 conversation 上下文完整）
+      const convIdx = state.conversationEvents.findIndex(
+        e => e.run_id === event.run_id && e.sequence === event.sequence,
+      )
+      if (convIdx < 0) {
+        state.conversationEvents.push(event)
+      }
       applyAllEvents(event)
     })
     eventSource.onerror = () => {
@@ -473,6 +581,15 @@ export function useWorkspace() {
       state.activeRun = run
       state.events = deduplicate([...state.events, ...run.events])
       replaceRun(run)
+      // 同步更新 conversation events
+      if (state.conversationEvents.length > 0) {
+        const convIds = new Set(state.conversationEvents.map(e => `${e.run_id}:${e.sequence}`))
+        for (const ev of run.events) {
+          if (!convIds.has(`${ev.run_id}:${ev.sequence}`)) {
+            state.conversationEvents.push(ev)
+          }
+        }
+      }
       refreshDerivedState()
       if (['completed', 'failed', 'cancelled'].includes(run.status)) closeStream()
     } catch {
@@ -483,6 +600,9 @@ export function useWorkspace() {
   function replaceRun(run: Run) {
     const index = state.runs.findIndex((item) => item.id === run.id)
     if (index >= 0) state.runs[index] = run
+    // 同步更新 conversation runs
+    const convIdx = state.conversationRuns.findIndex(item => item.id === run.id)
+    if (convIdx >= 0) state.conversationRuns[convIdx] = run
   }
 
   function closeStream() {
@@ -499,7 +619,7 @@ export function useWorkspace() {
   // ==================== 计算属性 ====================
 
   const latestPlanEvent = computed(() =>
-    [...state.events].reverse().find((item) => item.type === 'plan.created'),
+    [...state.conversationEvents, ...state.events].reverse().find((item) => item.type === 'plan.created'),
   )
   const plan = computed<PlanTask[]>(() =>
     (latestPlanEvent.value?.payload.tasks as PlanTask[] | undefined) ?? [],
@@ -509,7 +629,9 @@ export function useWorkspace() {
     return typeof value === 'string' ? value : ''
   })
 
-  const agentEvents = computed(() => state.events.filter((event) => event.agent_id))
+  const agentEvents = computed(() =>
+    [...state.conversationEvents, ...state.events].filter((event) => event.agent_id),
+  )
   const isRunning = computed(() => ['queued', 'running'].includes(state.activeRun?.status ?? ''))
 
   onBeforeUnmount(closeStream)

@@ -35,7 +35,6 @@ class RunManager:
         scheduler_settings: SchedulerSettings,
         memory_manager: MemoryManager | None = None,
         interrupt_router: InterruptRouter | None = None,
-        deepseek_executor=None,
         rag_executor=None,
         file_agent_executor=None,
     ) -> None:
@@ -47,7 +46,6 @@ class RunManager:
         self.scheduler_settings = scheduler_settings
         self.memory_manager = memory_manager
         self.interrupt_router = interrupt_router
-        self.deepseek_executor = deepseek_executor
         self.rag_executor = rag_executor
         self.file_agent_executor = file_agent_executor
         self._cancel_events: dict[str, threading.Event] = {}
@@ -212,7 +210,7 @@ class RunManager:
             except Exception:
                 pass
 
-            graph = build_graph(self.planner, self.executor, self.events, cancel_event, None, interrupt_router, memory_manager, project_agents, deepseek_executor=self.deepseek_executor, rag_executor=self.rag_executor, file_agent_executor=self.file_agent_executor)
+            graph = build_graph(self.planner, self.executor, self.events, cancel_event, None, interrupt_router, memory_manager, project_agents, rag_executor=self.rag_executor, file_agent_executor=self.file_agent_executor)
             output = graph.invoke(
                 {
                     "run_id": run_id,

@@ -104,19 +104,6 @@ BUILTIN_TEMPLATES = [
         "default_skills": [],
         "is_builtin": 1,
     },
-    {
-        "id": "deepseek-agent-template",
-        "name": "deepseek-agent",
-        "display_name": "DeepSeek 编码 Agent",
-        "description": "基于 LangChain 的 DeepSeek 通用 Agent，支持工具调用和代码生成",
-        "category": "backend",
-        "agent_type": "deepseek",
-        "default_sub_dir": "",
-        "default_prompt": "你是 DeepSeek 编程助手，负责代码实现、调试、测试和文档编写。使用可用的工具自主完成任务，结束时简洁说明结果、修改文件和验证情况。",
-        "default_tools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
-        "default_skills": [],
-        "is_builtin": 1,
-    },
 ]
 
 
@@ -218,9 +205,10 @@ class ProjectManager:
                     99,  # default sort_order
                 ),
             )
-        return dict(conn.execute(
-            "SELECT * FROM project_agents WHERE id = ?", (aid,)
-        ).fetchone())
+            row = conn.execute(
+                "SELECT * FROM project_agents WHERE id = ?", (aid,)
+            ).fetchone()
+        return dict(row) if row else None
 
     def update_agent(self, project_id: str, agent_id: str, updates: dict) -> dict | None:
         allowed = {"display_name", "description", "system_prompt", "tools",

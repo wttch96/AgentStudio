@@ -18,23 +18,28 @@ STRUCTURE_GUARD_BASE = """
 
 ## 输出规则（首要）
 
-如果用户的请求是以下类型，**必须直接输出纯文本回复**，不需要 JSON，不需要创建任务：
+如果用户的请求是以下类型，你**必须只输出纯文本回复**，绝不输出 JSON，绝不创建任务：
 - 闲聊对话（"你好"、"你是谁"、"今天怎么样"）
 - 概念解释（"什么是 xxx"、"解释一下 xxx"）
 - 能从训练数据直接回答的知识性问题
-- 对计划/结果的追问澄清
-- 纯分析建议，不涉及代码读写
+- 对已有执行结果的追问、澄清、分析或总结
+- 纯分析建议，不涉及代码读写、文件操作或命令执行
 
-**只有在确实需要 Agent 执行具体操作时**，才输出 JSON 任务图。
+**只有在用户目标明确要求执行具体操作时**，才输出 JSON 任务图：
+- 读取/写入/编辑代码文件
+- 运行命令或测试
+- 检索知识库
+- 搜索文件内容
+- 目录浏览和文件管理
 
 需要 Agent 操作时输出任务图，严格遵守以下协议：
 
 1. 只使用可用 Agent 列表中列出的精确名称，不要编造 agent 名。
-2. 分析和编码任务分配给 Claude/DeepSeek Agent；RAG Agent 随时可用于检索或存储知识。
+2. 分析和编码任务分配给 Claude/DeepSeek/文件操作 Agent；RAG Agent 用于知识检索。
 3. 主脑自主决策何时读写 RAG——可以在任务前检索已有知识，也可以在任务后存储新发现。
 4. 用户说"先...然后..."/"再..."时，then 后的任务 depends_on 于前面的任务。
 5. 无真实依赖的任务可以并行；有数据或逻辑依赖时建立 depends_on。
-6. write_scope 使用 Agent 声明的工作目录，没有工作目录的 Agent 不限制写入范围。
+6. write_scope 使用 Agent 声明的工作子目录，没有工作目录的 Agent 不限制写入范围。
 7. 每个 Agent 自己完成测试和自检，不创建独立测试 Agent。
 8. 不要把跨领域工作全部塞给一个 Agent；与目标无关的 Agent 不要调用。
 9. 上游上下文是已有任务的延续，结合上游理解指代；不要重复已完成的工作。
@@ -49,7 +54,7 @@ def _fallback_dag(objective: str, project_agents: list | None = None) -> TaskDag
     agent = "brain"
     if project_agents:
         for a in project_agents:
-            if getattr(a, 'agent_type', '') in ('claude', 'deepseek'):
+            if getattr(a, 'agent_type', '') in ('claude',):
                 agent = getattr(a, 'name', 'brain')
                 break
     return TaskDag(
@@ -174,11 +179,14 @@ class DeepSeekPlanner:
                     "role": "system",
                     "content": (
                         f"{brain.orchestration_prompt}\n\n"
-                        "【重要】你是主脑，不是执行 Agent。对于简单问答/概念解释/闲聊，直接输出纯文本，绝不输出 JSON。\n"
+                        "【最重要规则】你是主脑编排器，不是执行 Agent。\n"
+                        "用户问你问题、让你分析结果、闲聊、解释概念 → 直接纯文本回答，绝不输出 JSON。\n"
+                        "用户让你读写文件、运行命令、搜索代码、操作知识库 → 输出 JSON 任务图。\n"
+                        "拿不准时选择纯文本。\n\n"
                         f"{guard}\n\n"
-                        "【输出规则】\n"
-                        "- 不需要 Agent 操作 → 直接输出纯文本（一句话回答）\n"
-                        "- 需要 Agent 操作 → 输出纯 JSON 对象（不要用 markdown 包裹）\n"
+                        "【输出格式】\n"
+                        "- 纯文本回答：直接写中文/英文，一个自然段即可\n"
+                        "- JSON 任务图：直接写 { ... } 对象，不要用 ``` 包裹\n"
                     ),
                 },
                 {
@@ -190,8 +198,9 @@ class DeepSeekPlanner:
                         f"专业 Agent 的工作空间搜索与项目过滤结果：\n{discovery_context or '[]'}\n\n"
                         f"工作区结构索引（仅用于补充，不得覆盖 Agent 的过滤证据）：\n"
                         f"{self._workspace_context(workspace_root)}\n\n"
-                        f"现在判断：这个用户目标需要 Agent 执行具体操作（如读写文件/搜索/编码）吗？\n"
-                        f"如果不需要，请用纯文本直接回答用户。如果需要，请按以下 Schema 输出 JSON 任务图：\n"
+                        f"现在判断：用户是否要求执行具体操作？\n"
+                        f"如果没有 → 用纯文本直接回答（你说的话会直接展示给用户）。\n"
+                        f"如果有 → 按以下 Schema 输出 JSON 任务图（只包含必要的 Agent）：\n"
                         f"{json.dumps(schema, ensure_ascii=False)}"
                     ),
                 },
@@ -231,7 +240,7 @@ class DeepSeekPlanner:
             return None
         role_map = {
             "frontend-agent": ("claude", "vue-frontend", "react-frontend"),
-            "backend-agent": ("claude", "flask-backend", "springboot-backend", "deepseek-agent"),
+            "backend-agent": ("claude", "flask-backend", "springboot-backend"),
             "netty-agent": ("claude", "springboot-netty"),
         }
         candidates = role_map.get(role, ())
@@ -241,7 +250,7 @@ class DeepSeekPlanner:
                 return name
         # fallback: any claude agent for frontend/backend, any agent for others
         for a in project_agents:
-            if getattr(a, 'agent_type', '') in ('claude', 'deepseek'):
+            if getattr(a, 'agent_type', '') in ('claude',):
                 return getattr(a, 'name', None)
         return None
 

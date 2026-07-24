@@ -914,7 +914,7 @@ worker(state)
 | `FRONTEND_PORT` | `5173` | 前端端口（CORS 来源计算） |
 | `DEEPSEEK_API_KEY` | `""` | DeepSeek API 密钥 |
 | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | DeepSeek API 端点 |
-| `DEEPSEEK_MODEL` | `deepseek-chat` | DeepSeek 模型名 |
+| `DEEPSEEK_MODEL` | `deepseek-v4-pro` | DeepSeek 模型名 |
 | `DEEPSEEK_CACHE_HIT_PRICE_USD_PER_MILLION` | `0.0028` | 缓存命中价格（百万 token） |
 | `DEEPSEEK_CACHE_MISS_PRICE_USD_PER_MILLION` | `0.14` | 缓存未命中价格 |
 | `DEEPSEEK_OUTPUT_PRICE_USD_PER_MILLION` | `0.28` | 输出价格 |

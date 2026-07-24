@@ -7,7 +7,7 @@ const emit = defineEmits<{ saved: [] }>()
 const configuration = reactive<MemoryConfiguration>({
   compress_trigger_tokens: 8000,
   compress_keep_recent: 20,
-  summarizer_model: 'deepseek-chat',
+  summarizer_model: 'deepseek-v4-pro',
   max_conversation_turns: 100,
   session_archive_after_hours: 24,
   importance_decay_rate: 0.95,
@@ -106,7 +106,7 @@ onMounted(load)
           <div>
             <input v-model="configuration.summarizer_model" type="text" :disabled="loading" class="model-input" />
           </div>
-          <p>用于生成记忆摘要的 LLM 模型。默认 deepseek-chat，成本极低。</p>
+          <p>用于生成记忆摘要的 LLM 模型。默认 deepseek-v4-pro，成本极低。</p>
         </label>
       </div>
 

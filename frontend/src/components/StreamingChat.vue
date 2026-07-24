@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import type { ConversationTurn, StreamingState } from '../types'
+import type { ConversationTurn, PlanTask, RunEvent, StreamingState } from '../types'
 
 const props = defineProps<{
   turns: ConversationTurn[]
+  events: RunEvent[]
   streaming: StreamingState
   activeRunId: string | null
   isRunning: boolean
@@ -12,11 +13,13 @@ const props = defineProps<{
 const emit = defineEmits<{
   interrupt: []
   fork: [runId: string]
+  showDag: []
 }>()
 
 const chatScroll = ref<HTMLElement | null>(null)
 const thinkingCollapsed = ref<Set<string>>(new Set())
 const responseCollapsed = ref<Set<string>>(new Set())
+const taskDetailCollapsed = ref<Set<string>>(new Set())
 
 function toggleThinking(turnId: string) {
   const next = new Set(thinkingCollapsed.value)
@@ -30,6 +33,13 @@ function toggleResponse(turnId: string) {
   if (next.has(turnId)) next.delete(turnId)
   else next.add(turnId)
   responseCollapsed.value = next
+}
+
+function toggleTaskDetail(turnId: string) {
+  const next = new Set(taskDetailCollapsed.value)
+  if (next.has(turnId)) next.delete(turnId)
+  else next.add(turnId)
+  taskDetailCollapsed.value = next
 }
 
 function formatTime(ts: string): string {
@@ -52,11 +62,80 @@ function statusClass(status: string): string {
   return status === 'error' ? 'error' : status === 'complete' ? 'complete' : 'active'
 }
 
+// Task status helpers
+const agentEventTypes = new Set([
+  'agent.started', 'agent.message', 'tool.started', 'skill.loaded',
+  'agent.completed', 'agent.failed',
+])
+
+function taskStatusForTurn(turn: ConversationTurn, taskId: string): 'pending' | 'running' | 'completed' | 'failed' {
+  const evs = props.events.filter(e => e.run_id === turn.runId && e.task_id === taskId && agentEventTypes.has(e.type))
+  if (evs.some(e => e.type === 'agent.failed')) return 'failed'
+  if (evs.some(e => e.type === 'agent.completed')) return 'completed'
+  if (evs.some(e => e.type === 'agent.started')) return 'running'
+  return 'pending'
+}
+
+function taskTimingForTurn(turn: ConversationTurn, taskId: string): string {
+  const evs = props.events.filter(e => e.run_id === turn.runId && e.task_id === taskId && agentEventTypes.has(e.type))
+  const started = evs.find(e => e.type === 'agent.started')
+  if (!started) return ''
+  const completed = evs.find(e => e.type === 'agent.completed')
+  if (completed) {
+    const dur = (new Date(completed.timestamp).getTime() - new Date(started.timestamp).getTime()) / 1000
+    return `${dur.toFixed(1)}s`
+  }
+  const failed = evs.find(e => e.type === 'agent.failed')
+  if (failed) {
+    const dur = (new Date(failed.timestamp).getTime() - new Date(started.timestamp).getTime()) / 1000
+    return `${dur.toFixed(1)}s`
+  }
+  const elapsed = Math.floor((Date.now() - new Date(started.timestamp).getTime()) / 1000)
+  return `${elapsed}s`
+}
+
+function taskFailureReason(turn: ConversationTurn, taskId: string): string {
+  const evs = props.events.filter(e => e.run_id === turn.runId && e.task_id === taskId)
+  const failure = evs.find(e => e.type === 'agent.failed')
+  if (!failure) return ''
+  return (failure.payload.error as string) || (failure.payload.summary as string) || '未知错误'
+}
+
+// Group tasks by wave (dependency level) for vertical swimlane layout
+function groupTasksByWave(tasks: PlanTask[]): PlanTask[][] {
+  const byId = new Map(tasks.map(t => [t.id, t]))
+  const levels = new Map<string, number>()
+
+  function getLevel(task: PlanTask): number {
+    if (levels.has(task.id)) return levels.get(task.id)!
+    const deps = task.depends_on.map(id => byId.get(id)).filter(Boolean) as PlanTask[]
+    const lvl = deps.length ? Math.max(...deps.map(getLevel)) + 1 : 0
+    levels.set(task.id, lvl)
+    return lvl
+  }
+
+  tasks.forEach(getLevel)
+  const groups = new Map<number, PlanTask[]>()
+  tasks.forEach(t => {
+    const lvl = levels.get(t.id)!
+    if (!groups.has(lvl)) groups.set(lvl, [])
+    groups.get(lvl)!.push(t)
+  })
+  return [...groups.entries()].sort(([a], [b]) => a - b).map(([, ts]) => ts)
+}
+
+const statusDot: Record<string, string> = {
+  pending: '○',
+  running: '◉',
+  completed: '✓',
+  failed: '✕',
+}
+
 const displayTurns = computed(() => {
-  return props.turns.slice().reverse()
+  return props.turns
 })
 
-// Auto-scroll to bottom when new turns or streaming text arrives
+// Auto-scroll to bottom
 watch(
   () => [props.turns.length, props.streaming.responseText, props.streaming.thinkingText],
   async () => {
@@ -81,17 +160,14 @@ onMounted(async () => {
     <div ref="chatScroll" class="chat-scroll">
       <!-- Empty state -->
       <div v-if="displayTurns.length === 0 && !isRunning" class="chat-empty">
-        <div class="chat-empty-icon">&#x1F4AC;</div>
+        <div class="chat-empty-icon">💬</div>
         <h3>开始对话</h3>
         <p>在下方输入目标，主脑将调度 Agent 团队执行。</p>
       </div>
 
       <!-- Conversation turns -->
       <template v-for="turn in displayTurns" :key="turn.id">
-        <div
-          class="chat-turn"
-          :class="{ active: turn.runId === activeRunId }"
-        >
+        <div class="chat-turn" :class="{ active: turn.runId === activeRunId }">
           <!-- User message -->
           <div class="chat-msg user">
             <div class="msg-avatar" aria-hidden="true">U</div>
@@ -115,8 +191,8 @@ onMounted(async () => {
             </div>
           </div>
 
-          <!-- Thinking section (collapsible) -->
-          <div v-if="turn.thinkingText" class="chat-msg brain">
+          <!-- Thinking + Task flow inline -->
+          <div v-if="turn.thinkingText || turn.planTasks.length" class="chat-msg brain">
             <div class="msg-avatar brain-avatar" aria-hidden="true">B</div>
             <div class="msg-content">
               <div
@@ -125,20 +201,93 @@ onMounted(async () => {
                 role="button"
                 :aria-expanded="!thinkingCollapsed.has(turn.id)"
               >
-                <span class="thinking-icon">{{ thinkingCollapsed.has(turn.id) ? '&#x25B6;' : '&#x25BC;' }}</span>
-                <span class="thinking-label">思考过程</span>
+                <span class="thinking-icon">{{ thinkingCollapsed.has(turn.id) ? '▶' : '▼' }}</span>
+                <span class="thinking-label">主脑规划过程</span>
                 <span v-if="turn.planTasks.length" class="thinking-badge">
                   {{ turn.planTasks.length }} 个任务
                 </span>
                 <span v-if="turn.status === 'thinking' && turn.runId === activeRunId" class="thinking-pulse" />
               </div>
+
+              <!-- Thinking body with inline task flow -->
               <div v-if="!thinkingCollapsed.has(turn.id)" class="thinking-body">
-                <pre class="thinking-text">{{ turn.thinkingText }}</pre>
-                <div v-if="turn.planTasks.length" class="plan-summary">
-                  <span class="plan-summary-label">任务列表:</span>
-                  <div v-for="t in turn.planTasks" :key="t.id" class="plan-task-chip">
-                    <span class="plan-task-agent">{{ t.agent }}</span>
-                    <span>{{ t.title }}</span>
+                <div v-if="turn.thinkingText" class="thinking-output">
+                  <div class="thinking-output-label">主脑输出</div>
+                  <pre class="thinking-text">{{ turn.thinkingText }}</pre>
+                </div>
+
+                <!-- Task flow inline nodes — vertical swimlanes grouped by wave -->
+                <div v-if="turn.planTasks.length" class="task-flow-inline">
+                  <div class="task-flow-label">
+                    <span>⚙ 任务流程节点</span>
+                    <button
+                      type="button"
+                      class="dag-link-btn"
+                      @click.stop="emit('showDag')"
+                      title="查看完整DAG图"
+                    >◇ 展开完整DAG</button>
+                  </div>
+
+                  <div class="task-swimlanes">
+                    <div
+                      v-for="(wave, wi) in groupTasksByWave(turn.planTasks.filter(t => !t.agent?.includes('brain')))"
+                      :key="'w' + wi"
+                      class="task-wave"
+                    >
+                      <div class="wave-label">
+                        <span class="wave-icon">{{ wave.length > 1 ? '⑂' : '→' }}</span>
+                        {{ wave.length > 1 ? `Wave ${wi + 1} · ${wave.length} 节点并行` : '' }}
+                      </div>
+                      <div class="task-list">
+                        <div
+                          v-for="task in wave"
+                          :key="task.id"
+                          class="task-node-inline"
+                          :class="taskStatusForTurn(turn, task.id)"
+                        >
+                          <div class="task-node-header">
+                            <span class="task-node-dot" :class="taskStatusForTurn(turn, task.id)">
+                              {{ statusDot[taskStatusForTurn(turn, task.id)] }}
+                            </span>
+                            <span class="task-node-agent">{{ task.agent }}</span>
+                            <span class="task-node-title">{{ task.title }}</span>
+                            <span v-if="taskTimingForTurn(turn, task.id)" class="task-node-time">
+                              {{ taskTimingForTurn(turn, task.id) }}
+                            </span>
+                          </div>
+                          <!-- Expandable detail -->
+                          <div v-if="!taskDetailCollapsed.has(`${turn.id}-${task.id}`)" class="task-node-detail">
+                            <div class="task-detail-row">
+                              <span class="task-detail-label">目标：</span>
+                              <span class="task-detail-value">{{ task.objective.slice(0, 150) }}{{ task.objective.length > 150 ? '…' : '' }}</span>
+                            </div>
+                            <div v-if="task.depends_on.length" class="task-detail-row">
+                              <span class="task-detail-label">依赖：</span>
+                              <span class="task-detail-value">{{ task.depends_on.join(', ') }}</span>
+                            </div>
+                            <div v-if="task.write_scope.length" class="task-detail-row">
+                              <span class="task-detail-label">写范围：</span>
+                              <span class="task-detail-value">{{ task.write_scope.join(', ') }}</span>
+                            </div>
+                          </div>
+                          <!-- Failure detail -->
+                          <div
+                            v-if="taskStatusForTurn(turn, task.id) === 'failed'"
+                            class="task-failure-detail"
+                          >
+                            <span class="task-failure-label">失败原因：</span>
+                            <pre class="task-failure-text">{{ taskFailureReason(turn, task.id) }}</pre>
+                          </div>
+                          <button
+                            type="button"
+                            class="task-expand-btn"
+                            @click.stop="toggleTaskDetail(`${turn.id}-${task.id}`)"
+                          >
+                            {{ taskDetailCollapsed.has(`${turn.id}-${task.id}`) ? '展开详情' : '收起详情' }}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -156,13 +305,13 @@ onMounted(async () => {
                 role="button"
                 :aria-expanded="!responseCollapsed.has(turn.id)"
               >
-                <span class="thinking-icon">{{ responseCollapsed.has(turn.id) ? '&#x25B6;' : '&#x25BC;' }}</span>
+                <span class="thinking-icon">{{ responseCollapsed.has(turn.id) ? '▶' : '▼' }}</span>
                 <span class="thinking-label">主脑响应</span>
               </div>
               <div v-if="!responseCollapsed.has(turn.id) && turn.brainResponse" class="msg-bubble brain-bubble">
                 <div class="msg-text response-text">{{ turn.brainResponse }}</div>
               </div>
-              <!-- Streaming indicator for active turn -->
+              <!-- Streaming indicator -->
               <div
                 v-if="turn.runId === activeRunId && isRunning && !turn.brainResponse"
                 class="msg-bubble brain-bubble streaming-bubble"
@@ -181,12 +330,12 @@ onMounted(async () => {
             </div>
           </div>
 
-          <!-- Memory compaction for this turn -->
+          <!-- Memory compaction -->
           <div v-if="turn.memoryEvents.length" class="chat-msg system">
             <div class="msg-avatar sys-avatar" aria-hidden="true">M</div>
             <div class="msg-content">
               <div class="memory-mini">
-                <span class="memory-icon">&#x1F9E0;</span>
+                <span class="memory-icon">🧠</span>
                 <span>
                   {{ turn.memoryEvents.length }} 次记忆压缩 ·
                   最后压缩: Wave {{ turn.memoryEvents[turn.memoryEvents.length - 1].wave }}
@@ -197,7 +346,7 @@ onMounted(async () => {
         </div>
       </template>
 
-      <!-- Active streaming: thinking only (no turn yet for queued state) -->
+      <!-- Active streaming: no turn yet -->
       <div v-if="isRunning && activeRunId && displayTurns.length === 0" class="chat-msg brain">
         <div class="msg-avatar brain-avatar" aria-hidden="true">B</div>
         <div class="msg-content">
@@ -214,23 +363,30 @@ onMounted(async () => {
 
 <style scoped>
 .streaming-chat {
-  flex: 1;
-  min-height: 0;
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
+  width: 100%;
   max-width: var(--content-width);
   margin: 0 auto;
-  width: 100%;
+  padding-bottom: 175px;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .chat-scroll {
-  flex: 1;
+  flex: 1 1 0;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 1rem 0;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  scroll-behavior: smooth;
+  min-height: 0;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* Empty state */
@@ -268,6 +424,18 @@ onMounted(async () => {
   flex-direction: column;
   gap: 0.4rem;
   padding: 0.4rem 0;
+  min-width: 0;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.chat-turn.active {
+  border-radius: 10px;
+  background: rgba(10, 132, 255, 0.05);
+  border: 1px solid rgba(10, 132, 255, 0.1);
+}
+.chat-turn.active .chat-msg {
+  padding: 0 0.5rem;
 }
 
 /* Messages */
@@ -309,6 +477,7 @@ onMounted(async () => {
 .msg-content {
   flex: 1;
   min-width: 0;
+  overflow: hidden;
 }
 
 .msg-bubble {
@@ -317,6 +486,10 @@ onMounted(async () => {
   font-size: 0.8rem;
   line-height: 1.55;
   color: var(--label);
+  overflow-x: auto;
+  max-width: 100%;
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
 .user-bubble {
@@ -338,11 +511,16 @@ onMounted(async () => {
 .msg-text {
   white-space: pre-wrap;
   word-break: break-word;
+  overflow-wrap: break-word;
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 .response-text {
   max-height: 400px;
   overflow-y: auto;
+  overflow-x: hidden;
+  word-break: break-word;
 }
 
 /* Meta */
@@ -420,20 +598,20 @@ onMounted(async () => {
   height: 6px;
   border-radius: 50%;
   background: var(--blue);
-  animation: pulse-dot 1.5s ease-in-out infinite;
+  animation: dot-pulse 1s ease-in-out infinite;
   margin-left: auto;
 }
 
-@keyframes pulse-dot {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.2; }
+@keyframes dot-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.3; transform: scale(1.3); }
 }
-
 .thinking-body {
   padding: 0.5rem 0.6rem;
   background: var(--surface);
   border-radius: 8px;
   border: 1px solid var(--separator-soft);
+  overflow: hidden;
 }
 
 .thinking-text {
@@ -445,38 +623,246 @@ onMounted(async () => {
   font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
 }
 
-/* Plan summary in thinking */
-.plan-summary {
-  margin-top: 0.5rem;
+/* Task flow inline */
+.task-flow-inline {
+  margin-top: 0.6rem;
 }
 
-.plan-summary-label {
-  font-size: 0.6rem;
+.task-flow-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.4rem;
+  font-size: 0.65rem;
   color: var(--secondary);
   font-weight: 600;
-  display: block;
-  margin-bottom: 0.3rem;
 }
 
-.plan-task-chip {
+.dag-link-btn {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 10px;
+  border: 1px solid rgba(10, 132, 255, 0.25);
+  border-radius: 6px;
+  background: rgba(10, 132, 255, 0.08);
+  color: #64d2ff;
+  font-size: 0.6rem;
+  font-weight: 550;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.dag-link-btn:hover {
+  background: rgba(10, 132, 255, 0.16);
+}
+
+.task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.task-node-inline {
+  padding: 0.4rem 0.55rem;
+  border-radius: 8px;
+  border: 1px solid var(--separator-soft);
+  background: var(--surface-raised);
+  transition: border-color 0.15s;
+}
+
+.task-node-inline.running {
+  border-color: rgba(10, 132, 255, 0.25);
+  animation: task-pulse 2s ease-in-out infinite;
+}
+
+@keyframes task-pulse {
+  0%, 100% { border-color: rgba(10, 132, 255, 0.1); opacity: 1; }
+  50% { border-color: rgba(10, 132, 255, 0.45); opacity: 0.75; }
+}
+
+.task-node-inline.completed {
+  border-color: rgba(48, 209, 88, 0.2);
+}
+
+.task-node-inline.failed {
+  border-color: rgba(255, 69, 58, 0.3);
+  background: rgba(255, 69, 58, 0.04);
+}
+
+.task-node-header {
   display: flex;
   align-items: center;
   gap: 0.4rem;
-  padding: 0.2rem 0.5rem;
-  margin-bottom: 0.2rem;
-  border-radius: 5px;
-  background: var(--surface-raised);
-  font-size: 0.65rem;
-  color: var(--label);
 }
 
-.plan-task-agent {
+.task-node-dot {
+  font-size: 0.55rem;
+  flex-shrink: 0;
+}
+
+.task-node-dot.pending { color: var(--tertiary); }
+.task-node-dot.running { color: var(--blue); animation: dot-pulse 1s ease-in-out infinite; }
+.task-node-dot.completed { color: var(--green); }
+.task-node-dot.failed { color: var(--red); }
+
+.task-node-agent {
   font-size: 0.55rem;
   padding: 0.1rem 0.35rem;
   border-radius: 3px;
   background: var(--blue-soft);
   color: #64d2ff;
   font-weight: 600;
+  flex-shrink: 0;
+}
+
+.task-node-title {
+  font-size: 0.65rem;
+  color: var(--label);
+  font-weight: 550;
+}
+
+.task-node-time {
+  margin-left: auto;
+  font-size: 0.5rem;
+  color: var(--tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.task-expand-btn {
+  margin-top: 0.35rem;
+  border: 0;
+  background: none;
+  color: var(--tertiary);
+  cursor: pointer;
+  font-size: 0.5rem;
+  padding: 1px 0;
+}
+
+.task-expand-btn:hover {
+  color: var(--secondary);
+}
+
+.task-node-detail {
+  margin-top: 0.35rem;
+  padding: 0.35rem 0.5rem;
+  background: rgba(0, 0, 0, 0.12);
+  border-radius: 6px;
+}
+
+.task-detail-row {
+  display: flex;
+  gap: 0.3rem;
+  margin-bottom: 0.2rem;
+  font-size: 0.55rem;
+  line-height: 1.4;
+}
+
+.task-detail-row:last-child {
+  margin-bottom: 0;
+}
+
+.task-detail-label {
+  flex-shrink: 0;
+  color: var(--tertiary);
+  font-weight: 600;
+}
+
+.task-detail-value {
+  color: var(--secondary);
+  word-break: break-word;
+}
+
+/* Task failure detail */
+.task-failure-detail {
+  margin-top: 0.3rem;
+  padding: 0.35rem 0.5rem;
+  background: rgba(255, 69, 58, 0.1);
+  border: 1px solid rgba(255, 69, 58, 0.2);
+  border-radius: 6px;
+}
+
+.task-failure-label {
+  font-size: 0.5rem;
+  font-weight: 600;
+  color: #ff6961;
+}
+
+.task-failure-text {
+  margin: 0.2rem 0 0;
+  font-size: 0.5rem;
+  color: var(--secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.4;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+/* Wave grouping in swimlanes */
+.task-swimlanes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.task-wave {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.wave-label {
+  font-size: 0.55rem;
+  color: var(--tertiary);
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  background: rgba(118, 118, 128, 0.08);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.wave-icon {
+  font-size: 0.7rem;
+  color: var(--blue);
+}
+
+/* Memory mini */
+.memory-mini {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.6rem;
+  border-radius: 6px;
+  background: rgba(191, 90, 242, 0.06);
+  border: 1px solid rgba(191, 90, 242, 0.12);
+  font-size: 0.65rem;
+  color: var(--secondary);
+}
+
+.memory-icon {
+  font-size: 0.8rem;
+}
+
+/* Fork button */
+.fork-btn {
+  margin-left: auto;
+  border: 0;
+  border-radius: 5px;
+  padding: 0.15rem 0.4rem;
+  background: rgba(191, 90, 242, 0.08);
+  color: var(--tertiary);
+  cursor: pointer;
+  font-size: 0.55rem;
+  font-weight: 550;
+  transition: background 0.15s, color 0.15s;
+}
+
+.fork-btn:hover {
+  background: rgba(191, 90, 242, 0.18);
+  color: #da8fff;
 }
 
 /* Streaming text */
@@ -517,44 +903,14 @@ onMounted(async () => {
   margin-left: 1px;
 }
 
+
 @keyframes blink-cursor {
   0%, 100% { opacity: 1; }
   50% { opacity: 0; }
 }
 
-/* Memory mini */
-.memory-mini {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.3rem 0.6rem;
-  border-radius: 6px;
-  background: rgba(191, 90, 242, 0.06);
-  border: 1px solid rgba(191, 90, 242, 0.12);
-  font-size: 0.65rem;
-  color: var(--secondary);
-}
-
-.memory-icon {
-  font-size: 0.8rem;
-}
-
-/* Fork button on completed turns */
-.fork-btn {
-  margin-left: auto;
-  border: 0;
-  border-radius: 5px;
-  padding: 0.15rem 0.4rem;
-  background: rgba(191, 90, 242, 0.08);
-  color: var(--tertiary);
-  cursor: pointer;
-  font-size: 0.55rem;
-  font-weight: 550;
-  transition: background 0.15s, color 0.15s;
-}
-
-.fork-btn:hover {
-  background: rgba(191, 90, 242, 0.18);
-  color: #da8fff;
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.2; }
 }
 </style>

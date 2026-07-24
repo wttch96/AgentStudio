@@ -204,7 +204,7 @@ class KnowledgeStore:
                 base_url=self.settings.deepseek_base_url,
             )
             response = client.embeddings.create(
-                model="deepseek-chat", input=text[:8000],
+                model="deepseek-v4-pro", input=text[:8000],
             )
             return response.data[0].embedding
         except Exception:

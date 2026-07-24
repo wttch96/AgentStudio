@@ -65,7 +65,7 @@ class MemoryConfiguration(BaseModel):
 
     compress_trigger_tokens: int = Field(default=8000, ge=2000, le=50000)
     compress_keep_recent: int = Field(default=20, ge=5, le=50)
-    summarizer_model: str = Field(default='deepseek-chat', min_length=1, max_length=100)
+    summarizer_model: str = Field(default='deepseek-v4-pro', min_length=1, max_length=100)
     max_conversation_turns: int = Field(default=100, ge=10, le=1000)
     session_archive_after_hours: int = Field(default=24, ge=1, le=720)
     importance_decay_rate: float = Field(default=0.95, ge=0.5, le=1.0)

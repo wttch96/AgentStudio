@@ -55,7 +55,8 @@ export const api = {
     return request<Required<SkillProfile>>(`/skills/${name}${p}`, { method: 'PUT', body: JSON.stringify(payload) })
   },
   runs: async () => (await request<{ items: Run[] }>('/runs')).items,
-  run: (id: string) => request<Run & { events: RunEvent[] }>(`/runs/${id}`),
+  run: (id: string) => request<Run & { events: RunEvent[]; conversation_runs?: Array<Pick<Run, 'id' | 'objective' | 'status' | 'turn_index' | 'parent_run_id' | 'final_answer' | 'created_at'>> }>(`/runs/${id}`),
+  conversation: (conversationId: string) => request<{ conversation_id: string; turn_count: number; runs: Array<Run & { events: RunEvent[] }> }>(`/conversations/${conversationId}`),
   deleteRun: async (id: string) => {
     const response = await fetch(`${API_BASE}/runs/${id}`, { method: 'DELETE' })
     if (!response.ok) {

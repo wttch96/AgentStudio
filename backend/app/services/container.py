@@ -3,7 +3,6 @@
 from dataclasses import dataclass
 
 from app.agents.claude_executor import ClaudeAgentExecutor
-from app.agents.deepseek_executor import DeepSeekAgentExecutor
 from app.agents.file_agent_executor import FileAgentExecutor
 from app.agents.rag_executor import RAGAgentExecutor
 from app.agents.registry import AgentRegistry
@@ -46,7 +45,6 @@ class ServiceContainer:
     runs: RunManager
     project_manager: ProjectManager
     knowledge_store: KnowledgeStore
-    deepseek_executor: DeepSeekAgentExecutor | None
     rag_executor: RAGAgentExecutor | None
     file_agent_executor: FileAgentExecutor | None
 
@@ -91,7 +89,6 @@ class ServiceContainer:
         memory_manager = MemoryManager(settings, store, memory_settings.current())
         interrupt_router = InterruptRouter(store, events)
         project_manager = ProjectManager(store)
-        deepseek_executor = DeepSeekAgentExecutor(settings, registry, events) if settings.deepseek_api_key else None
         rag_executor = RAGAgentExecutor(settings, registry, events, knowledge_store) if settings.deepseek_api_key else None
         file_agent_executor = FileAgentExecutor(settings, registry, events) if settings.deepseek_api_key else None
         runs = RunManager(
@@ -103,7 +100,6 @@ class ServiceContainer:
             scheduler,
             memory_manager,
             interrupt_router,
-            deepseek_executor=deepseek_executor,
             rag_executor=rag_executor,
             file_agent_executor=file_agent_executor,
         )
@@ -126,7 +122,6 @@ class ServiceContainer:
             runs,
             project_manager,
             knowledge_store,
-            deepseek_executor,
             rag_executor,
             file_agent_executor,
         )

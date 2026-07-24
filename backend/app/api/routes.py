@@ -261,7 +261,51 @@ def get_run(run_id: str):
     if not run:
         return jsonify({"error": "运行不存在"}), 404
     run["events"] = services().store.list_events(run_id)
+    # 如果是多轮对话，附加上下文 runs
+    conversation_id = run.get("conversation_id")
+    if conversation_id:
+        conversation_runs = services().store.get_runs_by_conversation(conversation_id)
+        run["conversation_runs"] = [
+            {
+                "id": cr["id"],
+                "objective": cr["objective"],
+                "status": cr["status"],
+                "turn_index": cr["turn_index"],
+                "parent_run_id": cr.get("parent_run_id"),
+                "final_answer": cr.get("final_answer"),
+                "created_at": cr["created_at"],
+            }
+            for cr in conversation_runs
+        ]
     return jsonify(run)
+
+
+@api.get("/conversations/<conversation_id>")
+def get_conversation(conversation_id: str):
+    """返回同一 conversation 下的所有 runs 及其 events，按 turn_index 排序。"""
+    runs = services().store.get_runs_by_conversation(conversation_id)
+    if not runs:
+        return jsonify({"error": "对话不存在"}), 404
+    items = []
+    for run in runs:
+        events = services().store.list_events(run["id"])
+        items.append({
+            "id": run["id"],
+            "objective": run["objective"],
+            "status": run["status"],
+            "turn_index": run["turn_index"],
+            "parent_run_id": run.get("parent_run_id"),
+            "final_answer": run.get("final_answer"),
+            "error": run.get("error"),
+            "created_at": run["created_at"],
+            "updated_at": run["updated_at"],
+            "events": events,
+        })
+    return jsonify({
+        "conversation_id": conversation_id,
+        "turn_count": len(items),
+        "runs": items,
+    })
 
 
 @api.delete("/runs/<run_id>")
@@ -542,6 +586,7 @@ def add_project_agent(project_id: str):
             custom_prompt=data.get("system_prompt", ""),
             display_name=data.get("display_name", ""),
         )
+        services().registry.invalidate(project_id)
         return jsonify(agent), 201
     except ValueError as error:
         return jsonify({"error": str(error)}), 400

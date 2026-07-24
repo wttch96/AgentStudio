@@ -61,7 +61,6 @@ def build_graph(
     interrupt_router: object | None = None,
     memory_manager: object | None = None,
     project_agents: list | None = None,
-    deepseek_executor=None,
     rag_executor=None,
     file_agent_executor=None,
 ):
@@ -320,9 +319,7 @@ def build_graph(
             )
         # 根据 agent_type 选择 executor
         agent_type = _resolve_agent_type(task.agent)
-        if agent_type == "deepseek" and deepseek_executor:
-            active_executor = deepseek_executor
-        elif agent_type == "rag" and rag_executor:
+        if agent_type == "rag" and rag_executor:
             active_executor = rag_executor
         elif agent_type == "file-ops" and file_agent_executor:
             active_executor = file_agent_executor

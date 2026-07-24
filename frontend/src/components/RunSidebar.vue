@@ -42,7 +42,6 @@ function requestFork(run: Run) {
           <span class="run-copy">
             <strong>{{ run.objective }}</strong>
             <small>
-              <span v-if="run.turn_index > 1" class="turn-badge">续 · {{ run.turn_index }}</span>
               {{ relativeTime(run.created_at) }}
             </small>
           </span>

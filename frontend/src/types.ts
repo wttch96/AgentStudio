@@ -35,7 +35,7 @@ export interface AgentProfile {
   builtin: boolean
   sub_dir?: string
   project_id?: string
-  agent_type?: 'claude' | 'deepseek' | 'rag'
+  agent_type?: 'claude' | 'rag' | 'file-ops'
 }
 
 export interface AgentDetail extends AgentProfile {
@@ -303,7 +303,7 @@ export interface ProjectAgent {
   display_name: string
   description: string
   template_id: string | null
-  agent_type: 'brain' | 'rag' | 'claude' | 'deepseek'
+  agent_type: 'brain' | 'rag' | 'claude' | 'file-ops'
   sub_dir: string
   system_prompt: string
   tools: string[]
