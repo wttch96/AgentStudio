@@ -47,26 +47,30 @@ async function browseDir(path?: string) {
 
 async function pickLocalFolder() {
   try {
+    // 使用 File System Access API 弹出原生文件夹选择器
     const dirHandle = await (window as any).showDirectoryPicker()
     rootDir.value = dirHandle.name
     await browseDir(dirHandle.name)
   } catch (e: any) {
     if (e.name === 'AbortError') return
-    // showDirectoryPicker API not available → 使用隐藏的 input 回退
-    const input = document.createElement('input')
-    input.type = 'file'
-    input.webkitdirectory = true
-    input.onchange = async () => {
-      if (input.files && input.files.length > 0) {
-        // 从 file.webkitRelativePath 提取根目录路径
-        const relativePath = input.files[0].webkitRelativePath
-        const dirName = relativePath.split('/')[0]
-        rootDir.value = dirName
-        await browseDir(dirName)
-      }
-    }
-    input.click()
+    // File System Access API 不可用 → 尝试 webkitdirectory 回退
+    pickLocalFolderLegacy()
   }
+}
+
+function pickLocalFolderLegacy() {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.webkitdirectory = true
+  input.onchange = async () => {
+    if (input.files && input.files.length > 0) {
+      const relativePath = input.files[0].webkitRelativePath
+      const dirName = relativePath.split('/')[0]
+      rootDir.value = dirName
+      await browseDir(dirName)
+    }
+  }
+  input.click()
 }
 
 function selectDir(path: string) { rootDir.value = path; dirPath.value = path }
