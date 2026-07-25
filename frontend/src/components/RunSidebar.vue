@@ -13,95 +13,48 @@ function relativeTime(value: string) {
   return `${Math.floor(minutes / 1440)} 天前`
 }
 
+function statusBadge(status: string) {
+  const map: Record<string, string> = { queued: 'secondary', running: 'primary', completed: 'success', failed: 'danger', cancelled: 'warning', timeout: 'warning', interrupted: 'info' }
+  return map[status] || 'secondary'
+}
+
 function requestDelete(run: Run) {
   if (!window.confirm(`确定删除"${run.objective}"及其全部时间线记录吗？此操作无法撤销。`)) return
   emit('delete', run.id)
 }
 
 function requestFork(run: Run) {
-  if (!window.confirm(`从"${run.objective.slice(0, 50)}"分叉出新对话分支？\n\n系统将提取该对话积累的记忆注入新分支，开启独立对话。`)) return
+  if (!window.confirm(`从"${run.objective.slice(0, 50)}"分叉出新对话分支？`)) return
   emit('fork', run.id)
 }
 </script>
 
 <template>
-  <aside class="sidebar">
-    <button class="new-run-button" type="button" @click="$emit('create')">
-      <span aria-hidden="true">＋</span> 新建任务
-    </button>
-    <div class="sidebar-label">最近运行</div>
-    <nav class="run-list" aria-label="任务历史">
-      <div
-        v-for="run in runs"
-        :key="run.id"
-        class="run-item"
-        :class="{ active: run.id === activeId }"
-      >
-        <button type="button" class="run-select" @click="$emit('select', run.id)">
-          <span class="run-status" :class="run.status" aria-hidden="true" />
-          <span class="run-copy">
-            <strong>{{ run.objective }}</strong>
-            <small>
-              {{ relativeTime(run.created_at) }}
-            </small>
-          </span>
-        </button>
-        <button
-          v-if="run.status === 'completed' || run.status === 'failed'"
-          type="button"
-          class="run-fork"
-          title="分叉此对话，继承记忆开启新分支"
-          :aria-label="`分叉任务：${run.objective}`"
-          @click="requestFork(run)"
-        >
-          ⎇
-        </button>
-        <button
-          type="button"
-          class="run-delete"
-          :disabled="run.status === 'queued' || run.status === 'running'"
-          :title="run.status === 'queued' || run.status === 'running' ? '请先停止正在执行的任务' : '删除运行记录'"
-          :aria-label="`删除任务：${run.objective}`"
-          @click="requestDelete(run)"
-        >
-          ×
-        </button>
+  <div class="d-flex flex-column h-100">
+    <div class="flex-grow-1 overflow-auto">
+      <div v-if="runs.length === 0" class="p-3 text-secondary small text-center">还没有运行记录</div>
+      <div v-for="run in runs" :key="run.id" class="border-bottom p-2"
+        :class="{ 'bg-body-secondary': run.id === activeId }"
+        style="cursor: pointer" @click="$emit('select', run.id)">
+        <div class="d-flex align-items-start gap-1">
+          <span :class="['me-1', 'rounded-circle', 'bg-' + statusBadge(run.status)]" style="width:8px;height:8px;display:inline-block;flex-shrink:0;margin-top:5px" />
+          <div class="flex-grow-1" style="min-width:0">
+            <div class="small text-truncate fw-medium">{{ run.objective }}</div>
+            <small class="text-secondary">{{ relativeTime(run.created_at) }}</small>
+          </div>
+          <div class="d-flex gap-1 flex-shrink-0">
+            <ElButton v-if="run.status === 'completed' || run.status === 'failed'"
+              link size="small" class="p-0 text-secondary" title="分叉"
+              @click.stop="requestFork(run)">&#9095;</ElButton>
+            <ElButton link size="small" class="p-0 text-secondary"
+              :disabled="run.status === 'queued' || run.status === 'running'"
+              title="删除" @click.stop="requestDelete(run)">&times;</ElButton>
+          </div>
+        </div>
       </div>
-      <div v-if="runs.length === 0" class="sidebar-empty">还没有运行记录</div>
-    </nav>
-    <div class="sidebar-footer">
-      <span>127.0.0.1</span>
-      <span>Local workspace</span>
     </div>
-  </aside>
+    <div class="border-top p-2 text-secondary small text-center">
+      <span>127.0.0.1 · Local</span>
+    </div>
+  </div>
 </template>
-
-<style scoped>
-.run-fork {
-  flex: 0 0 auto;
-  width: 25px;
-  height: 25px;
-  margin: 5px 1px 0 0;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: transparent;
-  cursor: pointer;
-  font-size: 0.9375rem;
-  line-height: 1;
-  transition: background 120ms ease, color 120ms ease;
-  font-weight: 700;
-}
-.run-item:hover .run-fork,
-.run-fork:focus-visible {
-  color: var(--tertiary);
-}
-.run-fork:hover:not(:disabled) {
-  background: rgba(191, 90, 242, 0.16);
-  color: #da8fff;
-}
-.run-fork:disabled {
-  cursor: not-allowed;
-  opacity: 0.35;
-}
-</style>

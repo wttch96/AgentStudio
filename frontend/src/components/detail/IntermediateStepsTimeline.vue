@@ -86,14 +86,14 @@ const STEP_COLORS: Record<string, string> = {
 }
 
 .steps-empty p {
-  font-size: 0.5625rem;
+  font-size: 0.9375rem;
   color: var(--tertiary);
   font-style: italic;
   margin: 0;
 }
 
 .steps-hint {
-  font-size: 0.4375rem !important;
+  font-size: 0.8125rem !important;
   color: var(--tertiary) !important;
   margin-top: 8px !important;
   font-style: normal !important;
@@ -137,7 +137,7 @@ const STEP_COLORS: Record<string, string> = {
   width: 20px;
   height: 20px;
   border-radius: 6px;
-  font-size: 0.5625rem;
+  font-size: 0.9375rem;
   flex-shrink: 0;
 }
 
@@ -155,21 +155,21 @@ const STEP_COLORS: Record<string, string> = {
 }
 
 .step-type {
-  font-size: 0.5rem;
+  font-size: 0.875rem;
   font-weight: 650;
   text-transform: uppercase;
   letter-spacing: 0.03em;
 }
 
 .step-time {
-  font-size: 0.4375rem;
+  font-size: 0.8125rem;
   color: var(--tertiary);
   white-space: nowrap;
 }
 
 .step-text {
   margin: 4px 0 0;
-  font-size: 0.5625rem;
+  font-size: 0.9375rem;
   line-height: 1.5;
   color: var(--secondary);
   white-space: pre-wrap;
@@ -181,7 +181,7 @@ const STEP_COLORS: Record<string, string> = {
 }
 
 .step-action-info code {
-  font-size: 0.4375rem;
+  font-size: 0.8125rem;
   padding: 2px 5px;
   border-radius: 3px;
   background: rgba(10, 132, 255, 0.1);

@@ -63,7 +63,7 @@ const hasError = computed(() => props.selectedNode?.hasError ?? false)
           />
           <div class="detail-header-text">
             <strong>{{ selectedNode.name }}</strong>
-            <span>{{ selectedNode.sub.slice(0, 40) }}</span>
+            <span>{{ (selectedNode.sub || '').slice(0, 40) }}</span>
           </div>
         </div>
         <div class="detail-header-actions">
@@ -119,6 +119,8 @@ const hasError = computed(() => props.selectedNode?.hasError ?? false)
 
 <style scoped>
 .detail-panel {
+  width: 340px;
+  min-width: 340px;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -150,7 +152,7 @@ const hasError = computed(() => props.selectedNode?.hasError ?? false)
 }
 
 .detail-empty-state p {
-  font-size: 0.625rem;
+  font-size: 0.9375rem;
   line-height: 1.5;
 }
 
@@ -195,7 +197,7 @@ const hasError = computed(() => props.selectedNode?.hasError ?? false)
 }
 
 .detail-header-text strong {
-  font-size: 0.6875rem;
+  font-size: 1rem;
   font-weight: 650;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -203,7 +205,7 @@ const hasError = computed(() => props.selectedNode?.hasError ?? false)
 }
 
 .detail-header-text span {
-  font-size: 0.5rem;
+  font-size: 0.875rem;
   color: var(--secondary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -256,7 +258,7 @@ const hasError = computed(() => props.selectedNode?.hasError ?? false)
   border-radius: 6px;
   background: transparent;
   color: var(--tertiary);
-  font-size: 0.5625rem;
+  font-size: 0.9375rem;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.15s;
@@ -277,7 +279,7 @@ const hasError = computed(() => props.selectedNode?.hasError ?? false)
 }
 
 .tab-badge {
-  font-size: 0.4375rem;
+  font-size: 0.8125rem;
   padding: 1px 4px;
   border-radius: 999px;
   background: rgba(10, 132, 255, 0.15);

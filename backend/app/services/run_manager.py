@@ -9,6 +9,7 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from app.agents.claude_executor import ClaudeAgentExecutor
 from app.domain.configuration import SchedulerConfiguration
@@ -36,6 +37,7 @@ class RunManager:
         memory_manager: MemoryManager | None = None,
         interrupt_router: InterruptRouter | None = None,
         rag_executor=None,
+        chat_executor=None,
         file_agent_executor=None,
         flow_engine: Any = None,
     ) -> None:
@@ -48,6 +50,7 @@ class RunManager:
         self.memory_manager = memory_manager
         self.interrupt_router = interrupt_router
         self.rag_executor = rag_executor
+        self.chat_executor = chat_executor
         self.file_agent_executor = file_agent_executor
         self.flow_engine = flow_engine
         self._cancel_events: dict[str, threading.Event] = {}
@@ -185,17 +188,17 @@ class RunManager:
     ) -> None:
         started_at_iso = datetime.now(timezone.utc).isoformat()
         self.store.update_run(run_id, "running", started_at=started_at_iso)
-        self.events.emit(
-            run_id,
-            "run.started",
-            payload={
-                "objective": objective,
-                "workspace_root": str(workspace_root),
-                "scheduler": scheduler.model_dump(),
-                "parent_run_id": self.store.get_run(run_id).get("parent_run_id"),
-            },
-        )
         try:
+            self.events.emit(
+                run_id,
+                "run.started",
+                payload={
+                    "objective": objective,
+                    "workspace_root": str(workspace_root),
+                    "scheduler": scheduler.model_dump(),
+                    "parent_run_id": self.store.get_run(run_id).get("parent_run_id"),
+                },
+            )
             # ---- Flow engine path (deterministic YAML pipeline) ----
             if flow_name and self.flow_engine:
                 flow = self.flow_engine._flow_store_loader(flow_name)
@@ -234,29 +237,23 @@ class RunManager:
                     return
 
             # ---- Existing LangGraph path ----
-            # Load project agents
+            # Load project agents from file-based config
             project_agents = []
             try:
                 if project_id:
                     agent_profiles = self.executor.registry.load_project_agents(project_id)
                     project_agents = list(agent_profiles.values())
                 else:
-                    # 遍历所有项目加载 Agent
-                    with self.store._connect() as conn:
-                        rows = conn.execute(
-                            "SELECT DISTINCT project_id FROM project_agents"
-                        ).fetchall()
-                        seen = set()
-                        for row in rows:
-                            profiles = self.executor.registry.load_project_agents(row["project_id"])
-                            for name, p in profiles.items():
-                                if name not in seen and p.agent_type not in ('brain',):
-                                    seen.add(name)
-                                    project_agents.append(p)
+                    # 从文件加载所有 Agent（排除 brain 类型）
+                    agent_profiles = self.executor.registry.load_project_agents("")
+                    project_agents = [
+                        p for p in agent_profiles.values()
+                        if p.agent_type not in ('brain',)
+                    ]
             except Exception:
                 pass
 
-            graph = build_graph(self.planner, self.executor, self.events, cancel_event, None, interrupt_router, memory_manager, project_agents, rag_executor=self.rag_executor, file_agent_executor=self.file_agent_executor)
+            graph = build_graph(self.planner, self.executor, self.events, cancel_event, None, interrupt_router, memory_manager, project_agents, rag_executor=self.rag_executor, chat_executor=self.chat_executor, file_agent_executor=self.file_agent_executor)
             output = graph.invoke(
                 {
                     "run_id": run_id,
@@ -300,7 +297,9 @@ class RunManager:
             self.store.update_run(run_id, status, final_answer=final_answer)
             self.events.emit(run_id, f"run.{status}", payload={"text": final_answer})
         except Exception as error:
+            import traceback
             error_detail = f"{type(error).__name__}: {str(error) or repr(error)}"
+            traceback.print_exc()
             self.store.update_run(run_id, "failed", error=error_detail)
             self.events.emit(
                 run_id,
@@ -317,7 +316,7 @@ class RunManager:
     def _preset_dag(
         self, command: RunCommand, parent_run_id: str | None
     ) -> TaskDag | None:
-        if command.kind == "normal":
+        if command.kind in ("normal", "flow"):
             return None
         if command.kind == "direct" and command.agent:
             return TaskDag(

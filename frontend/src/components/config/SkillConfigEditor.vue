@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { reactive, ref, watch } from 'vue'
+import { EditPen } from '@element-plus/icons-vue'
 import { api } from '../../api/client'
 import type { SkillProfile } from '../../types'
 
@@ -14,30 +15,22 @@ let toastTimer: ReturnType<typeof setTimeout> | null = null
 const form = reactive<Required<SkillProfile>>({ name: '', description: '', content: '' })
 
 function showToast(text: string, isError = false) {
-  toast.value = text
-  toastError.value = isError
+  toast.value = text; toastError.value = isError
   if (toastTimer) clearTimeout(toastTimer)
   toastTimer = setTimeout(() => { toast.value = '' }, 3000)
 }
 
-function reset() {
-  Object.assign(form, { name: '', description: '', content: '' })
-  message.value = ''
-}
+function reset() { Object.assign(form, { name: '', description: '', content: '' }); message.value = '' }
 
 async function select(name: string) {
   selectedName.value = name
   if (name === '__new__') return reset()
-  try {
-    Object.assign(form, await api.skill(name, props.projectId || undefined))
-  } catch (error) {
-    message.value = error instanceof Error ? error.message : '读取 Skill 失败'
-  }
+  try { Object.assign(form, await api.skill(name, props.projectId || undefined)) }
+  catch (error) { message.value = error instanceof Error ? error.message : '读取 Skill 失败' }
 }
 
 async function save() {
-  saving.value = true
-  message.value = ''
+  saving.value = true; message.value = ''
   try {
     if (selectedName.value === '__new__') {
       await api.createSkill({ ...form, project_id: props.projectId || '' })
@@ -45,71 +38,67 @@ async function save() {
     } else {
       await api.updateSkill(form.name, { description: form.description, content: form.content }, props.projectId || undefined)
     }
-    showToast('Skill 已保存，可在 Agent 配置中关联。')
-    emit('saved')
+    showToast('Skill 已保存。'); emit('saved')
   } catch (error) {
-    const msg = error instanceof Error ? error.message : '保存失败'
-    showToast(msg, true)
-  } finally {
-    saving.value = false
-  }
+    showToast(error instanceof Error ? error.message : '保存失败', true)
+  } finally { saving.value = false }
 }
 
-watch(
-  () => props.skills,
-  (skills) => {
-    if (selectedName.value !== '__new__' && !skills.some((item) => item.name === selectedName.value)) reset()
-  },
-)
+watch(() => props.skills, (skills) => {
+  if (selectedName.value !== '__new__' && !skills.some((item) => item.name === selectedName.value)) reset()
+})
 </script>
 
 <template>
-  <div class="config-editor">
-    <label class="field-label">选择或新增 Skill<span v-if="projectId" class="storage-badge">项目级</span><span v-else class="storage-badge global">全局</span></label>
-    <div class="config-selector">
-      <button type="button" :class="{ active: selectedName === '__new__' }" @click="select('__new__')">＋ 新建</button>
-      <button
-        v-for="skill in skills"
-        :key="skill.name"
-        type="button"
-        :class="{ active: selectedName === skill.name }"
-        @click="select(skill.name)"
-      >{{ skill.name }}</button>
+  <div class="d-flex flex-column gap-3">
+    <div class="d-flex align-items-center gap-2">
+      <label class="form-label mb-0">选择或新增 Skill</label>
+      <ElTag v-if="projectId" type="info" size="small">项目级</ElTag>
+      <ElTag v-else type="info" size="small">全局</ElTag>
     </div>
 
-    <label class="field-label" for="skill-name">Skill 名称</label>
-    <input
-      id="skill-name"
-      v-model="form.name"
-      class="config-input"
-      :disabled="selectedName !== '__new__'"
-      placeholder="例如 netty-protocol"
-      pattern="[a-z][a-z0-9-]+"
-    />
-    <p class="field-help">只能使用小写字母、数字和短横线；保存后对应 `.claude/skills/名称/SKILL.md`。</p>
-
-    <label class="field-label" for="skill-description">用途说明</label>
-    <input id="skill-description" v-model="form.description" class="config-input" />
-
-    <label class="field-label" for="skill-content">Skill 指令正文</label>
-    <textarea
-      id="skill-content"
-      v-model="form.content"
-      class="config-textarea"
-      rows="17"
-      placeholder="写明何时使用、执行步骤、约束和验证方法…"
-    />
-
-    <div class="config-actions">
-      <span :class="{ error: message.includes('失败') }">{{ message }}</span>
-      <button type="button" :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存 Skill' }}</button>
+    <div class="d-flex flex-wrap gap-1">
+      <ElButton size="small" :type="selectedName === '__new__' ? 'primary' : ''" @click="select('__new__')">＋ 新建</ElButton>
+      <ElButton v-for="skill in skills" :key="skill.name" size="small" :type="selectedName === skill.name ? 'primary' : ''" @click="select(skill.name)">
+        {{ skill.name }}
+      </ElButton>
     </div>
+
+    <ElCard>
+      <template #header>
+        <div class="d-flex align-items-center gap-2">
+          <ElIcon size="20"><EditPen /></ElIcon>
+          <span><strong>{{ selectedName === '__new__' ? '新建 Skill' : selectedName }}</strong></span>
+        </div>
+      </template>
+
+      <div class="mb-3">
+        <label class="form-label">Skill 名称</label>
+        <ElInput v-model="form.name" size="small" :disabled="selectedName !== '__new__'" placeholder="例如 netty-protocol" />
+        <div class="form-text">只能使用小写字母、数字和短横线。</div>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">用途说明</label>
+        <ElInput v-model="form.description" size="small" />
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Skill 指令正文</label>
+        <ElInput v-model="form.content" type="textarea" size="small" :rows="17" placeholder="写明何时使用、执行步骤、约束和验证方法…" />
+      </div>
+      <ElAlert v-if="message" :type="message.includes('失败') ? 'error' : 'success'" :closable="false" class="mb-3">{{ message }}</ElAlert>
+      <ElButton type="primary" size="small" :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存 Skill' }}</ElButton>
+    </ElCard>
 
     <!-- Toast -->
     <Transition name="toast">
-      <div v-if="toast" :class="['skill-toast', { 'toast-error': toastError }]" role="alert">
+      <div v-if="toast" class="position-fixed bottom-0 end-0 m-3 p-2 rounded small" :class="toastError ? 'bg-danger text-white' : 'bg-success text-white'" role="alert">
         {{ toast }}
       </div>
     </Transition>
   </div>
 </template>
+
+<style scoped>
+.toast-enter-active, .toast-leave-active { transition: opacity 0.3s, transform 0.3s; }
+.toast-enter-from, .toast-leave-to { opacity: 0; transform: translateY(10px); }
+</style>

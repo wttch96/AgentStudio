@@ -189,6 +189,60 @@ def browse_workspace():
         return jsonify({"error": str(error)}), 400
 
 
+@api.post("/workspace/pick-folder")
+def pick_folder():
+    """打开原生文件夹选择器，返回选中的绝对路径。"""
+    import platform
+    system = platform.system()
+    try:
+        if system == "Darwin":
+            import subprocess
+            script = '''
+                tell application "System Events"
+                    activate
+                    set folderPath to POSIX path of (choose folder with prompt "选择项目根目录")
+                    return folderPath
+                end tell
+            '''
+            result = subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True, text=True, timeout=60,
+            )
+            if result.returncode != 0:
+                return jsonify({"error": "用户取消选择或对话框失败"}), 400
+            selected = result.stdout.strip()
+            if not selected:
+                return jsonify({"error": "未选择文件夹"}), 400
+            # 验证目录存在
+            from pathlib import Path
+            if not Path(selected).is_dir():
+                return jsonify({"error": f"不是有效目录: {selected}"}), 400
+            return jsonify({"path": selected})
+        elif system == "Linux":
+            # 尝试 zenity (GNOME) 或 kdialog (KDE)
+            import subprocess, shutil
+            for cmd in ["zenity", "kdialog"]:
+                if shutil.which(cmd):
+                    if cmd == "zenity":
+                        result = subprocess.run(
+                            ["zenity", "--file-selection", "--directory",
+                             "--title=选择项目根目录"],
+                            capture_output=True, text=True, timeout=60,
+                        )
+                    else:
+                        result = subprocess.run(
+                            ["kdialog", "--getexistingdirectory"],
+                            capture_output=True, text=True, timeout=60,
+                        )
+                    if result.returncode == 0 and result.stdout.strip():
+                        return jsonify({"path": result.stdout.strip()})
+            return jsonify({"error": "未检测到 zenity 或 kdialog，请在输入框手动输入路径"}), 400
+        else:
+            return jsonify({"error": f"不支持的操作系统: {system}，请在输入框手动输入路径"}), 400
+    except Exception as e:
+        return jsonify({"error": f"文件夹选择失败: {str(e)}"}), 500
+
+
 @api.get("/scheduler")
 def get_scheduler():
     return jsonify(services().scheduler.current().model_dump())
@@ -654,14 +708,22 @@ def list_project_agents(project_id: str):
 def add_project_agent(project_id: str):
     data = request.get_json(silent=True) or {}
     template_id = data.get("template_id", "")
-    if not template_id:
-        return jsonify({"error": "需要指定 template_id"}), 400
+    name = data.get("name", "")
+    if not template_id and not name:
+        return jsonify({"error": "需要指定 template_id（从模板创建）或 name（手动创建）"}), 400
     try:
         agent = services().project_manager.add_agent(
-            project_id, template_id,
+            project_id,
+            template_id=template_id,
+            name=name,
+            agent_type=data.get("agent_type", ""),
             sub_dir=data.get("sub_dir", ""),
             custom_prompt=data.get("system_prompt", ""),
             display_name=data.get("display_name", ""),
+            description=data.get("description", ""),
+            tools=data.get("tools"),
+            skills=data.get("skills"),
+            model=data.get("model"),
         )
         services().registry.invalidate(project_id)
         return jsonify(agent), 201
@@ -735,20 +797,15 @@ def delete_template(template_id: str):
 
 @api.get("/template-center")
 def template_center():
-    """返回所有 Agent 模板和 Skill 模板。"""
+    """返回所有 Agent 模板和 Skill 模板（均为文件优先）。"""
     agent_templates = services().project_manager.list_templates()
-    skill_templates = []
-    with services().store._connect() as conn:
-        rows = conn.execute(
-            "SELECT * FROM skill_templates ORDER BY category, name"
-        ).fetchall()
-        skill_templates = [dict(r) for r in rows]
+    skill_templates = services().skills.list_templates()
     return jsonify({"agents": agent_templates, "skills": skill_templates})
 
 
 @api.post("/template-center/skills")
 def publish_skill_template():
-    """将项目 Skill 发布为公共模板。"""
+    """将 Skill 发布为公共模板（写入 templates/skills/<name>.yaml）。"""
     data = request.get_json(silent=True) or {}
     name = data.get("name", "")
     display_name = data.get("display_name", name)
@@ -759,11 +816,22 @@ def publish_skill_template():
         return jsonify({"error": "name 和 content 为必填项"}), 400
     import uuid as _uuid
     tid = _uuid.uuid4().hex
-    with services().store._connect() as conn:
-        conn.execute(
-            "INSERT INTO skill_templates(id, name, display_name, description, category, content) VALUES (?,?,?,?,?,?)",
-            (tid, name, display_name, description, category, content),
-        )
+    # 写入 templates/skills/<name>.yaml
+    tmpl_dir = services().settings.workspace_root / "templates" / "skills"
+    tmpl_dir.mkdir(parents=True, exist_ok=True)
+    skill_data = {
+        "id": tid,
+        "name": name,
+        "display_name": display_name,
+        "description": description,
+        "category": category,
+        "content": content,
+    }
+    import yaml
+    (tmpl_dir / f"{name}.yaml").write_text(
+        yaml.safe_dump(skill_data, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
     return jsonify({"id": tid}), 201
 
 

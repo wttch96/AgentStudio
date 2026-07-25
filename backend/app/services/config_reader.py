@@ -183,7 +183,11 @@ class ConfigReader:
         templates = []
         for f in sorted(tmpl_dir.glob("*.yaml")):
             try:
-                templates.append(self._read_yaml(f))
+                data = self._read_yaml(f)
+                # 保证 id 字段存在，前端组件依赖此字段
+                if "id" not in data:
+                    data["id"] = data.get("name", f.stem)
+                templates.append(data)
             except Exception:
                 pass
         return templates
@@ -193,7 +197,12 @@ class ConfigReader:
     # ------------------------------------------------------------------
 
     def migrate_from_db(self, store) -> dict[str, int]:
-        """首次启动时将 SQLite 数据迁移到 .agent-studio/ 文件。返回统计信息。"""
+        """首次启动时将 SQLite 配置迁移到 .agent-studio/ 文件。
+
+        注意：projects/project_agents/project_skills/skill_templates 等表已移除，
+        配置数据以 .workspace/.agent-studio/ 下 YAML 文件为唯一数据源。
+        此方法保留用于迁移 configs 表中的遗留设置项。
+        """
         stats = {"projects": 0, "agents": 0, "skills": 0, "settings": 0}
         if self.root.joinpath("project.yaml").exists():
             return stats  # Already migrated
@@ -202,62 +211,19 @@ class ConfigReader:
         with self._lock:
             try:
                 with store._connect() as conn:
-                    # Project
-                    projects = conn.execute("SELECT * FROM projects").fetchall()
-                    for row in projects:
-                        p = dict(row)
-                        self._write_yaml(self.root / "project.yaml", {
-                            "name": p.get("name", ""),
-                            "description": p.get("description", ""),
-                            "root_dir": p.get("root_dir", ""),
-                        })
-                        stats["projects"] += 1
-
-                        # Agents for this project
-                        agents = conn.execute(
-                            "SELECT * FROM project_agents WHERE project_id = ? ORDER BY sort_order",
-                            (p["id"],),
-                        ).fetchall()
-                        for a_row in agents:
-                            a = dict(a_row)
-                            agent_data = {
-                                "name": a.get("name", ""),
-                                "display_name": a.get("display_name", ""),
-                                "description": a.get("description", ""),
-                                "agent_type": a.get("agent_type", "claude"),
-                                "sub_dir": a.get("sub_dir", ""),
-                                "system_prompt": a.get("system_prompt", ""),
-                                "tools": json.loads(a.get("tools", "[]")),
-                                "skills": json.loads(a.get("skills", "[]")),
-                                "sort_order": a.get("sort_order", 0),
-                            }
-                            self._write_yaml(self.agents_dir / f"{a['name']}.yaml", agent_data)
-                            stats["agents"] += 1
-
-                        # Project skills
-                        pskills = conn.execute(
-                            "SELECT * FROM project_skills WHERE project_id = ?",
-                            (p["id"],),
-                        ).fetchall()
-                        for s_row in pskills:
-                            s = dict(s_row)
-                            self._write_yaml(self.skills_dir / f"{s['name']}.yaml", {
-                                "name": s.get("name", ""),
-                                "description": s.get("description", ""),
-                                "content": s.get("content", ""),
-                            })
-                            stats["skills"] += 1
-
-                    # Settings (brain, workspace, scheduler, memory)
-                    configs = conn.execute("SELECT * FROM configs").fetchall()
-                    for c_row in configs:
-                        c = dict(c_row)
-                        try:
-                            data = json.loads(c["value"])
-                            self._write_yaml(self.root / f"{c['key']}.yaml", data)
-                            stats["settings"] += 1
-                        except Exception:
-                            pass
+                    # 检查 configs 表是否存在（旧版可能有设置数据）
+                    try:
+                        configs = conn.execute("SELECT * FROM configs").fetchall()
+                        for c_row in configs:
+                            c = dict(c_row)
+                            try:
+                                data = json.loads(c["value"])
+                                self._write_yaml(self.root / f"{c['key']}.yaml", data)
+                                stats["settings"] += 1
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass  # configs 表不存在，跳过
 
             except Exception as e:
                 stats["_error"] = str(e)

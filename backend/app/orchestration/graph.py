@@ -63,6 +63,7 @@ def build_graph(
     project_agents: list | None = None,
     rag_executor=None,
     file_agent_executor=None,
+    chat_executor=None,
 ):
     def plan(state: GraphState) -> GraphState:
         run_id = state["run_id"]
@@ -321,6 +322,8 @@ def build_graph(
         agent_type = _resolve_agent_type(task.agent)
         if agent_type == "rag" and rag_executor:
             active_executor = rag_executor
+        elif agent_type == "chat" and chat_executor:
+            active_executor = chat_executor
         elif agent_type == "file-ops" and file_agent_executor:
             active_executor = file_agent_executor
         else:
@@ -351,16 +354,16 @@ def build_graph(
             result.duration_ms = duration_ms
         events.emit(
             state["run_id"],
-            "agent.completed" if result.status == "completed" else "agent.failed",
+            "agent.completed" if result and result.status == "completed" else "agent.failed",
             agent_id=task.agent,
             task_id=task.id,
             payload={
-                **result.model_dump(),
+                **(result.model_dump() if result else {}),
                 "duration_ms": duration_ms,
             },
         )
         # reducer 会把每个并行 worker 的单个结果合并回共享状态。
-        return {"results": [result.model_dump()]}
+        return {"results": [result.model_dump()] if result else []}
 
     def barrier(state: GraphState) -> GraphState:
         """本轮所有 Send worker 返回后，LangGraph 才会执行一次此节点。"""

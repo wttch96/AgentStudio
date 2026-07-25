@@ -131,7 +131,7 @@ const formattedFinishedAt = computed(() => {
 
 .section-title {
   margin: 0;
-  font-size: 0.5625rem;
+  font-size: 0.9375rem;
   font-weight: 650;
   color: var(--secondary);
   text-transform: uppercase;
@@ -147,25 +147,25 @@ const formattedFinishedAt = computed(() => {
 }
 
 .overview-label {
-  font-size: 0.5625rem;
+  font-size: 0.9375rem;
   color: var(--tertiary);
   flex-shrink: 0;
 }
 
 .overview-value {
-  font-size: 0.5625rem;
+  font-size: 0.9375rem;
   font-weight: 500;
   text-align: right;
 }
 
 .overview-value.mono {
   font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
-  font-size: 0.5rem;
+  font-size: 0.875rem;
 }
 
 .overview-value.time {
   color: var(--tertiary);
-  font-size: 0.5rem;
+  font-size: 0.875rem;
 }
 
 .type-badge {
@@ -173,7 +173,7 @@ const formattedFinishedAt = computed(() => {
   border-radius: 4px;
   background: var(--blue-soft);
   color: var(--blue);
-  font-size: 0.5rem;
+  font-size: 0.875rem;
 }
 
 /* 状态颜色 */
@@ -203,7 +203,7 @@ const formattedFinishedAt = computed(() => {
 .overview-objective,
 .overview-summary {
   margin: 0;
-  font-size: 0.5625rem;
+  font-size: 0.9375rem;
   line-height: 1.5;
   color: var(--secondary);
   white-space: pre-wrap;
@@ -234,7 +234,7 @@ const formattedFinishedAt = computed(() => {
 }
 
 .metric-label {
-  font-size: 0.4375rem;
+  font-size: 0.8125rem;
   color: var(--tertiary);
   text-transform: uppercase;
   letter-spacing: 0.02em;

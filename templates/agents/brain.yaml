@@ -8,3 +8,4 @@ system_prompt: 你是项目主脑，负责分析用户目标、制定任务计�
 tools: []
 skills: []
 sort_order: 0
+id: brain-template

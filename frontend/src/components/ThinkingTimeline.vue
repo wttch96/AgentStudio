@@ -444,15 +444,14 @@ function convLabel(isUser: boolean) {
             <template v-if="waveStartTime(wave.tasks)"> · {{ waveStartTime(wave.tasks) }}</template>
           </small>
         </div>
-        <button
-          class="wave-collapse-button"
-          type="button"
+        <ElButton
+          size="small"
           :aria-expanded="!isWaveCollapsed(wave.tasks)"
           @click="toggleWave(wave.tasks)"
         >
           <span aria-hidden="true">{{ isWaveCollapsed(wave.tasks) ? '⌄' : '⌃' }}</span>
           <span>{{ isWaveCollapsed(wave.tasks) ? '展开' : '折叠' }}</span>
-        </button>
+        </ElButton>
       </div>
 
       <!-- Agent lanes -->
@@ -992,27 +991,6 @@ function convLabel(isUser: boolean) {
 .thinking-timeline .flow-junction small {
   color: var(--tertiary);
   font-size: 0.5rem;
-}
-
-.thinking-timeline .wave-collapse-button {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  margin-left: 3px;
-  padding: 5px 8px;
-  border: 0;
-  border-radius: 8px;
-  background: rgba(118,118,128,.15);
-  color: var(--secondary);
-  cursor: pointer;
-  font-size: 0.5rem;
-  line-height: 1;
-  white-space: nowrap;
-}
-
-.thinking-timeline .wave-collapse-button:hover {
-  background: rgba(118,118,128,.28);
-  color: var(--label);
 }
 
 .thinking-timeline .agent-lanes {

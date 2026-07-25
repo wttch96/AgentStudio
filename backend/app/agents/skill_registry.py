@@ -1,10 +1,16 @@
-"""项目级 Claude Skill 的读取、创建和更新服务。"""
+"""项目级 Claude Skill 的读取、创建和更新服务。
+
+公共 Skill：.claude/skills/<name>/SKILL.md
+项目 Skill：.workspace/.agent-studio/skills/<name>.yaml
+Skill 模板：templates/skills/<name>.yaml
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
+from typing import Any
 
 import yaml
 
@@ -17,10 +23,10 @@ class SkillProfile:
 
 
 class SkillRegistry:
-    def __init__(self, skills_dir: Path, store=None) -> None:
+    def __init__(self, skills_dir: Path, config_reader: Any = None) -> None:
         self.skills_dir = skills_dir
         self.skills_dir.mkdir(parents=True, exist_ok=True)
-        self._store = store
+        self._config_reader = config_reader
         self._lock = RLock()
         self._profiles = self._load_all()
 
@@ -43,6 +49,8 @@ class SkillRegistry:
         if len(parts) != 3 or parts[0].strip():
             raise ValueError(f"Skill 文件缺少 YAML frontmatter: {path}")
         return yaml.safe_load(parts[1]) or {}, parts[2]
+
+    # ── 公共 Skill（.claude/skills/）──
 
     def list_public(self) -> list[dict[str, str]]:
         with self._lock:
@@ -83,56 +91,66 @@ class SkillRegistry:
             self._profiles = self._load_all()
         return self.get_public(name)
 
-    # ── 项目级 Skill（存储在 project_skills 表）──
+    # ── 项目级 Skill（.workspace/.agent-studio/skills/*.yaml）──
 
     def list_project(self, project_id: str) -> list[dict]:
-        if not self._store:
-            return []
-        with self._store._connect() as conn:
-            rows = conn.execute(
-                "SELECT name, description FROM project_skills WHERE project_id = ? ORDER BY name",
-                (project_id,),
-            ).fetchall()
-        return [{"name": r["name"], "description": r["description"]} for r in rows]
+        """列出项目 Skill（文件优先）。"""
+        if self._config_reader:
+            return self._config_reader.list_skills()
+        return []
 
     def get_project(self, project_id: str, name: str) -> dict:
-        if not self._store:
-            raise ValueError(f"未知 Skill: {name}")
-        with self._store._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM project_skills WHERE project_id = ? AND name = ?",
-                (project_id, name),
-            ).fetchone()
-        if not row:
-            raise ValueError(f"未知 Skill: {name}")
-        return {"name": row["name"], "description": row["description"], "content": row["content"]}
+        """获取单个项目 Skill。"""
+        if self._config_reader:
+            return self._config_reader.get_skill(name)
+        raise ValueError(f"未知 Skill: {name}")
 
     def create_project(self, project_id: str, name: str, description: str, content: str) -> dict:
-        if not self._store:
-            raise RuntimeError("Store not available")
-        import uuid, json
-        sid = uuid.uuid4().hex
-        with self._store._connect() as conn:
-            try:
-                conn.execute(
-                    "INSERT INTO project_skills(id, project_id, name, description, content) VALUES (?,?,?,?,?)",
-                    (sid, project_id, name, description, content),
-                )
-            except Exception:
-                raise FileExistsError(f"Skill 已存在: {name}")
-        return self.get_project(project_id, name)
+        """创建项目 Skill 为 YAML 文件。"""
+        if not self._config_reader:
+            raise RuntimeError("ConfigReader not available")
+        existing = self._config_reader.list_skills()
+        if any(s.get("name") == name for s in existing):
+            raise FileExistsError(f"Skill 已存在: {name}")
+        self._config_reader.save_skill(name, {
+            "name": name,
+            "description": description,
+            "content": content,
+        })
+        return self._config_reader.get_skill(name)
 
     def update_project(self, project_id: str, name: str, description: str, content: str) -> dict:
-        if not self._store:
-            raise RuntimeError("Store not available")
-        with self._store._connect() as conn:
-            cursor = conn.execute(
-                "UPDATE project_skills SET description=?, content=?, updated_at=CURRENT_TIMESTAMP WHERE project_id=? AND name=?",
-                (description, content, project_id, name),
-            )
-            if cursor.rowcount == 0:
-                raise ValueError(f"未知 Skill: {name}")
-        return self.get_project(project_id, name)
+        """更新项目 Skill YAML 文件。"""
+        if not self._config_reader:
+            raise RuntimeError("ConfigReader not available")
+        try:
+            self._config_reader.get_skill(name)
+        except FileNotFoundError:
+            raise ValueError(f"未知 Skill: {name}")
+        self._config_reader.save_skill(name, {
+            "name": name,
+            "description": description,
+            "content": content,
+        })
+        return self._config_reader.get_skill(name)
+
+    # ── Skill 模板（templates/skills/*.yaml）──
+
+    def list_templates(self) -> list[dict[str, Any]]:
+        """从 templates/skills/ 目录列出 Skill 模板。"""
+        tmpl_dir = self.skills_dir.parent.parent.parent / "templates" / "skills"
+        if not tmpl_dir.is_dir():
+            return []
+        templates = []
+        for f in sorted(tmpl_dir.glob("*.yaml")):
+            try:
+                data = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
+                if "name" not in data:
+                    data["name"] = f.stem
+                templates.append(data)
+            except Exception:
+                pass
+        return templates
 
     def _write(self, name: str, description: str, content: str) -> None:
         directory = self.skills_dir / name
@@ -146,4 +164,3 @@ class SkillRegistry:
         ).strip()
         temporary.write_text(f"---\n{metadata}\n---\n\n{content.strip()}\n", encoding="utf-8")
         temporary.replace(path)
-

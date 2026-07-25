@@ -5,7 +5,7 @@ keywords: [审查, review, 代码审查, code quality, 代码质量, PR, pull re
 
 nodes:
   - id: review
-    agent: code-reviewer
+    agent: vue-frontend
     title: 代码质量审查
     objective: |
       对工作区代码进行全面的质量审查。

@@ -159,14 +159,14 @@ onMounted(() => { search(); loadStats() })
   <div class="knowledge-panel">
     <!-- Search -->
     <div class="knowledge-search">
-      <input v-model="query" type="text" placeholder="搜索知识库…" @keyup.enter="search" />
-      <select v-model="category" @change="search">
-        <option value="">全部分类</option>
-        <option v-for="(_, cat) in stats.by_category" :key="cat" :value="cat">{{ cat }}</option>
-      </select>
-      <button type="button" @click="search" :disabled="loading">{{ loading ? '搜索中…' : '搜索' }}</button>
-      <button type="button" class="add-btn" @click="startEdit()">+ 新增</button>
-      <button type="button" class="import-btn" @click="openImport">📄 导入文件</button>
+      <ElInput v-model="query" placeholder="搜索知识库…" size="small" class="search-input" />
+      <ElSelect v-model="category" size="small" @change="search" class="search-category">
+        <ElOption value="" label="全部分类" />
+        <ElOption v-for="(_, cat) in stats.by_category" :key="cat" :value="cat" :label="cat" />
+      </ElSelect>
+      <ElButton type="primary" size="small" :disabled="loading" @click="search">{{ loading ? '搜索中…' : '搜索' }}</ElButton>
+      <ElButton type="success" size="small" class="add-btn" @click="startEdit()">+ 新增</ElButton>
+      <ElButton size="small" class="import-btn" @click="openImport">📄 导入文件</ElButton>
     </div>
 
     <!-- Stats -->
@@ -196,10 +196,10 @@ onMounted(() => { search(); loadStats() })
           <span v-if="item.expires_at" class="k-expiry">过期: {{ item.expires_at }}</span>
         </div>
         <div class="k-actions">
-          <button @click="feedback(item.id, 'up')" title="有用">&#x1F44D;</button>
-          <button @click="feedback(item.id, 'down')" title="无用">&#x1F44E;</button>
-          <button @click="startEdit(item)">编辑</button>
-          <button class="danger" @click="deleteEntry(item.id)">删除</button>
+          <ElButton size="small" @click="feedback(item.id, 'up')" title="有用">&#x1F44D;</ElButton>
+          <ElButton size="small" @click="feedback(item.id, 'down')" title="无用">&#x1F44E;</ElButton>
+          <ElButton size="small" @click="startEdit(item)">编辑</ElButton>
+          <ElButton size="small" type="danger" @click="deleteEntry(item.id)">删除</ElButton>
         </div>
       </article>
     </div>
@@ -208,23 +208,23 @@ onMounted(() => { search(); loadStats() })
     <div v-if="showForm" class="k-form-overlay" @click.self="showForm = false">
       <div class="k-form">
         <h3>{{ editing.id ? '编辑知识' : '新增知识' }}</h3>
-        <label>标题 <input v-model="editing.title" type="text" /></label>
+        <label>标题 <ElInput v-model="editing.title" size="small" /></label>
         <label>分类
-          <select v-model="editing.category">
-            <option value="general">通用</option>
-            <option value="api">API</option>
-            <option value="code">代码示例</option>
-            <option value="naming">命名规范</option>
-            <option value="error">错误处理</option>
-            <option value="deployment">部署</option>
-          </select>
+          <ElSelect v-model="editing.category" size="small">
+            <ElOption value="general" label="通用" />
+            <ElOption value="api" label="API" />
+            <ElOption value="code" label="代码示例" />
+            <ElOption value="naming" label="命名规范" />
+            <ElOption value="error" label="错误处理" />
+            <ElOption value="deployment" label="部署" />
+          </ElSelect>
         </label>
-        <label>标签（逗号分隔）<input v-model="editing.tags" type="text" placeholder="vue, typescript, api" /></label>
-        <label>过期时间 <input v-model="editing.expires_at" type="datetime-local" /></label>
-        <label>内容 <textarea v-model="editing.content" rows="8" /></label>
+        <label>标签（逗号分隔）<ElInput v-model="editing.tags" size="small" placeholder="vue, typescript, api" /></label>
+        <label>过期时间 <ElInput v-model="editing.expires_at" type="datetime-local" size="small" /></label>
+        <label>内容 <ElInput v-model="editing.content" type="textarea" size="small" :rows="8" /></label>
         <div class="k-form-actions">
-          <button @click="saveEntry">保存</button>
-          <button class="cancel" @click="showForm = false">取消</button>
+          <ElButton type="primary" size="small" @click="saveEntry">保存</ElButton>
+          <ElButton size="small" class="cancel" @click="showForm = false">取消</ElButton>
         </div>
       </div>
     </div>
@@ -236,22 +236,22 @@ onMounted(() => { search(); loadStats() })
         <p class="import-hint">选择 .md / .txt 文件，Markdown 将按 ## 标题自动拆分为多条知识。</p>
 
         <label>分类
-          <select v-model="importCategory">
-            <option value="general">通用</option>
-            <option value="api">API</option>
-            <option value="code">代码示例</option>
-            <option value="naming">命名规范</option>
-            <option value="error">错误处理</option>
-            <option value="deployment">部署</option>
-          </select>
+          <ElSelect v-model="importCategory" size="small">
+            <ElOption value="general" label="通用" />
+            <ElOption value="api" label="API" />
+            <ElOption value="code" label="代码示例" />
+            <ElOption value="naming" label="命名规范" />
+            <ElOption value="error" label="错误处理" />
+            <ElOption value="deployment" label="部署" />
+          </ElSelect>
         </label>
 
         <!-- Path display -->
         <div class="import-path-row">
           <label>文件路径</label>
           <div class="path-input-row">
-            <input v-model="importPath" type="text" placeholder="选择文件或直接输入路径…" />
-            <button v-if="currentDir" type="button" class="dir-up" @click="parentDir">⬆ 上级</button>
+            <ElInput v-model="importPath" size="small" placeholder="选择文件或直接输入路径…" />
+            <ElButton v-if="currentDir" size="small" class="dir-up" @click="parentDir">⬆ 上级</ElButton>
           </div>
         </div>
 
@@ -285,10 +285,10 @@ onMounted(() => { search(); loadStats() })
         </div>
 
         <div class="k-form-actions">
-          <button @click="doImport" :disabled="!importPath.trim() || importing">
+          <ElButton type="primary" size="small" :disabled="!importPath.trim() || importing" @click="doImport">
             {{ importing ? '导入中…' : '导入' }}
-          </button>
-          <button class="cancel" @click="showImport = false">取消</button>
+          </ElButton>
+          <ElButton size="small" class="cancel" @click="showImport = false">取消</ElButton>
         </div>
       </div>
     </div>
@@ -297,12 +297,10 @@ onMounted(() => { search(); loadStats() })
 
 <style scoped>
 .knowledge-panel { padding: 0.5rem 0; }
-.knowledge-search { display: flex; gap: 0.5rem; margin-bottom: 0.75rem; flex-wrap: wrap; }
-.knowledge-search input { flex: 1; min-width: 120px; padding: 0.4rem 0.6rem; border: 1px solid var(--separator-soft); border-radius: 6px; background: var(--surface); color: var(--label); font-size: 0.8rem; }
-.knowledge-search select { padding: 0.4rem; border: 1px solid var(--separator-soft); border-radius: 6px; background: var(--surface); color: var(--label); font-size: 0.8rem; }
-.knowledge-search button { padding: 0.4rem 0.8rem; border: 0; border-radius: 6px; color: #fff; cursor: pointer; font-size: 0.8rem; white-space: nowrap; }
-.knowledge-search button:not(.add-btn):not(.import-btn) { background: var(--blue); }
-.knowledge-search button:disabled { opacity: 0.5; }
+.knowledge-search { display: flex; gap: 0.5rem; margin-bottom: 0.75rem; flex-wrap: wrap; align-items: center; }
+.knowledge-search .search-input { flex: 1; min-width: 120px; }
+.knowledge-search .search-category { width: auto; min-width: 100px; }
+
 .add-btn { background: var(--green) !important; }
 .import-btn { background: rgba(191, 90, 242, 0.7) !important; }
 .import-btn:hover { background: rgba(191, 90, 242, 0.9) !important; }
@@ -327,17 +325,12 @@ onMounted(() => { search(); loadStats() })
 .k-meta { font-size: 0.6rem; color: var(--tertiary); margin-bottom: 0.3rem; }
 .k-expiry { color: var(--orange); margin-left: 0.5rem; }
 .k-actions { display: flex; gap: 0.3rem; }
-.k-actions button { padding: 0.15rem 0.4rem; border: 1px solid var(--separator-soft); border-radius: 4px; background: var(--surface); color: var(--secondary); cursor: pointer; font-size: 0.65rem; }
-.k-actions button:hover { background: var(--surface-hover); }
-.k-actions .danger { color: var(--red); border-color: rgba(255,69,58,.3); }
 
 .k-form-overlay { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: rgba(0,0,0,.5); }
 .k-form { width: 500px; max-height: 80vh; overflow-y: auto; padding: 1.25rem; background: var(--bg); border-radius: 12px; display: flex; flex-direction: column; gap: 0.6rem; }
 .k-form h3 { margin: 0; font-size: 1rem; }
 .k-form label { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.7rem; color: var(--secondary); }
-.k-form input, .k-form select, .k-form textarea { padding: 0.35rem; border: 1px solid var(--separator-soft); border-radius: 6px; background: var(--surface); color: var(--label); font-size: 0.8rem; }
 .k-form-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
-.k-form-actions button { padding: 0.4rem 0.8rem; border: 0; border-radius: 6px; background: var(--blue); color: #fff; cursor: pointer; }
 .k-form-actions .cancel { background: var(--surface-hover); color: var(--label); }
 
 /* Import dialog */
@@ -345,7 +338,7 @@ onMounted(() => { search(); loadStats() })
 .import-hint { font-size: 0.72rem; color: var(--secondary); margin: 0; }
 .import-path-row label { font-size: 0.65rem; color: var(--secondary); }
 .path-input-row { display: flex; gap: 0.4rem; }
-.path-input-row input { flex: 1; }
+.path-input-row .el-input { flex: 1; }
 .dir-up { padding: 0.3rem 0.6rem; border: 1px solid var(--separator-soft); border-radius: 6px; background: var(--surface); color: var(--secondary); cursor: pointer; font-size: 0.7rem; }
 .dir-browser { max-height: 250px; overflow-y: auto; border: 1px solid var(--separator-soft); border-radius: 8px; padding: 0.5rem; background: var(--surface); }
 .dir-current { font-size: 0.7rem; color: var(--blue); margin-bottom: 0.35rem; font-weight: 600; }

@@ -41,6 +41,7 @@ class SQLiteStore:
                     parent_run_id TEXT,
                     conversation_id TEXT,
                     turn_index INTEGER NOT NULL DEFAULT 1,
+                    project_id TEXT DEFAULT '',
                     status TEXT NOT NULL,
                     final_answer TEXT,
                     error TEXT,
@@ -146,6 +147,26 @@ class SQLiteStore:
                     feedback TEXT NOT NULL CHECK(feedback IN ('up', 'down')),
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
+                CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
+                    title, content, category, tags, project_id,
+                    content='knowledge_entries',
+                    content_rowid='rowid'
+                );
+                -- FTS triggers
+                CREATE TRIGGER IF NOT EXISTS knowledge_fts_insert AFTER INSERT ON knowledge_entries BEGIN
+                    INSERT INTO knowledge_fts(rowid, title, content, category, tags, project_id)
+                    VALUES (new.rowid, new.title, new.content, new.category, new.tags, new.project_id);
+                END;
+                CREATE TRIGGER IF NOT EXISTS knowledge_fts_delete AFTER DELETE ON knowledge_entries BEGIN
+                    INSERT INTO knowledge_fts(knowledge_fts, rowid, title, content, category, tags, project_id)
+                    VALUES ('delete', old.rowid, old.title, old.content, old.category, old.tags, old.project_id);
+                END;
+                CREATE TRIGGER IF NOT EXISTS knowledge_fts_update AFTER UPDATE ON knowledge_entries BEGIN
+                    INSERT INTO knowledge_fts(knowledge_fts, rowid, title, content, category, tags, project_id)
+                    VALUES ('delete', old.rowid, old.title, old.content, old.category, old.tags, old.project_id);
+                    INSERT INTO knowledge_fts(rowid, title, content, category, tags, project_id)
+                    VALUES (new.rowid, new.title, new.content, new.category, new.tags, new.project_id);
+                END;
 CREATE TABLE IF NOT EXISTS flow_traces (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
@@ -162,6 +183,7 @@ CREATE TABLE IF NOT EXISTS flow_traces (
                 );
                 CREATE INDEX IF NOT EXISTS idx_flow_traces_run
                 ON flow_traces(run_id);
+
                 """
             )
             columns = {
@@ -181,7 +203,7 @@ CREATE TABLE IF NOT EXISTS flow_traces (
             if "started_at" not in columns:
                 connection.execute("ALTER TABLE runs ADD COLUMN started_at TEXT")
             if "project_id" not in columns:
-                connection.execute("ALTER TABLE runs ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE SET NULL")
+                connection.execute("ALTER TABLE runs ADD COLUMN project_id TEXT DEFAULT ''")
             if "forked_from_run_id" not in columns:
                 connection.execute("ALTER TABLE runs ADD COLUMN forked_from_run_id TEXT")
             # Migrate knowledge_entries: add project_id column if missing

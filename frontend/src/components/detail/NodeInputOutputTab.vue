@@ -69,7 +69,7 @@ const formattedOutput = computed(() => {
   align-items: center;
   gap: 6px;
   margin: 0;
-  font-size: 0.5625rem;
+  font-size: 0.9375rem;
   font-weight: 650;
   color: var(--secondary);
   text-transform: uppercase;
@@ -77,7 +77,7 @@ const formattedOutput = computed(() => {
 }
 
 .io-badge {
-  font-size: 0.4375rem;
+  font-size: 0.8125rem;
   font-weight: 700;
   padding: 2px 5px;
   border-radius: 3px;
@@ -99,7 +99,7 @@ const formattedOutput = computed(() => {
   border-radius: 8px;
   background: #111113;
   color: rgba(235, 235, 245, 0.76);
-  font: 0.5rem / 1.55 ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  font: 0.875rem / 1.55 ui-monospace, 'SFMono-Regular', Menlo, monospace;
   white-space: pre-wrap;
   word-break: break-all;
   max-height: 400px;
@@ -109,7 +109,7 @@ const formattedOutput = computed(() => {
 
 .io-empty {
   margin: 0;
-  font-size: 0.5625rem;
+  font-size: 0.9375rem;
   color: var(--tertiary);
   font-style: italic;
   padding: 8px 0;

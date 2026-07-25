@@ -217,15 +217,16 @@ function memoryStatus() {
           <span class="eyebrow">DeepSeek API</span>
           <strong>账户余额</strong>
         </div>
-        <button
-          type="button"
+        <ElButton
+          link
+          size="small"
           :disabled="balanceLoading"
           title="刷新账户余额"
           aria-label="刷新 DeepSeek 账户余额"
           @click="$emit('refreshBalance')"
         >
           {{ balanceLoading ? '…' : '↻' }}
-        </button>
+        </ElButton>
       </header>
 
       <div v-if="deepseekBalance" class="balance-content">

@@ -9,3 +9,4 @@ system_prompt: 你是知识库管理 Agent，负责检索知识库、录入新�
 tools: []
 skills: []
 sort_order: 0
+id: rag-template

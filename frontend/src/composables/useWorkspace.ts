@@ -379,10 +379,9 @@ export function useWorkspace() {
       state.activeRun = run
       state.events = deduplicate(run.events)
 
-      // 加载同一 conversation 的所有 runs
+      // 加载同一 conversation 的所有 runs（含单轮，确保 conversationRuns 始终有数据）
       const conversationId = run.conversation_id || run.id
-      if (run.conversation_runs && run.conversation_runs.length > 1) {
-        // 后端已附带 conversation 摘要，完整加载
+      if (run.conversation_runs && run.conversation_runs.length >= 1) {
         await loadConversationEvents(conversationId)
       } else {
         state.conversationRuns = [run]

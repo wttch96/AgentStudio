@@ -1,27 +1,40 @@
+import { ref } from 'vue'
+
+const KEY = 'agent-studio-theme'
+
+function getStored(): 'light' | 'dark' {
+  const stored = localStorage.getItem(KEY)
+  if (stored === 'dark' || stored === 'light') return stored
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
+
+function apply(theme: 'light' | 'dark') {
+  // Element Plus dark mode
+  document.documentElement.classList.toggle('dark', theme === 'dark')
+  // Legacy CSS compatibility
+  document.documentElement.setAttribute('data-theme', theme)
+  // Color scheme meta
+  const meta = document.querySelector('meta[name="color-scheme"]')
+  if (meta) meta.setAttribute('content', theme === 'dark' ? 'dark' : 'light')
+  else {
+    const m = document.createElement('meta')
+    m.name = 'color-scheme'; m.content = theme === 'dark' ? 'dark' : 'light'
+    document.head.appendChild(m)
+  }
+  localStorage.setItem(KEY, theme)
+}
+
+const current = ref<'light' | 'dark'>(getStored())
+apply(current.value)
+
 export function useTheme() {
-  const KEY = 'agent-studio-theme'
-
-  function get(): 'light' | 'dark' {
-    const stored = localStorage.getItem(KEY)
-    if (stored === 'dark' || stored === 'light') return stored
-    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
-  }
-
-  function apply(theme: 'light' | 'dark') {
-    document.documentElement.setAttribute('data-theme', theme)
-    localStorage.setItem(KEY, theme)
-    const meta = document.querySelector('meta[name="color-scheme"]')
-    if (meta) meta.setAttribute('content', theme)
-  }
-
   function toggle() {
-    const next = get() === 'dark' ? 'light' : 'dark'
-    apply(next)
-    return next
+    current.value = current.value === 'dark' ? 'light' : 'dark'
+    apply(current.value)
   }
-
-  // Initialize on load
-  apply(get())
-
-  return { get, apply, toggle }
+  function set(theme: 'light' | 'dark') {
+    current.value = theme
+    apply(theme)
+  }
+  return { current, toggle, set }
 }

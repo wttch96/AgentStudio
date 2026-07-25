@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any
 
+from app.agents.chat_executor import ChatExecutor
 from app.agents.claude_executor import ClaudeAgentExecutor
 from app.agents.file_agent_executor import FileAgentExecutor
 from app.agents.rag_executor import RAGAgentExecutor
@@ -34,6 +35,7 @@ class FlowEngine:
         store: SQLiteStore,
         flow_store: Any = None,
         rag_executor: RAGAgentExecutor | None = None,
+        chat_executor: ChatExecutor | None = None,
         file_agent_executor: FileAgentExecutor | None = None,
     ) -> None:
         self.executor = executor
@@ -41,6 +43,7 @@ class FlowEngine:
         self.store = store
         self.flow_store = flow_store
         self.rag_executor = rag_executor
+        self.chat_executor = chat_executor
         self.file_agent_executor = file_agent_executor
         self.template_renderer = FlowTemplateRenderer()
 
@@ -287,6 +290,8 @@ class FlowEngine:
         agent_type = getattr(profile, "agent_type", "claude")
         if agent_type == "rag" and self.rag_executor:
             return self.rag_executor
+        if agent_type == "chat" and self.chat_executor:
+            return self.chat_executor
         if agent_type == "file-ops" and self.file_agent_executor:
             return self.file_agent_executor
         return self.executor

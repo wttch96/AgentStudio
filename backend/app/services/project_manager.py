@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -164,6 +163,7 @@ class ProjectManager:
             yaml_file = tmpl_dir / f"{tmpl['name']}.yaml"
             if not yaml_file.exists():
                 data = {
+                    "id": tmpl["id"],
                     "name": tmpl["name"],
                     "display_name": tmpl["display_name"],
                     "description": tmpl["description"],
@@ -187,7 +187,9 @@ class ProjectManager:
         root = Path(root_dir).resolve()
         if not root.is_dir():
             raise ValueError(f"目录不存在: {root}")
-        data = {"name": name, "description": description, "root_dir": str(root)}
+        # 保证项目有稳定的 id
+        project_id = uuid.uuid4().hex
+        data = {"id": project_id, "name": name, "description": description, "root_dir": str(root)}
         if self.config_reader:
             self.config_reader.save_project(data)
         return data
@@ -199,7 +201,11 @@ class ProjectManager:
     def list_projects(self) -> list[dict]:
         if self.config_reader:
             try:
-                return [self.config_reader.load_project()]
+                projects = []
+                p = self.config_reader.load_project()
+                self._ensure_project_id(p)
+                projects.append(p)
+                return projects
             except Exception:
                 pass
         return []
@@ -208,41 +214,72 @@ class ProjectManager:
         if self.config_reader:
             try:
                 p = self.config_reader.load_project()
+                self._ensure_project_id(p)
                 return p
             except Exception:
                 pass
         return None
 
+    @staticmethod
+    def _ensure_project_id(data: dict) -> None:
+        """保证项目数据有 id 字段（兼容旧项目文件）。"""
+        if "id" not in data:
+            data["id"] = uuid.uuid4().hex
+
     # ── Agent CRUD (file-backed) ──
 
-    def add_agent(self, project_id: str, template_id: str, sub_dir: str = "",
-                  custom_prompt: str = "", display_name: str = "") -> dict | None:
-        """从模板创建 Agent YAML 文件。"""
+    def add_agent(self, project_id: str, template_id: str = "", sub_dir: str = "",
+                  custom_prompt: str = "", display_name: str = "",
+                  name: str = "", agent_type: str = "",
+                  tools: list | None = None, skills: list | None = None,
+                  description: str = "", model: str = "") -> dict | None:
+        """创建 Agent YAML 文件。可从模板创建，也可手动创建。"""
         if not self.config_reader:
             return None
-        # Find template by id or name
-        templates = self.config_reader.list_agent_templates()
-        tmpl = None
-        for t in templates:
-            if t.get("id") == template_id or t.get("name") == template_id:
-                tmpl = t
-                break
-        if not tmpl:
-            raise ValueError(f"模板不存在: {template_id}")
 
-        name = tmpl["name"]
-        data = {
-            "name": name,
-            "display_name": display_name or tmpl.get("display_name", name),
-            "description": tmpl.get("description", ""),
-            "agent_type": tmpl.get("agent_type", "claude"),
-            "sub_dir": sub_dir or tmpl.get("sub_dir", ""),
-            "system_prompt": custom_prompt or tmpl.get("system_prompt", ""),
-            "tools": tmpl.get("tools", []),
-            "skills": tmpl.get("skills", []),
-            "sort_order": 0,
-        }
-        self.config_reader.save_agent(name, data)
+        if template_id:
+            # 从模板创建
+            templates = self.config_reader.list_agent_templates()
+            tmpl = None
+            for t in templates:
+                if t.get("id") == template_id or t.get("name") == template_id:
+                    tmpl = t
+                    break
+            if not tmpl:
+                raise ValueError(f"模板不存在: {template_id}")
+
+            agent_name = tmpl["name"]
+            data = {
+                "name": agent_name,
+                "display_name": display_name or tmpl.get("display_name", agent_name),
+                "description": tmpl.get("description", ""),
+                "agent_type": tmpl.get("agent_type", "claude"),
+                "sub_dir": sub_dir or tmpl.get("sub_dir", ""),
+                "system_prompt": custom_prompt or tmpl.get("system_prompt", ""),
+                "tools": tools if tools is not None else tmpl.get("tools", []),
+                "skills": skills if skills is not None else tmpl.get("skills", []),
+                "sort_order": 0,
+                "model": model or tmpl.get("model", ""),
+            }
+        else:
+            # 手动创建（无模板）
+            if not name:
+                raise ValueError("手动创建需要指定 name")
+            if not agent_type:
+                agent_type = "claude"
+            data = {
+                "name": name,
+                "display_name": display_name or name,
+                "description": description or "",
+                "agent_type": agent_type,
+                "sub_dir": sub_dir or "",
+                "system_prompt": custom_prompt or "",
+                "tools": tools or [],
+                "skills": skills or [],
+                "sort_order": 0,
+                "model": model or "",
+            }
+        self.config_reader.save_agent(data["name"], data)
         return data
 
     def update_agent(self, project_id: str, agent_id: str, updates: dict) -> dict | None:
@@ -253,7 +290,7 @@ class ProjectManager:
         except Exception:
             return None
         allowed = {"display_name", "description", "system_prompt", "tools",
-                   "skills", "sub_dir", "sort_order"}
+                   "skills", "sub_dir", "sort_order", "model"}
         for k, v in updates.items():
             if k in allowed and v is not None:
                 existing[k] = v
@@ -277,30 +314,13 @@ class ProjectManager:
     # ── 模板管理 (file-backed) ──
 
     def list_templates(self, category: str | None = None) -> list[dict]:
-        """列出全局模板目录中的 Agent 模板。文件优先。"""
+        """列出全局模板目录中的 Agent 模板（文件优先）。"""
         if self.config_reader:
             all_tmpl = self.config_reader.list_agent_templates()
             if category:
                 return [t for t in all_tmpl if t.get("category") == category]
             return all_tmpl
-        # Fallback to DB
-        with self.store._connect() as conn:
-            if category:
-                rows = conn.execute(
-                    "SELECT * FROM agent_templates WHERE category = ? ORDER BY name",
-                    (category,),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT * FROM agent_templates ORDER BY category, name"
-                ).fetchall()
-        results = []
-        for row in rows:
-            r = dict(row)
-            r["default_tools"] = json.loads(r.get("default_tools", "[]"))
-            r["default_skills"] = json.loads(r.get("default_skills", "[]"))
-            results.append(r)
-        return results
+        return []
 
     def create_template(self, data: dict) -> dict | None:
         """模板只读 — 用户直接在 templates/agents/ 编辑 YAML 文件。"""

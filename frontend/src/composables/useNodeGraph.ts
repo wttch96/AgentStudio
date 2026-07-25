@@ -123,13 +123,52 @@ function deriveNodeStatus(
 export function useNodeGraph(
   events: ComputedRef<RunEvent[]>,
   activeRunId: ComputedRef<string | null>,
+  conversationRuns?: ComputedRef<Array<{id:string; objective:string; status:string; parent_run_id?:string|null; turn_index?:number; final_answer?:string|null; created_at?:string}>>,
 ) {
   /**
-   * 从 plan.created 事件构建初始节点列表，
-   * 然后根据后续事件动态更新状态。
+   * 从 events + conversationRuns 构建节点列表。
+   * 多轮对话时，每轮作为一个 turn 节点，父子 run 之间连边。
    */
   const nodes = computed<ExecutionNode[]>(() => {
     const allEvents = events.value
+    const convRuns = conversationRuns?.value || []
+
+    // 0. 多轮对话 turn 节点
+    const turnNodes: ExecutionNode[] = []
+    if (convRuns.length > 1) {
+      for (const cr of convRuns) {
+        const isActive = cr.id === activeRunId.value
+        turnNodes.push({
+          id: `turn-${cr.id}`,
+          type: 'agent' as const,
+          name: cr.objective.slice(0, 30),
+          sub: `轮次 ${cr.turn_index || '?'} · ${cr.status}`,
+          status: (cr.status as NodeStatus) || 'pending',
+          parentId: cr.parent_run_id ? `turn-${cr.parent_run_id}` : null,
+          agentId: 'brain',
+          taskId: null,
+          runId: cr.id,
+          depth: (cr.turn_index || 1) - 1,  // 从左往右排列：turn 1 在 depth 0, turn 2 在 depth 1...
+          startedAt: cr.created_at || null,
+          finishedAt: cr.status === 'completed' ? cr.created_at : null,
+          durationMs: null,
+          objective: cr.objective,
+          summary: cr.final_answer || null,
+          input: null,
+          output: cr.final_answer ? { text: cr.final_answer } : null,
+          error: cr.status === 'failed' ? { nodeId: `turn-${cr.id}`, type: 'error', message: '执行失败' } : null,
+          hasError: cr.status === 'failed',
+          hasToolCalls: false,
+          toolCallCount: 0,
+          intermediateSteps: [],
+          toolCallGroups: [],
+          dependsOn: cr.parent_run_id ? [`turn-${cr.parent_run_id}`] : [],
+          interruptible: false,
+        })
+      }
+    }
+
+    // 1-6. (原有逻辑) 构建 orchestrator + agent 节点
     if (!allEvents.length) return []
 
     // 1. 查找 plan.created 事件获取 DAG 定义
@@ -170,19 +209,23 @@ export function useNodeGraph(
     const plannerEvents = allEvents.filter(
       (e) => e.type === 'planner.started' || e.type === 'plan.created',
     )
+    const runCompleted = allEvents.some((e) => e.type === 'run.completed')
+    const runFailed = allEvents.some((e) => e.type === 'run.failed')
 
     // 5. 构建 Orchestrator 节点 (主脑)
+    // depth 偏移：排在对话 turn 节点右侧
+    const depthOffset = turnNodes.length
     const orchestratorNode: ExecutionNode = {
       id: `orchestrator-${runId}`,
       type: 'orchestrator',
       name: '主脑编排',
-      sub: tasks.length ? `${tasks.length} 个任务` : '规划中',
-      status: tasks.length ? 'completed' : plannerEvents.length ? 'running' : 'pending',
+      sub: tasks.length ? `${tasks.length} 个任务` : runCompleted ? '直接回答' : '规划中',
+      status: tasks.length || runCompleted ? 'completed' : runFailed ? 'failed' : plannerEvents.length ? 'running' : 'pending',
       parentId: null,
       agentId: 'brain',
       taskId: null,
       runId,
-      depth: 0,
+      depth: depthOffset,
       startedAt: plannerEvents[0]?.timestamp || null,
       finishedAt: planEvent?.timestamp || null,
       durationMs: null,
@@ -252,7 +295,7 @@ export function useNodeGraph(
         agentId: task.agent,
         taskId: task.id,
         runId,
-        depth: (depthMap.get(task.id) ?? 0) + 1, // +1 因为 orchestrator 占 depth 0
+        depth: (depthMap.get(task.id) ?? 0) + depthOffset + 1, // 排在 turn 节点 + orchestrator 右侧
         startedAt: startedEvent?.timestamp || null,
         finishedAt: completedEvent?.timestamp || null,
         durationMs:
@@ -281,7 +324,7 @@ export function useNodeGraph(
       }
     })
 
-    return [orchestratorNode, ...agentNodes]
+    return [...turnNodes, orchestratorNode, ...agentNodes]
   })
 
   /**

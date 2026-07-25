@@ -1,11 +1,17 @@
 """Flask 应用工厂。"""
 
+import logging
+import traceback
 from flask import Flask
 from flask_cors import CORS
 
 from app.api.routes import api
 from app.config import Settings
 from app.services.container import ServiceContainer
+
+# 配置日志以便调试 500 错误
+logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s %(message)s')
+logger = logging.getLogger(__name__)
 
 
 def create_app(settings: Settings | None = None) -> Flask:
@@ -31,6 +37,16 @@ def create_app(settings: Settings | None = None) -> Flask:
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok", "access": "local-only"}
+
+    @app.errorhandler(500)
+    def handle_500(e):
+        logger.error("500 Internal Server Error:\n%s", traceback.format_exc())
+        return {"error": "Internal Server Error", "detail": str(e)}, 500
+
+    @app.errorhandler(Exception)
+    def handle_exception(e):
+        logger.error("Unhandled exception:\n%s", traceback.format_exc())
+        return {"error": "Internal Server Error", "detail": str(e)}, 500
 
     return app
 

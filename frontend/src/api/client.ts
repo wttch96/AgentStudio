@@ -72,6 +72,8 @@ export const api = {
     request<{ current: string; parent: string | null; directories: { name: string; path: string }[]; files: { name: string; path: string }[] }>(
       `/workspace/directories${path ? `?path=${encodeURIComponent(path)}` : ''}`,
     ),
+  pickFolder: () =>
+    request<{ path: string }>('/workspace/pick-folder', { method: 'POST' }),
   scheduler: () => request<SchedulerConfiguration>('/scheduler'),
   updateScheduler: (payload: SchedulerConfiguration) =>
     request<SchedulerConfiguration>('/scheduler', {
@@ -159,8 +161,8 @@ export const api = {
     fetch(API_BASE + "/projects/" + id, { method: "DELETE" }).then(r => { if (!r.ok) throw new Error("delete failed") }),
   projectAgents: (projectId: string) =>
     request<{ items: import("../types").ProjectAgent[] }>("/projects/" + projectId + "/agents"),
-  addProjectAgent: (projectId: string, template_id: string, sub_dir?: string, system_prompt?: string) =>
-    request<import("../types").ProjectAgent>("/projects/" + projectId + "/agents", { method: "POST", body: JSON.stringify({ template_id, sub_dir, system_prompt }) }),
+  addProjectAgent: (projectId: string, params: { template_id?: string; name?: string; display_name?: string; agent_type?: string; sub_dir?: string; system_prompt?: string; description?: string; tools?: string[]; skills?: string[]; model?: string }) =>
+    request<import("../types").ProjectAgent>("/projects/" + projectId + "/agents", { method: "POST", body: JSON.stringify(params) }),
   updateProjectAgent: (projectId: string, agentId: string, updates: Record<string, unknown>) =>
     request<import("../types").ProjectAgent>("/projects/" + projectId + "/agents/" + agentId, { method: "PUT", body: JSON.stringify(updates) }),
   deleteProjectAgent: (projectId: string, agentId: string) =>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { reactive, ref, watch } from 'vue'
+import { Collection } from '@element-plus/icons-vue'
 import { api } from '../../api/client'
 import type { AgentProfile } from '../../types'
 
@@ -56,38 +57,52 @@ watch(() => props.projectId, (pid) => { if (pid && selectedName.value) load(sele
 </script>
 
 <template>
-  <div class="config-editor">
-    <div v-if="!projectId" class="config-empty">
+  <div class="d-flex flex-column gap-3">
+    <ElAlert v-if="!projectId" type="info" :closable="false">
       请先在顶部选择一个项目
-    </div>
+    </ElAlert>
+
     <template v-else>
-      <label class="field-label">RAG Agent (LangChain + DeepSeek)</label>
-      <div v-if="!ragAgents.length" class="config-empty">
-        还没有 RAG Agent，请通过顶部「项目管理」为当前项目添加知识库 RAG 模板。
-      </div>
-      <div v-else class="config-selector">
-        <button
-          v-for="agent in ragAgents"
-          :key="agent.name"
-          type="button"
-          :class="{ active: selectedName === agent.name }"
-          @click="selectedName = agent.name"
-        >
-          {{ agent.display_name || agent.name }}
-        </button>
+      <div>
+        <label class="form-label">RAG Agent (LangChain + DeepSeek)</label>
+        <div v-if="!ragAgents.length" class="text-secondary small py-3">
+          还没有 RAG Agent，请通过顶部「项目管理」为当前项目添加知识库 RAG 模板。
+        </div>
+        <div v-else class="d-flex flex-wrap gap-1">
+          <ElButton
+            v-for="agent in ragAgents"
+            :key="agent.name"
+            size="small"
+            :type="selectedName === agent.name ? 'primary' : ''"
+            @click="selectedName = agent.name"
+          >
+            {{ agent.display_name || agent.name }}
+          </ElButton>
+        </div>
       </div>
 
-      <label class="field-label" for="rag-description">用途说明</label>
-      <input id="rag-description" v-model="form.description" class="config-input" />
+      <ElCard v-if="ragAgents.length">
+        <template #header>
+          <div class="d-flex align-items-center gap-2">
+            <ElIcon size="20"><Collection /></ElIcon>
+            <span><strong>{{ form.display_name || form.name || 'RAG Agent' }}</strong></span>
+          </div>
+        </template>
 
-      <label class="field-label" for="rag-prompt">RAG Agent 系统提示词</label>
-      <textarea id="rag-prompt" v-model="form.prompt" class="config-textarea" rows="12"
-        placeholder="定义 RAG Agent 的知识检索策略、综合规则和输出格式..." />
+        <div class="mb-3">
+          <label class="form-label" for="rag-description">用途说明</label>
+          <ElInput id="rag-description" v-model="form.description" size="small" />
+        </div>
 
-      <div class="config-actions">
-        <span :class="{ error: message.includes('失败') }">{{ message }}</span>
-        <button type="button" :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存 RAG Agent' }}</button>
-      </div>
+        <div class="mb-3">
+          <label class="form-label" for="rag-prompt">RAG Agent 系统提示词</label>
+          <ElInput id="rag-prompt" v-model="form.prompt" type="textarea" size="small" :rows="12"
+            placeholder="定义 RAG Agent 的知识检索策略、综合规则和输出格式..." />
+        </div>
+
+        <ElAlert v-if="message" :type="message.includes('失败') ? 'error' : 'success'" :closable="false" class="mb-3">{{ message }}</ElAlert>
+        <ElButton type="primary" size="small" :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存 RAG Agent' }}</ElButton>
+      </ElCard>
     </template>
   </div>
 </template>

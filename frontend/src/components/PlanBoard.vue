@@ -85,14 +85,16 @@ function taskTimingText(taskId: string) {
         <div class="agent-label">{{ task.agent }}</div>
         <div class="task-command-row">
           <code>{{ task.id }}</code>
-          <button
+          <ElButton
             v-if="taskStatus(task.id) === 'failed'"
-            type="button"
+            type="danger"
+            size="small"
+            plain
             :disabled="!canRetry"
             @click="$emit('retry', task.id)"
           >
             重试
-          </button>
+          </ElButton>
         </div>
         <div v-if="task.depends_on.length" class="dependency-label">
           依赖 {{ task.depends_on.join('、') }}

@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 
+from app.agents.chat_executor import ChatExecutor
 from app.agents.claude_executor import ClaudeAgentExecutor
 from app.agents.file_agent_executor import FileAgentExecutor
 from app.agents.rag_executor import RAGAgentExecutor
@@ -51,6 +52,7 @@ class ServiceContainer:
     flow_store: FlowStore
     flow_engine: FlowEngine
     rag_executor: RAGAgentExecutor | None
+    chat_executor: ChatExecutor | None
     file_agent_executor: FileAgentExecutor | None
 
     @classmethod
@@ -69,7 +71,7 @@ class ServiceContainer:
 
         registry = AgentRegistry(store, config_reader=config_reader)
         skills = SkillRegistry(
-            settings.workspace_root / ".claude" / "skills", store=store
+            settings.workspace_root / ".claude" / "skills", config_reader=config_reader
         )
         workspace = WorkspaceSettings(
             config_reader=config_reader,
@@ -98,8 +100,9 @@ class ServiceContainer:
         interrupt_router = InterruptRouter(store, events)
         project_manager = ProjectManager(store, config_reader=config_reader)
         rag_executor = RAGAgentExecutor(settings, registry, events, knowledge_store) if settings.deepseek_api_key else None
+        chat_executor = ChatExecutor(settings, registry, events) if settings.deepseek_api_key else None
         file_agent_executor = FileAgentExecutor(settings, registry, events) if settings.deepseek_api_key else None
-        flow_engine = FlowEngine(executor, events, store, flow_store=flow_store, rag_executor=rag_executor, file_agent_executor=file_agent_executor)
+        flow_engine = FlowEngine(executor, events, store, flow_store=flow_store, rag_executor=rag_executor, chat_executor=chat_executor, file_agent_executor=file_agent_executor)
         runs = RunManager(
             store,
             events,
@@ -110,6 +113,7 @@ class ServiceContainer:
             memory_manager,
             interrupt_router,
             rag_executor=rag_executor,
+            chat_executor=chat_executor,
             file_agent_executor=file_agent_executor,
             flow_engine=flow_engine,
         )
@@ -135,5 +139,6 @@ class ServiceContainer:
             flow_store,
             flow_engine,
             rag_executor,
+            chat_executor,
             file_agent_executor,
         )

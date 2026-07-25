@@ -130,7 +130,7 @@ const TOOL_ICONS: Record<string, string> = {
   border-radius: 5px;
   background: rgba(118, 118, 128, 0.12);
   color: var(--secondary);
-  font-size: 0.5rem;
+  font-size: 0.875rem;
   cursor: pointer;
 }
 
@@ -145,7 +145,7 @@ const TOOL_ICONS: Record<string, string> = {
 }
 
 .tool-empty p {
-  font-size: 0.5625rem;
+  font-size: 0.9375rem;
   color: var(--tertiary);
   font-style: italic;
   margin: 0;
@@ -179,7 +179,7 @@ const TOOL_ICONS: Record<string, string> = {
   background: transparent;
   color: var(--label);
   cursor: pointer;
-  font-size: 0.5625rem;
+  font-size: 0.9375rem;
   text-align: left;
   transition: background 0.12s;
 }
@@ -199,13 +199,13 @@ const TOOL_ICONS: Record<string, string> = {
 
 .tool-group-name {
   font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
-  font-size: 0.5rem;
+  font-size: 0.875rem;
   font-weight: 600;
   flex: 1;
 }
 
 .tool-group-count {
-  font-size: 0.5rem;
+  font-size: 0.875rem;
   padding: 1px 5px;
   border-radius: 999px;
   background: rgba(10, 132, 255, 0.15);
@@ -214,7 +214,7 @@ const TOOL_ICONS: Record<string, string> = {
 }
 
 .tool-group-chevron {
-  font-size: 0.5625rem;
+  font-size: 0.9375rem;
   color: var(--tertiary);
   flex-shrink: 0;
 }
@@ -243,13 +243,13 @@ const TOOL_ICONS: Record<string, string> = {
 }
 
 .tool-call-seq {
-  font-size: 0.5rem;
+  font-size: 0.875rem;
   color: var(--tertiary);
   font-weight: 600;
 }
 
 .tool-call-time {
-  font-size: 0.4375rem;
+  font-size: 0.8125rem;
   color: var(--tertiary);
   flex: 1;
 }
@@ -258,7 +258,7 @@ const TOOL_ICONS: Record<string, string> = {
   border: 0;
   background: none;
   cursor: pointer;
-  font-size: 0.625rem;
+  font-size: 0.9375rem;
   opacity: 0.5;
   padding: 0;
 }
@@ -270,7 +270,7 @@ const TOOL_ICONS: Record<string, string> = {
 .tool-call-params {
   margin: 0;
   padding: 8px;
-  font: 0.4375rem / 1.5 ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  font: 0.8125rem / 1.5 ui-monospace, 'SFMono-Regular', Menlo, monospace;
   color: var(--secondary);
   white-space: pre-wrap;
   word-break: break-all;

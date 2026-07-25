@@ -375,9 +375,8 @@ function itemSequence(item: TimelineItem) {
             <template v-if="waveStartTime(wave.tasks)"> · {{ waveStartTime(wave.tasks) }}</template>
           </small>
         </div>
-        <button
-          class="wave-collapse-button"
-          type="button"
+        <ElButton
+          size="small"
           :aria-expanded="!isWaveCollapsed(wave.tasks)"
           :aria-controls="`wave-lanes-${wave.level}`"
           :title="isWaveCollapsed(wave.tasks) ? '展开本轮全部泳道' : '折叠本轮全部泳道'"
@@ -385,7 +384,7 @@ function itemSequence(item: TimelineItem) {
         >
           <span aria-hidden="true">{{ isWaveCollapsed(wave.tasks) ? '⌄' : '⌃' }}</span>
           <span>{{ isWaveCollapsed(wave.tasks) ? '展开' : '折叠' }}</span>
-        </button>
+        </ElButton>
       </div>
 
       <div

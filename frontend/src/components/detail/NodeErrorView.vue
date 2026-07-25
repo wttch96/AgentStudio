@@ -95,7 +95,7 @@ const ERROR_LABELS: Record<string, string> = {
 
 .error-none p {
   margin: 0;
-  font-size: 0.5625rem;
+  font-size: 0.9375rem;
   color: var(--green);
 }
 
@@ -111,13 +111,13 @@ const ERROR_LABELS: Record<string, string> = {
   padding: 4px 10px;
   border-radius: 8px;
   border: 1px solid;
-  font-size: 0.5625rem;
+  font-size: 0.9375rem;
   font-weight: 650;
 }
 
 .error-section-title {
   margin: 0 0 6px;
-  font-size: 0.5625rem;
+  font-size: 0.9375rem;
   font-weight: 650;
   color: var(--secondary);
   text-transform: uppercase;
@@ -126,7 +126,7 @@ const ERROR_LABELS: Record<string, string> = {
 
 .error-message {
   margin: 0;
-  font-size: 0.5625rem;
+  font-size: 0.9375rem;
   line-height: 1.5;
   color: var(--label);
   padding: 8px;
@@ -143,7 +143,7 @@ const ERROR_LABELS: Record<string, string> = {
   border-radius: 7px;
   background: #111113;
   color: rgba(235, 235, 245, 0.7);
-  font: 0.4375rem / 1.5 ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  font: 0.8125rem / 1.5 ui-monospace, 'SFMono-Regular', Menlo, monospace;
   white-space: pre-wrap;
   word-break: break-all;
   max-height: 300px;
@@ -152,7 +152,7 @@ const ERROR_LABELS: Record<string, string> = {
 }
 
 .error-stack-hint {
-  font-size: 0.5rem;
+  font-size: 0.875rem;
   color: var(--tertiary);
   line-height: 1.5;
   font-style: italic;
@@ -165,7 +165,7 @@ const ERROR_LABELS: Record<string, string> = {
   padding: 2px 6px;
   background: rgba(118, 118, 128, 0.12);
   color: var(--secondary);
-  font-size: 0.5rem;
+  font-size: 0.875rem;
   cursor: pointer;
 }
 

@@ -10,11 +10,11 @@ from app.storage.sqlite_store import SQLiteStore
 class AgentProfile:
     """运行时 Agent 配置快照。"""
     __slots__ = ("id", "name", "display_name", "description", "agent_type",
-                 "tools", "skills", "prompt", "sub_dir", "is_required")
+                 "tools", "skills", "prompt", "sub_dir", "is_required", "model")
 
     def __init__(self, agent_id: str = "", name: str = "", display_name: str = "", description: str = "",
                  agent_type: str = "", tools: list[str] = None, skills: list[str] = None,
-                 prompt: str = "", sub_dir: str = "", is_required: bool = False):
+                 prompt: str = "", sub_dir: str = "", is_required: bool = False, model: str = None):
         self.id = agent_id or name
         self.name = name
         self.display_name = display_name
@@ -25,6 +25,7 @@ class AgentProfile:
         self.prompt = prompt
         self.sub_dir = sub_dir
         self.is_required = is_required
+        self.model = model
 
 
 class AgentRegistry:
@@ -56,6 +57,7 @@ class AgentRegistry:
                 prompt=a.get("system_prompt", ""),
                 sub_dir=a.get("sub_dir", ""),
                 is_required=a.get("is_required", False),
+                model=a.get("model"),
             )
         return profiles
 

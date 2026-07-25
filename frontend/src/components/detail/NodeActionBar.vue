@@ -100,7 +100,7 @@ function closeMenu() {
   border-radius: 6px;
   background: rgba(240, 162, 69, 0.12);
   color: var(--orange);
-  font-size: 0.625rem;
+  font-size: 0.9375rem;
   cursor: pointer;
   transition: background 0.15s;
 }
@@ -139,7 +139,7 @@ function closeMenu() {
   border-radius: 7px;
   background: transparent;
   color: var(--label);
-  font-size: 0.5625rem;
+  font-size: 0.9375rem;
   cursor: pointer;
   text-align: left;
 }
@@ -149,7 +149,7 @@ function closeMenu() {
 }
 
 .action-menu-item span {
-  font-size: 0.625rem;
+  font-size: 0.9375rem;
 }
 
 /* 注入指令输入 */
@@ -167,7 +167,7 @@ function closeMenu() {
   padding: 6px 8px;
   background: rgba(0, 0, 0, 0.2);
   color: var(--label);
-  font: 0.5rem / 1.4 ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  font: 0.875rem / 1.4 ui-monospace, 'SFMono-Regular', Menlo, monospace;
   outline: none;
 }
 
@@ -191,7 +191,7 @@ function closeMenu() {
   padding: 3px 8px;
   border: 0;
   border-radius: 5px;
-  font-size: 0.5rem;
+  font-size: 0.875rem;
   cursor: pointer;
 }
 

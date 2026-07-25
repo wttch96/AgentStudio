@@ -1,38 +1,32 @@
-"""RAG Agent -- LangChain 驱动的知识库检索与管理 Agent。"""
+"""Chat Agent -- LangChain 驱动的纯对话 Agent（无工具，仅 LLM）。"""
 
 from __future__ import annotations
 
 import asyncio
-import json
 import threading
 from datetime import datetime, timezone
-from typing import Any
 
 from langchain.agents import create_agent
-from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 
 from app.agents.registry import AgentRegistry
 from app.config import Settings
 from app.domain.models import AgentResult, DagTask
 from app.events.publisher import EventPublisher
-from app.services.knowledge_store import KnowledgeStore
 
 
-class RAGAgentExecutor:
-    """基于 LangChain + DeepSeek 的 RAG Agent。"""
+class ChatExecutor:
+    """基于 LangChain + DeepSeek 的纯对话 Agent，不使用任何工具。"""
 
     def __init__(
         self,
         settings: Settings,
         registry: AgentRegistry,
         events: EventPublisher,
-        knowledge_store: KnowledgeStore,
     ) -> None:
         self.settings = settings
         self.registry = registry
         self.events = events
-        self.knowledge_store = knowledge_store
 
     def execute(
         self,
@@ -73,47 +67,14 @@ class RAGAgentExecutor:
     ) -> AgentResult:
         started_at = datetime.now(timezone.utc)
         self.events.emit(run_id, "agent.started", agent_id=task.agent, task_id=task.id,
-                         payload={"objective": task.objective, "agent_type": "rag"})
+                         payload={"objective": task.objective, "agent_type": "chat"})
 
         profile = self.registry.get(project_id, task.agent)
         dep_context = "\n".join(
             f"- {r.task_id}: {r.summary}" for r in dependency_results
         ) or "无前置任务"
 
-        system_prompt = (
-            f"{profile.prompt}\n\n"
-            "你是知识库管理 Agent，可以检索知识库中的内容，也可以录入新的知识条目。\n"
-            "使用 search_knowledge 工具搜索知识库，使用 add_knowledge 工具录入知识。\n"
-            "优先从知识库中检索相关信息，综合后回答用户问题。"
-        )
-
-        ks = self.knowledge_store
-        pid = project_id
-
-        @tool
-        def search_knowledge(query: str) -> str:
-            """搜索知识库中的相关条目。"""
-            try:
-                results = ks.search(query, top_k=5, project_id=pid)
-                if not results:
-                    return "未找到相关知识条目。"
-                return "\n\n---\n".join(
-                    f"[{r.get('id','')[:8]}] {r.get('title','')}\n{r.get('content','')[:1000]}"
-                    for r in results
-                )
-            except Exception as e:
-                return f"搜索出错: {e}"
-
-        @tool
-        def add_knowledge(title: str, content: str, category: str = "") -> str:
-            """向知识库录入新知识条目。"""
-            try:
-                result = ks.create(title=title, content=content, category=category, project_id=pid)
-                return f"知识条目已录入，ID: {result.get('id', 'unknown')}"
-            except Exception as e:
-                return f"录入出错: {e}"
-
-        tools = [search_knowledge, add_knowledge]
+        system_prompt = profile.prompt or "你是一个智能对话助手，请根据用户的问题提供有用、准确的回答。"
 
         try:
             model_name = profile.model or self.settings.deepseek_model
@@ -123,7 +84,7 @@ class RAGAgentExecutor:
                 base_url=self.settings.deepseek_base_url,
                 temperature=0.3,
             )
-            agent = create_agent(llm, tools, system_prompt=system_prompt)
+            agent = create_agent(llm, [], system_prompt=system_prompt)
 
             task_prompt = (
                 f"任务 ID：{task.id}\n任务目标：{task.objective}\n"
@@ -133,7 +94,7 @@ class RAGAgentExecutor:
             result = await agent.ainvoke({"messages": [("user", task_prompt)]})
             messages = result.get("messages", [])
             final_msg = messages[-1].content if messages else ""
-            summary = str(final_msg)[:2000] if final_msg else "RAG Agent 完成检索"
+            summary = str(final_msg)[:2000] if final_msg else "Chat Agent 完成对话"
 
             duration_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
             self.events.emit(run_id, "agent.completed", agent_id=task.agent, task_id=task.id,
