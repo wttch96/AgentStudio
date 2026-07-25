@@ -85,11 +85,12 @@ class BrainSettings:
             orchestration_prompt=DEFAULT_ORCHESTRATION_PROMPT,
         )
 
-    def current(self) -> BrainConfiguration:
+    def current(self, project_id: str = "") -> BrainConfiguration:
         """读取当前编排提示词。优先 .agent-studio/brain.yaml，其次默认值。"""
         with self._lock:
             if self.config_reader:
-                data = self.config_reader.read_setting("brain")
+                reader = self.config_reader.for_project(project_id) if project_id else self.config_reader
+                data = reader.read_setting("brain")
                 if data:
                     return BrainConfiguration.model_validate(data)
             return self.defaults.model_copy()
@@ -97,9 +98,11 @@ class BrainSettings:
     def default(self) -> BrainConfiguration:
         return self.defaults.model_copy()
 
-    def update(self, configuration: BrainConfiguration) -> BrainConfiguration:
+    def update(self, configuration: BrainConfiguration, project_id: str = "") -> BrainConfiguration:
         with self._lock:
             payload = configuration.model_dump()
             if self.config_reader:
-                self.config_reader.write_setting("brain", payload)
+                reader = self.config_reader.for_project(project_id) if project_id else self.config_reader
+                reader._ensure_dirs()
+                reader.write_setting("brain", payload)
         return configuration.model_copy()

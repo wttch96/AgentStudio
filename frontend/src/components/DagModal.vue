@@ -345,7 +345,7 @@ function nodeStroke(node: LayoutNode): string {
 function onWheel(e: WheelEvent) {
   e.preventDefault()
   const delta = e.deltaY > 0 ? 0.9 : 1.1
-  const newScale = Math.min(3, Math.max(0.3, scale.value * delta))
+  const newScale = Math.min(2.0, Math.max(0.5, scale.value * delta))
   // Zoom toward cursor position
   const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
   const cx = e.clientX - rect.left
@@ -462,17 +462,17 @@ function formatTime(ts: string): string {
             }"
           >
             <defs>
-              <marker id="dagm-arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
-                <polygon points="0 0, 8 3, 0 6" fill="#636366" />
+              <marker id="dagm-arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+                <polygon points="0 0, 10 3.5, 0 7" fill="#636366" />
               </marker>
-              <marker id="dagm-arrow-conv" markerWidth="6" markerHeight="5" refX="6" refY="2.5" orient="auto">
-                <polygon points="0 0, 6 2.5, 0 5" fill="#0a84ff" />
+              <marker id="dagm-arrow-conv" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+                <polygon points="0 0, 8 3, 0 6" fill="#0a84ff" />
               </marker>
-              <marker id="dagm-arrow-green" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
-                <polygon points="0 0, 8 3, 0 6" fill="#30d158" />
+              <marker id="dagm-arrow-green" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+                <polygon points="0 0, 10 3.5, 0 7" fill="#30d158" />
               </marker>
-              <marker id="dagm-arrow-orange" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
-                <polygon points="0 0, 8 3, 0 6" fill="#f0a245" />
+              <marker id="dagm-arrow-orange" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+                <polygon points="0 0, 10 3.5, 0 7" fill="#f0a245" />
               </marker>
               <!-- Drop shadow -->
               <filter id="dagm-shadow">
@@ -487,7 +487,7 @@ function formatTime(ts: string): string {
                 :key="'e' + i"
                 :d="getEdgePath(edge)"
                 :stroke="edgeStrokeColor(edge)"
-                stroke-width="1.5"
+                stroke-width="2"
                 fill="none"
                 :marker-end="
                   edgeStrokeColor(edge) === '#30d158' ? 'url(#dagm-arrow-green)' :
@@ -495,7 +495,7 @@ function formatTime(ts: string): string {
                   edgeStrokeColor(edge) === '#0a84ff' ? 'url(#dagm-arrow-conv)' :
                   'url(#dagm-arrow)'
                 "
-                opacity="0.6"
+                opacity="0.7"
               />
             </g>
 

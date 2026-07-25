@@ -155,9 +155,7 @@ class ProjectManager:
 
     def _seed_templates(self) -> None:
         """首次启动时将内置模板写入 templates/agents/。"""
-        # database_path = workspace_root/.workspace/.agent-studio/db/agents-manager.db
-        # parent = db/, parent*2 = .agent-studio/, parent*3 = .workspace/, parent*4 = workspace_root
-        tmpl_dir = self.store.database_path.parent.parent.parent.parent / "templates" / "agents"
+        tmpl_dir = self.config_reader.workspace_root / "templates" / "agents"
         tmpl_dir.mkdir(parents=True, exist_ok=True)
         for tmpl in BUILTIN_TEMPLATES:
             yaml_file = tmpl_dir / f"{tmpl['name']}.yaml"
@@ -187,44 +185,34 @@ class ProjectManager:
         root = Path(root_dir).resolve()
         if not root.is_dir():
             raise ValueError(f"目录不存在: {root}")
-        # 保证项目有稳定的 id
+        # 生成项目 ID，创建 .workspace/<id>/ 目录
         project_id = uuid.uuid4().hex
         data = {"id": project_id, "name": name, "description": description, "root_dir": str(root)}
         if self.config_reader:
-            self.config_reader.save_project(data)
+            project_cfg = self.config_reader.for_project(project_id)
+            project_cfg.save_project(data)
+            # 确保项目目录结构存在
+            project_cfg._ensure_dirs()
         return data
 
     def delete_project(self, project_id: str) -> bool:
-        # File-backed: just return True (project is the workspace itself)
-        return True
+        if self.config_reader:
+            return self.config_reader.delete_project(project_id)
+        return False
 
     def list_projects(self) -> list[dict]:
         if self.config_reader:
-            try:
-                projects = []
-                p = self.config_reader.load_project()
-                self._ensure_project_id(p)
-                projects.append(p)
-                return projects
-            except Exception:
-                pass
+            return self.config_reader.list_projects()
         return []
 
     def get_project(self, project_id: str) -> dict | None:
         if self.config_reader:
             try:
-                p = self.config_reader.load_project()
-                self._ensure_project_id(p)
-                return p
+                project_cfg = self.config_reader.for_project(project_id)
+                return project_cfg.load_project()
             except Exception:
                 pass
         return None
-
-    @staticmethod
-    def _ensure_project_id(data: dict) -> None:
-        """保证项目数据有 id 字段（兼容旧项目文件）。"""
-        if "id" not in data:
-            data["id"] = uuid.uuid4().hex
 
     # ── Agent CRUD (file-backed) ──
 
@@ -236,6 +224,10 @@ class ProjectManager:
         """创建 Agent YAML 文件。可从模板创建，也可手动创建。"""
         if not self.config_reader:
             return None
+
+        project_cfg = self.config_reader.for_project(project_id)
+        # 确保项目目录存在
+        project_cfg._ensure_dirs()
 
         if template_id:
             # 从模板创建
@@ -279,14 +271,15 @@ class ProjectManager:
                 "sort_order": 0,
                 "model": model or "",
             }
-        self.config_reader.save_agent(data["name"], data)
+        project_cfg.save_agent(data["name"], data)
         return data
 
     def update_agent(self, project_id: str, agent_id: str, updates: dict) -> dict | None:
         if not self.config_reader:
             return None
+        project_cfg = self.config_reader.for_project(project_id)
         try:
-            existing = self.config_reader.get_agent(agent_id)
+            existing = project_cfg.get_agent(agent_id)
         except Exception:
             return None
         allowed = {"display_name", "description", "system_prompt", "tools",
@@ -294,21 +287,23 @@ class ProjectManager:
         for k, v in updates.items():
             if k in allowed and v is not None:
                 existing[k] = v
-        self.config_reader.save_agent(agent_id, existing)
+        project_cfg.save_agent(agent_id, existing)
         return existing
 
     def delete_agent(self, project_id: str, agent_id: str) -> bool:
         if not self.config_reader:
             return False
+        project_cfg = self.config_reader.for_project(project_id)
         try:
-            self.config_reader.delete_agent(agent_id)
+            project_cfg.delete_agent(agent_id)
             return True
         except Exception:
             return False
 
     def list_agents(self, project_id: str) -> list[dict]:
         if self.config_reader:
-            return self.config_reader.list_agents()
+            project_cfg = self.config_reader.for_project(project_id)
+            return project_cfg.list_agents()
         return []
 
     # ── 模板管理 (file-backed) ──

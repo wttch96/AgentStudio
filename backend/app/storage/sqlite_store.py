@@ -349,11 +349,17 @@ CREATE TABLE IF NOT EXISTS flow_traces (
             row = connection.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
         return dict(row) if row else None
 
-    def list_runs(self, limit: int = 50) -> list[dict[str, Any]]:
+    def list_runs(self, limit: int = 50, project_id: str | None = None) -> list[dict[str, Any]]:
         with self._connect() as connection:
-            rows = connection.execute(
-                "SELECT * FROM runs WHERE parent_run_id IS NULL ORDER BY created_at DESC, rowid DESC LIMIT ?", (limit,)
-            ).fetchall()
+            if project_id:
+                rows = connection.execute(
+                    "SELECT * FROM runs WHERE parent_run_id IS NULL AND project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?",
+                    (project_id, limit),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT * FROM runs WHERE parent_run_id IS NULL ORDER BY created_at DESC, rowid DESC LIMIT ?", (limit,)
+                ).fetchall()
         return [dict(row) for row in rows]
 
     def get_runs_by_conversation(self, conversation_id: str) -> list[dict[str, Any]]:

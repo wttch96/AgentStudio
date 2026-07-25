@@ -26,10 +26,11 @@ class MemorySettings:
         self.config_reader = config_reader
         self._lock = RLock()
 
-    def current(self) -> MemoryConfiguration:
+    def current(self, project_id: str = "") -> MemoryConfiguration:
         with self._lock:
             if self.config_reader:
-                data = self.config_reader.read_setting("memory")
+                reader = self.config_reader.for_project(project_id) if project_id else self.config_reader
+                data = reader.read_setting("memory")
                 if data:
                     return MemoryConfiguration.model_validate(data)
             return DEFAULT_MEMORY_CONFIG.model_copy()
@@ -37,8 +38,10 @@ class MemorySettings:
     def default(self) -> MemoryConfiguration:
         return DEFAULT_MEMORY_CONFIG.model_copy()
 
-    def update(self, configuration: MemoryConfiguration) -> MemoryConfiguration:
+    def update(self, configuration: MemoryConfiguration, project_id: str = "") -> MemoryConfiguration:
         with self._lock:
             if self.config_reader:
-                self.config_reader.write_setting("memory", configuration.model_dump())
+                reader = self.config_reader.for_project(project_id) if project_id else self.config_reader
+                reader._ensure_dirs()
+                reader.write_setting("memory", configuration.model_dump())
         return configuration.model_copy()

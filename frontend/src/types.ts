@@ -195,6 +195,7 @@ export interface ExecutionNode {
   toolCallGroups: ToolCallGroup[]
   dependsOn: string[]             // 前置节点 ID 列表
   interruptible: boolean          // 是否允许中断
+  agentType?: string              // Agent 类型 (rag, claude, deepseek, file_agent)
 }
 
 /** 节点依赖边 (Canvas 渲染用) */

@@ -55,7 +55,10 @@ export const api = {
     const p = projectId ? '?project_id=' + encodeURIComponent(projectId) : ''
     return request<Required<SkillProfile>>(`/skills/${name}${p}`, { method: 'PUT', body: JSON.stringify(payload) })
   },
-  runs: async () => (await request<{ items: Run[] }>('/runs')).items,
+  runs: async (projectId?: string) => {
+    const p = projectId ? '?project_id=' + encodeURIComponent(projectId) : ''
+    return (await request<{ items: Run[] }>('/runs' + p)).items
+  },
   run: (id: string) => request<Run & { events: RunEvent[]; conversation_runs?: Array<Pick<Run, 'id' | 'objective' | 'status' | 'turn_index' | 'parent_run_id' | 'final_answer' | 'created_at'>> }>(`/runs/${id}`),
   conversation: (conversationId: string) => request<{ conversation_id: string; turn_count: number; runs: Array<Run & { events: RunEvent[] }> }>(`/conversations/${conversationId}`),
   deleteRun: async (id: string) => {
@@ -65,6 +68,8 @@ export const api = {
       throw new Error(body.error ?? `删除失败：${response.status}`)
     }
   },
+  indexRunToKnowledge: (runId: string) =>
+    request<{ id: string; indexed: boolean }>(`/runs/${runId}/index-to-knowledge`, { method: 'POST' }),
   workspace: () => request<{ path: string }>('/workspace'),
   updateWorkspace: (path: string) =>
     request<{ path: string }>('/workspace', { method: 'PUT', body: JSON.stringify({ path }) }),
@@ -159,6 +164,10 @@ export const api = {
     request<import("../types").Project>("/projects", { method: "POST", body: JSON.stringify({ name, root_dir, description }) }),
   deleteProject: (id: string) =>
     fetch(API_BASE + "/projects/" + id, { method: "DELETE" }).then(r => { if (!r.ok) throw new Error("delete failed") }),
+  setCurrentProject: (projectId: string) =>
+    request<{ ok: boolean; project_id: string }>("/projects/current", { method: "PUT", body: JSON.stringify({ project_id: projectId }) }),
+  getCurrentProject: () =>
+    request<{ project_id: string }>("/projects/current"),
   projectAgents: (projectId: string) =>
     request<{ items: import("../types").ProjectAgent[] }>("/projects/" + projectId + "/agents"),
   addProjectAgent: (projectId: string, params: { template_id?: string; name?: string; display_name?: string; agent_type?: string; sub_dir?: string; system_prompt?: string; description?: string; tools?: string[]; skills?: string[]; model?: string }) =>

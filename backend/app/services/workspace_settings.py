@@ -21,10 +21,11 @@ class WorkspaceSettings:
         self.default_root = (default_root or Path.cwd()).resolve()
         self._lock = RLock()
 
-    def current(self) -> Path:
+    def current(self, project_id: str = "") -> Path:
         with self._lock:
             if self.config_reader:
-                data = self.config_reader.read_setting("workspace")
+                reader = self.config_reader.for_project(project_id) if project_id else self.config_reader
+                data = reader.read_setting("workspace")
                 if data:
                     try:
                         return self._validate(str(data["path"]))
@@ -32,11 +33,13 @@ class WorkspaceSettings:
                         pass
             return self.default_root
 
-    def update(self, value: str) -> Path:
+    def update(self, value: str, project_id: str = "") -> Path:
         root = self._validate(value)
         with self._lock:
             if self.config_reader:
-                self.config_reader.write_setting("workspace", {"path": str(root)})
+                reader = self.config_reader.for_project(project_id) if project_id else self.config_reader
+                reader._ensure_dirs()
+                reader.write_setting("workspace", {"path": str(root)})
         return root
 
     def browse(self, value: str | None = None) -> dict[str, object]:

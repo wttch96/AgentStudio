@@ -16,11 +16,11 @@ const emit = defineEmits<{
 }>()
 
 // ==================== 布局常量 ====================
-const NODE_W = 220
-const NODE_H = 72
-const NODE_GAP_Y = 60
-const CANVAS_PADDING = 60
-const DEPTH_OFFSET_X = 280
+const NODE_W = 200
+const NODE_H = 64
+const NODE_GAP_Y = 50
+const CANVAS_PADDING = 40
+const DEPTH_OFFSET_X = 240
 
 const svgRef = ref<SVGSVGElement | null>(null)
 const viewBox = ref({ x: 0, y: 0, w: 800, h: 600 })
@@ -62,12 +62,9 @@ const nodePositions = computed<Map<string, NodePosition>>(() => {
 
   for (const [depth, nodesAtDepth] of byDepth) {
     nodesAtDepth.forEach((node, idx) => {
-      const totalAtDepth = nodesAtDepth.length
-      // Check for saved position first
       const saved = customPositions.value[node.id]
       const x = saved ? saved.x : CANVAS_PADDING + depth * DEPTH_OFFSET_X
       const y = saved ? saved.y : CANVAS_PADDING + idx * (NODE_H + NODE_GAP_Y)
-        - (totalAtDepth - 1) * (NODE_H + NODE_GAP_Y) / 2 + 300
       map.set(node.id, { x, y, w: NODE_W, h: NODE_H })
     })
   }
@@ -83,18 +80,19 @@ const svgSize = computed(() => {
   return { w: maxX, h: maxY }
 })
 
-// ==================== 边 ====================
+// ==================== 边 - 贝塞尔曲线 ====================
 function edgePath(from: NodePosition, to: NodePosition): string {
   const startX = from.x + from.w
   const startY = from.y + from.h / 2
   const endX = to.x
   const endY = to.y + to.h / 2
-  const midX = (startX + endX) / 2
-  return `M ${startX},${startY} C ${midX},${startY} ${midX},${endY} ${endX},${endY}`
+  const mx = (startX + endX) / 2
+  return `M ${startX},${startY} C ${mx},${startY} ${mx},${endY} ${endX},${endY}`
 }
 
 // ==================== 颜色 ====================
 function colorFor(node: ExecutionNode) {
+  if (node.agentType === 'rag') return { fill: 'rgba(147,51,234,.12)', stroke: '#a855f7' }
   switch (node.status) {
     case 'running': return { fill: 'rgba(91,160,245,.12)', stroke: '#5ba0f5' }
     case 'completed': return { fill: 'rgba(77,184,107,.12)', stroke: '#4db86b' }
@@ -103,29 +101,36 @@ function colorFor(node: ExecutionNode) {
   }
 }
 
+// ==================== 屏幕坐标 → SVG viewBox 坐标转换 ====================
+function clientToSvg(clientX: number, clientY: number): { x: number; y: number } {
+  const svg = svgRef.value
+  if (!svg) return { x: clientX, y: clientY }
+  const pt = svg.createSVGPoint()
+  pt.x = clientX; pt.y = clientY
+  const ctm = svg.getScreenCTM()
+  if (!ctm) return { x: clientX, y: clientY }
+  const svgPt = pt.matrixTransform(ctm.inverse())
+  return { x: svgPt.x, y: svgPt.y }
+}
+
 // ==================== 事件处理 ====================
 function onNodeClick(nodeId: string) {
   emit('selectNode', nodeId)
 }
 
-// Node drag
+// Node drag — use screen-to-SVG conversion to prevent position jump
 function onNodeMouseDown(e: MouseEvent, nodeId: string) {
   if (e.button !== 0) return
   e.stopPropagation()
   const pos = nodePositions.value.get(nodeId)
   if (!pos) return
   dragNode.value = nodeId
-  dragOffset.value = { x: e.clientX - pos.x, y: e.clientY - pos.y }
+  const svgPt = clientToSvg(e.clientX, e.clientY)
+  dragOffset.value = { x: svgPt.x - pos.x, y: svgPt.y - pos.y }
 }
 function onNodeMouseMove(e: MouseEvent) {
   if (!dragNode.value) return
-  const svg = svgRef.value
-  if (!svg) return
-  const pt = svg.createSVGPoint()
-  pt.x = e.clientX; pt.y = e.clientY
-  const ctm = svg.getScreenCTM()
-  if (!ctm) return
-  const svgPt = pt.matrixTransform(ctm.inverse())
+  const svgPt = clientToSvg(e.clientX, e.clientY)
   customPositions.value[dragNode.value] = {
     x: Math.round(svgPt.x - dragOffset.value.x),
     y: Math.round(svgPt.y - dragOffset.value.y),
@@ -145,8 +150,10 @@ function onSvgMouseDown(e: MouseEvent) {
 function onSvgMouseMove(e: MouseEvent) {
   if (dragNode.value) { onNodeMouseMove(e); return }
   if (!isDragging.value) return
-  viewBox.value.x = vbStart.value.x - (e.clientX - dragStart.value.x)
-  viewBox.value.y = vbStart.value.y - (e.clientY - dragStart.value.y)
+  const scaleX = viewBox.value.w / (svgRef.value?.clientWidth || 1)
+  const scaleY = viewBox.value.h / (svgRef.value?.clientHeight || 1)
+  viewBox.value.x = vbStart.value.x - (e.clientX - dragStart.value.x) * scaleX
+  viewBox.value.y = vbStart.value.y - (e.clientY - dragStart.value.y) * scaleY
 }
 function onSvgMouseUp() {
   isDragging.value = false
@@ -154,22 +161,28 @@ function onSvgMouseUp() {
 }
 
 // ==================== 缩放 ====================
-const MIN_ZOOM = 0.6
-const MAX_ZOOM = 2.5
+const MIN_ZOOM = 0.5
+const MAX_ZOOM = 1.5
 function onWheel(e: WheelEvent) {
   e.preventDefault()
-  const baseW = svgSize.value.w + 40
+  const baseW = svgSize.value.w
   const factor = e.deltaY > 0 ? 1.15 : 0.87
   const newW = viewBox.value.w * factor
   const zoomRatio = newW / baseW
   if (zoomRatio < MIN_ZOOM || zoomRatio > MAX_ZOOM) return
+  const svg = svgRef.value
+  if (svg) {
+    const rect = svg.getBoundingClientRect()
+    const mx = e.clientX - rect.left
+    const my = e.clientY - rect.top
+    viewBox.value.x += mx * (viewBox.value.w / svg.clientWidth) * (1 - 1 / factor)
+    viewBox.value.y += my * (viewBox.value.h / svg.clientHeight) * (1 - 1 / factor)
+  }
   viewBox.value.w = newW
   viewBox.value.h *= factor
 }
 function fitView() {
-  const w = Math.max(900, svgSize.value.w + 40)
-  const h = Math.max(600, svgSize.value.h + 40)
-  viewBox.value = { x: -20, y: -20, w, h }
+  viewBox.value = { x: -10, y: -10, w: Math.max(900, svgSize.value.w + 40), h: Math.max(600, svgSize.value.h + 40) }
 }
 watch(() => props.nodes.length, () => fitView())
 
@@ -203,14 +216,14 @@ defineExpose({ fitView })
       @selectNode="selectNodeFromEvent"
     >
       <defs>
-        <marker id="arrowHead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-          <path d="M 0 1 L 9 5 L 0 9 z" fill="var(--el-border-color)" />
+        <marker id="arrowHead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+          <polygon points="0 0, 8 3, 0 6" fill="#636366" />
         </marker>
       </defs>
 
       <rect class="svg-bg" :x="viewBox.x" :y="viewBox.y" :width="viewBox.w" :height="viewBox.h" fill="transparent" />
 
-      <!-- 边 -->
+      <!-- 边 - 贝塞尔曲线 -->
       <g class="edges-layer">
         <path
           v-for="edge in edges"
@@ -218,8 +231,9 @@ defineExpose({ fitView })
           v-show="nodePositions.has(edge.from) && nodePositions.has(edge.to)"
           :d="edgePath(nodePositions.get(edge.from)!, nodePositions.get(edge.to)!)"
           fill="none"
-          stroke="var(--el-border-color)"
+          stroke="#636366"
           stroke-width="2"
+          opacity="0.7"
           marker-end="url(#arrowHead)"
         />
       </g>
@@ -233,7 +247,7 @@ defineExpose({ fitView })
           :transform="`translate(${nodePositions.get(node.id)!.x}, ${nodePositions.get(node.id)!.y})`"
           class="graph-node"
           :class="[`node-${node.status}`, { 'node-selected': selectedNodeId === node.id }]"
-          :style="{ cursor: dragNode === node.id ? 'grabbing' : 'grab' }"
+          :style="{ cursor: dragNode === node.id ? 'grabbing' : 'pointer' }"
           @mousedown="onNodeMouseDown($event, node.id)"
           @click.stop="onNodeClick(node.id)"
         >

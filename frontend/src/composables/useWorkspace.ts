@@ -7,6 +7,7 @@ import type {
   DeepSeekBalance,
   MemoryCompactionRecord,
   PlanTask,
+  Project,
   Run,
   RunEvent,
   SkillProfile,
@@ -21,6 +22,7 @@ interface WorkspaceState {
   events: RunEvent[]          // 当前活跃 run 的事件（兼容旧引用）
   projectId: string
   projectName: string
+  projects: Project[]
   agents: AgentProfile[]
   skills: SkillProfile[]
   status: SystemStatus | null
@@ -45,12 +47,15 @@ interface WorkspaceState {
   interrupting: boolean
 }
 
+const PROJECT_STORAGE_KEY = 'agent-studio-project'
+
 const state = reactive<WorkspaceState>({
   runs: [],
   activeRun: null,
   events: [],
   projectId: '',
   projectName: '',
+  projects: [],
 
   agents: [],
   taskQueue: [],
@@ -84,15 +89,100 @@ const state = reactive<WorkspaceState>({
 let eventSource: EventSource | null = null
 
 export function useWorkspace() {
+  // ── 项目管理 ──
+
+  async function loadProjects() {
+    try {
+      state.projects = (await api.projects()).items
+    } catch {
+      // 静默处理：可能后端未启动
+    }
+  }
+
+  function switchProject(projectId: string) {
+    if (!projectId) return
+    const project = state.projects.find(p => p.id === projectId)
+    const changed = state.projectId !== projectId
+    state.projectId = projectId
+    state.projectName = project?.name || ''
+    localStorage.setItem(PROJECT_STORAGE_KEY, projectId)
+    // 同步到后端 currentProject.yml
+    api.setCurrentProject(projectId).catch(() => {})
+    refreshConfiguration()
+    // changed: true on first set (from '' → id) and on subsequent switches
+    if (changed && state.projectId) {
+      resetRunState()
+      reloadRuns()
+    }
+  }
+
+  function resetRunState() {
+    closeStream()
+    state.activeRun = null
+    state.events = []
+    state.runs = []
+    state.conversationRuns = []
+    state.conversationEvents = []
+    state.conversationRootId = null
+    state.streamingState = {
+      activeTurnId: null,
+      thinkingText: '',
+      responseText: '',
+      isStreaming: false,
+    }
+    state.memoryCompactions = []
+    state.conversationTurns = []
+    state.activeAgents = []
+    state.error = ''
+  }
+
+  async function reloadRuns() {
+    try {
+      state.runs = await api.runs(state.projectId || undefined)
+      if (state.runs[0]) await selectRun(state.runs[0].id)
+    } catch {
+      // 静默处理
+    }
+  }
+
+  function addProject(project: Project) {
+    const exists = state.projects.find(p => p.id === project.id)
+    if (!exists) {
+      state.projects.unshift(project)
+    }
+    switchProject(project.id)
+  }
+
+  function restoreProject() {
+    const saved = localStorage.getItem(PROJECT_STORAGE_KEY)
+    if (saved && state.projects.find(p => p.id === saved)) {
+      switchProject(saved)
+    } else if (state.projects.length > 0) {
+      switchProject(state.projects[0].id)
+    }
+  }
+
   async function initialize() {
     state.loading = true
     state.error = ''
     try {
+      await loadProjects()
+      // 如果前端 localStorage 有项目记录，优先恢复；否则从后端读取 currentProject
+      const saved = localStorage.getItem(PROJECT_STORAGE_KEY)
+      if (!saved) {
+        try {
+          const serverCurrent = await api.getCurrentProject()
+          if (serverCurrent.project_id) {
+            localStorage.setItem(PROJECT_STORAGE_KEY, serverCurrent.project_id)
+          }
+        } catch { /* 后端不可达时忽略 */ }
+      }
+      restoreProject()
       const [status, agents, skills, runs] = await Promise.all([
         api.status(),
         api.agents(state.projectId || undefined),
         api.skills(state.projectId || undefined),
-        api.runs(),
+        api.runs(state.projectId || undefined),
       ])
       state.status = status
       state.agents = agents
@@ -514,9 +604,12 @@ export function useWorkspace() {
     }
   }
 
-  async function deleteRun(runId: string) {
+  async function deleteRun(runId: string, indexToKnowledge = false) {
     state.error = ''
     try {
+      if (indexToKnowledge) {
+        await api.indexRunToKnowledge(runId)
+      }
       await api.deleteRun(runId)
       const deletingActive = state.activeRun?.id === runId
       state.runs = state.runs.filter((run) => run.id !== runId)
@@ -648,5 +741,9 @@ export function useWorkspace() {
     refreshConfiguration,
     refreshDeepSeekBalance,
     refreshDerivedState,
+    loadProjects,
+    switchProject,
+    addProject,
+    restoreProject,
   }
 }

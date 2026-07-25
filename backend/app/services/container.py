@@ -61,13 +61,8 @@ class ServiceContainer:
         store.recover_interrupted_runs()
         events = EventPublisher(store)
 
-        # File-first configuration layer (.workspace/.agent-studio/)
+        # File-first configuration layer (.workspace/<project-id>/)
         config_reader = ConfigReader(settings.workspace_root)
-        # Migrate existing DB data to .agent-studio/ on first launch
-        try:
-            config_reader.migrate_from_db(store)
-        except Exception:
-            pass
 
         registry = AgentRegistry(store, config_reader=config_reader)
         skills = SkillRegistry(

@@ -11,17 +11,11 @@ import MemoryConfigEditor from '../components/config/MemoryConfig.vue'
 import RAGConfigEditor from '../components/config/RAGConfigEditor.vue'
 import KnowledgeConfig from '../components/config/KnowledgeConfig.vue'
 import { useWorkspace } from '../composables/useWorkspace'
-import { api } from '../api/client'
-import type { AgentProfile, Project, SkillProfile } from '../types'
 
 const route = useRoute()
 const workspace = useWorkspace()
 
 const tab = ref<'brain' | 'rag' | 'knowledge' | 'agents' | 'skills' | 'workspace' | 'scheduler' | 'memory'>('agents')
-const agents = ref<AgentProfile[]>([])
-const skills = ref<SkillProfile[]>([])
-const projects = ref<Project[]>([])
-const projectId = ref('')
 const loading = ref(true)
 
 const tabs = [
@@ -35,33 +29,41 @@ const tabs = [
   { key: 'memory' as const, label: '记忆配置', icon: '💾' },
 ]
 
+// Use workspace unified state — project is selected via AppHeader
+const projectId = computed(() => workspace.state.projectId)
+const agents = computed(() => workspace.state.agents)
+const skills = computed(() => workspace.state.skills)
+
 async function loadData() {
   loading.value = true
   try {
-    const [projList, agentList, skillList] = await Promise.all([
-      api.projects(),
-      api.agents(projectId.value || undefined),
-      api.skills(projectId.value || undefined),
-    ])
-    projects.value = projList.items
-    agents.value = agentList
-    skills.value = skillList
-    if (projList.items.length > 0 && !projectId.value) {
-      projectId.value = projList.items[0].id
+    if (workspace.state.projectId) {
+      await workspace.refreshConfiguration()
     }
   } catch { /* */ }
   loading.value = false
 }
 
-async function onSaved() {
-  await loadData()
+function onSaved() {
+  loadData()
 }
 
 watch(() => route.query.tab, (t) => {
   if (t && tabs.some(tb => tb.key === t)) tab.value = t as typeof tab.value
 })
 
-onMounted(loadData)
+// Watch projectId changes from AppHeader to reload config
+watch(() => workspace.state.projectId, (newId) => {
+  if (newId) loadData()
+})
+
+onMounted(() => {
+  if (workspace.state.projectId) {
+    loadData()
+  } else {
+    loading.value = false
+  }
+})
 </script>
 
 <template>
@@ -70,12 +72,12 @@ onMounted(loadData)
     <ElAside width="260px" class="config-aside">
       <div class="p-3 border-bottom">
         <h6 class="text-secondary">配置中心</h6>
-      </div>
-      <div class="p-2 border-bottom">
-        <ElSelect v-model="projectId" size="small" @change="loadData" clearable class="w-100" placeholder="选择项目">
-          <ElOption value="" label="-- 选择项目 --" />
-          <ElOption v-for="p in projects" :key="p.id" :value="p.id" :label="p.name" />
-        </ElSelect>
+        <div v-if="projectId" class="text-secondary small mt-1">
+          当前项目：<strong>{{ workspace.state.projectName }}</strong>
+        </div>
+        <div v-else class="text-secondary small mt-1" style="color: var(--el-color-warning)">
+          请先在顶部 Header 中选择一个项目
+        </div>
       </div>
       <ElMenu :default-active="tab" class="config-nav" @select="(key: string) => tab = key as any">
         <ElMenuItem v-for="t in tabs" :key="t.key" :index="t.key">

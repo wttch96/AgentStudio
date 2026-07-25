@@ -41,7 +41,7 @@ class Settings:
 
     @property
     def instance_dir(self) -> Path:
-        return self.workspace_root / ".workspace" / ".agent-studio" / "db"
+        return self.workspace_root / ".workspace" / "db"
 
     @property
     def database_path(self) -> Path:

@@ -19,16 +19,19 @@ class SchedulerSettings:
         self.defaults = defaults or SchedulerConfiguration()
         self._lock = RLock()
 
-    def current(self) -> SchedulerConfiguration:
+    def current(self, project_id: str = "") -> SchedulerConfiguration:
         with self._lock:
             if self.config_reader:
-                data = self.config_reader.read_setting("scheduler")
+                reader = self.config_reader.for_project(project_id) if project_id else self.config_reader
+                data = reader.read_setting("scheduler")
                 if data:
                     return SchedulerConfiguration.model_validate(data)
             return self.defaults.model_copy()
 
-    def update(self, configuration: SchedulerConfiguration) -> SchedulerConfiguration:
+    def update(self, configuration: SchedulerConfiguration, project_id: str = "") -> SchedulerConfiguration:
         with self._lock:
             if self.config_reader:
-                self.config_reader.write_setting("scheduler", configuration.model_dump())
+                reader = self.config_reader.for_project(project_id) if project_id else self.config_reader
+                reader._ensure_dirs()
+                reader.write_setting("scheduler", configuration.model_dump())
         return configuration.model_copy()

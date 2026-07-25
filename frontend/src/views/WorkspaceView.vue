@@ -6,7 +6,6 @@ import ThinkingTimeline from '../components/ThinkingTimeline.vue'
 import DetailPanel from '../components/DetailPanel.vue'
 import PromptComposer from '../components/PromptComposer.vue'
 import RunSidebar from '../components/RunSidebar.vue'
-import ProjectDialog from '../components/ProjectDialog.vue'
 import PlanBoard from '../components/PlanBoard.vue'
 import StreamingChat from '../components/StreamingChat.vue'
 import ConversationView from '../components/ConversationView.vue'
@@ -22,36 +21,16 @@ import type { Project, NodeStatus } from '../types'
 const workspace = useWorkspace()
 const composer = ref<InstanceType<typeof PromptComposer> | null>(null)
 const showProjectDialog = ref(false)
-const viewMode = ref<'dag' | 'timeline'>('dag')
+const viewMode = ref<'dag' | 'timeline' | 'events'>('dag')
 
-const projects = ref<Project[]>([])
-const currentProject = ref<Project | null>(null)
-
-async function loadProjects() {
-  try { projects.value = (await api.projects()).items } catch { /* */ }
-}
-
-function applyProject(p: Project) {
-  workspace.state.projectId = p.id
-  workspace.state.projectName = p.name
-}
-
-function selectProject(p: Project) {
-  currentProject.value = p
-  applyProject(p)
-  showProjectDialog.value = false
-  workspace.refreshConfiguration()
-}
-
-function onProjectCreated(p: Project) {
-  projects.value = [p, ...projects.value]
-  currentProject.value = p
-  applyProject(p)
-  showProjectDialog.value = false
-  workspace.refreshConfiguration()
-}
-
-watch(currentProject, (p) => { if (p) applyProject(p) })
+// 项目来自 workspace 全局状态
+const projects = computed(() => workspace.state.projects)
+const currentProject = computed(() =>
+  workspace.state.projectId
+    ? workspace.state.projects.find(p => p.id === workspace.state.projectId)
+      || { id: workspace.state.projectId, name: workspace.state.projectName || workspace.state.projectId.slice(0, 8), root_dir: '', description: '' } as Project
+    : null
+)
 
 const allEvents = computed(() => {
   const convEvents = workspace.state.conversationEvents
@@ -107,10 +86,14 @@ function newRun() {
   void composer.value?.focus()
 }
 
+function clearConversation() {
+  workspace.beginNewRun()
+}
+
 const selectedNodeId = computed(() => workspace.state.selectedNodeId)
 const selectedNode = computed(() => selectedNodeId.value ? findNode(selectedNodeId.value) ?? null : null)
 
-function selectNode(nodeId: string) { workspace.state.selectedNodeId = nodeId }
+function selectNodeFn(nodeId: string) { workspace.state.selectedNodeId = nodeId }
 function deselectNode() { workspace.state.selectedNodeId = null }
 function updateFilter(status: NodeStatus | 'all') { workspace.state.filterStatus = status }
 
@@ -124,11 +107,6 @@ function handleInjectGuidance(nodeId: string, instruction: string) {
 }
 
 onMounted(async () => {
-  await loadProjects()
-  if (projects.value.length > 0) {
-    currentProject.value = projects.value[0]
-    applyProject(projects.value[0])
-  }
   await workspace.initialize()
 })
 </script>
@@ -137,22 +115,32 @@ onMounted(async () => {
   <ElContainer class="h-100">
     <!-- Left Sidebar -->
     <ElAside width="260px" class="workspace-aside">
+      <!-- Empty state when no project at all -->
+      <div v-if="workspace.state.projects.length === 0" class="p-3 text-secondary small text-center flex-grow-1 d-flex align-items-center justify-content-center">
+        暂无项目，请创建项目
+      </div>
+      <!-- No project selected but projects exist -->
+      <div v-else-if="!workspace.state.projectId" class="p-3 text-secondary small text-center flex-grow-1 d-flex align-items-center justify-content-center">
+        请在顶部选择项目
+      </div>
+      <!-- Project selected: show normal sidebar -->
+      <template v-else>
       <div class="p-2 border-bottom">
-        <ElButton type="primary" size="small" class="w-100" @click="newRun">＋ 新任务</ElButton>
+        <ElButton type="primary" size="small" class="w-100" @click="newRun" :disabled="!workspace.state.projectId">＋ 新任务</ElButton>
       </div>
       <div class="p-2 border-bottom">
-        <ElButton size="small" class="w-100" @click="showProjectDialog = true">
-          {{ currentProject?.name || '选择项目' }}
-        </ElButton>
+        <ElButton v-if="workspace.state.activeRun || workspace.state.conversationRuns.length > 0" size="small" class="w-100 mb-1" type="danger" plain @click="clearConversation">清空对话</ElButton>
       </div>
       <RunSidebar
         :runs="workspace.state.runs"
         :active-id="workspace.state.activeRun?.id"
         @select="workspace.selectRun"
         @create="newRun"
-        @delete="workspace.deleteRun"
+        @delete="(id: string) => workspace.deleteRun(id)"
+        @delete-with-index="(id: string, index: boolean) => workspace.deleteRun(id, index)"
         @fork="forkRun"
       />
+      </template>
     </ElAside>
 
     <!-- Main Content -->
@@ -164,13 +152,22 @@ onMounted(async () => {
         </template>
       </ElAlert>
 
-      <!-- No project -->
-      <div v-if="!currentProject" class="welcome-center">
+      <!-- No project at all -->
+      <div v-if="workspace.state.projects.length === 0" class="welcome-center">
         <div class="text-center p-5">
           <div style="font-size:48px;margin-bottom:12px">&#128230;</div>
           <h2>欢迎使用 Agent Studio</h2>
-          <p class="text-secondary">选择一个项目开始，或创建新项目来配置 Agent 团队。</p>
-          <ElButton type="primary" @click="showProjectDialog = true">创建或选择项目</ElButton>
+          <p class="text-secondary">创建项目来配置 Agent 团队。</p>
+          <ElButton type="primary" @click="showProjectDialog = true">创建项目</ElButton>
+        </div>
+      </div>
+
+      <!-- No project selected -->
+      <div v-else-if="!workspace.state.projectId" class="welcome-center">
+        <div class="text-center p-5">
+          <div style="font-size:48px;margin-bottom:12px">&#128209;</div>
+          <h2>尚未选择项目</h2>
+          <p class="text-secondary">请在顶部 Header 中选择一个项目，然后开始对话。</p>
         </div>
       </div>
 
@@ -206,6 +203,7 @@ onMounted(async () => {
           <div class="d-flex align-items-center gap-1 px-2 py-1 border-bottom">
             <ElButton size="small" :type="viewMode === 'dag' ? 'primary' : ''" @click="viewMode = 'dag'">DAG 图</ElButton>
             <ElButton size="small" :type="viewMode === 'timeline' ? 'primary' : ''" @click="viewMode = 'timeline'">时间轴</ElButton>
+            <ElButton size="small" :type="viewMode === 'events' ? 'primary' : ''" @click="viewMode = 'events'">事件记录</ElButton>
           </div>
           <MainCanvas
             v-if="viewMode === 'dag'"
@@ -218,33 +216,21 @@ onMounted(async () => {
             :streaming-thinking="workspace.state.streamingState.thinkingText"
             :streaming-response="workspace.state.streamingState.responseText"
             :is-streaming="workspace.state.streamingState.isStreaming"
-            @select-node="selectNode"
+            @select-node="selectNodeFn"
             @interrupt-node="handleInterruptNode"
             @update-filter="updateFilter"
           />
           <ThinkingTimeline
-            v-else
+            v-else-if="viewMode === 'timeline'"
             :tasks="workspace.plan.value"
             :events="allEvents"
             :turns="conversationTurns"
             :memory-compactions="memoryCompactions"
           />
-        </div>
-
-        <!-- Conversation history + Streaming -->
-        <div v-if="allEvents.length" class="border-top overflow-auto" style="max-height:50vh;min-height:120px">
           <ConversationView
+            v-else-if="viewMode === 'events'"
             :events="allEvents"
             :final-answer="workspace.state.activeRun?.final_answer ?? null"
-          />
-          <StreamingChat
-            v-if="conversationTurns.length"
-            :turns="conversationTurns"
-            :events="allEvents"
-            :streaming="workspace.state.streamingState"
-            :active-run-id="workspace.state.activeRun?.id ?? null"
-            :is-running="workspace.isRunning.value"
-            @fork="forkRun"
           />
         </div>
 

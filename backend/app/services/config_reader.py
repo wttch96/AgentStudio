@@ -1,6 +1,6 @@
 """文件优先的配置读写层。
 
-所有用户配置以 .agent-studio/ YAML 文件为主源，数据库仅作运行时缓存。
+所有用户配置以 .workspace/<project-id>/ YAML 文件为主源，数据库仅作运行时缓存。
 """
 
 from __future__ import annotations
@@ -14,10 +14,15 @@ import yaml
 
 
 class ConfigReader:
-    """读取 .workspace/.agent-studio/ 目录下的 YAML 配置文件。"""
+    """读取 .workspace/<project-id>/ 目录下的 YAML 配置文件。"""
 
-    def __init__(self, workspace_root: Path | str) -> None:
-        self.root = Path(workspace_root) / ".workspace" / ".agent-studio"
+    def __init__(self, workspace_root: Path | str, project_id: str = "") -> None:
+        self.workspace_root = Path(workspace_root)
+        self.project_id = project_id
+        if project_id:
+            self.root = self.workspace_root / ".workspace" / project_id
+        else:
+            self.root = self.workspace_root / ".workspace" / ".agent-studio"  # 兼容旧默认路径
         self._lock = threading.RLock()
 
     # ------------------------------------------------------------------
@@ -74,14 +79,52 @@ class ConfigReader:
     # Project
     # ------------------------------------------------------------------
 
+    def list_projects(self) -> list[dict[str, Any]]:
+        """扫描 .workspace/ 下所有项目目录，读取各自的 project.yaml。"""
+        projects: list[dict[str, Any]] = []
+        ws_dir = self.workspace_root / ".workspace"
+        if not ws_dir.is_dir():
+            return projects
+        with self._lock:
+            for entry in sorted(ws_dir.iterdir()):
+                if not entry.is_dir() or entry.name.startswith("."):
+                    continue
+                yaml_file = entry / "project.yaml"
+                if yaml_file.is_file():
+                    try:
+                        data = self._read_yaml(yaml_file)
+                        if data:
+                            # 旧项目可能没有 id 字段，用目录名补齐
+                            if "id" not in data:
+                                data["id"] = entry.name
+                            projects.append(data)
+                    except Exception:
+                        pass
+        return projects
+
     def load_project(self) -> dict[str, Any]:
         with self._lock:
             return self._read_yaml(self.root / "project.yaml")
 
     def save_project(self, data: dict[str, Any]) -> None:
+        # project.yaml 保存在项目目录根（.workspace/<id>/project.yaml）
+        project_yaml = self.root / "project.yaml"
         with self._lock:
-            self._ensure_dirs()
-            self._write_yaml(self.root / "project.yaml", data)
+            self.root.mkdir(parents=True, exist_ok=True)
+            self._write_yaml(project_yaml, data)
+
+    def delete_project(self, project_id: str) -> bool:
+        """删除 .workspace/<project_id>/project.yaml，不清除项目目录。"""
+        project_yaml = self.workspace_root / ".workspace" / project_id / "project.yaml"
+        with self._lock:
+            if project_yaml.is_file():
+                project_yaml.unlink()
+                return True
+        return False
+
+    def for_project(self, project_id: str) -> "ConfigReader":
+        """为指定项目创建 ConfigReader 实例。"""
+        return ConfigReader(self.workspace_root, project_id=project_id)
 
     # ------------------------------------------------------------------
     # Settings (brain / workspace / scheduler / memory)
@@ -177,7 +220,7 @@ class ConfigReader:
 
     def list_agent_templates(self) -> list[dict[str, Any]]:
         """从项目根目录 templates/agents/ 加载 Agent 模板。"""
-        tmpl_dir = self.root.parent.parent / "templates" / "agents"
+        tmpl_dir = self.workspace_root / "templates" / "agents"
         if not tmpl_dir.is_dir():
             return []
         templates = []
@@ -197,12 +240,7 @@ class ConfigReader:
     # ------------------------------------------------------------------
 
     def migrate_from_db(self, store) -> dict[str, int]:
-        """首次启动时将 SQLite 配置迁移到 .agent-studio/ 文件。
-
-        注意：projects/project_agents/project_skills/skill_templates 等表已移除，
-        配置数据以 .workspace/.agent-studio/ 下 YAML 文件为唯一数据源。
-        此方法保留用于迁移 configs 表中的遗留设置项。
-        """
+        """首次启动时将 SQLite 配置迁移到文件。"""
         stats = {"projects": 0, "agents": 0, "skills": 0, "settings": 0}
         if self.root.joinpath("project.yaml").exists():
             return stats  # Already migrated

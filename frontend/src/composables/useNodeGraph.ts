@@ -164,6 +164,7 @@ export function useNodeGraph(
           toolCallGroups: [],
           dependsOn: cr.parent_run_id ? [`turn-${cr.parent_run_id}`] : [],
           interruptible: false,
+          agentType: undefined,
         })
       }
     }
@@ -241,6 +242,7 @@ export function useNodeGraph(
       toolCallGroups: [],
       dependsOn: [],
       interruptible: false,
+      agentType: undefined,
     }
 
     // 6. 构建 Agent 节点
@@ -321,6 +323,7 @@ export function useNodeGraph(
         toolCallGroups: toolGroups,
         dependsOn: task.depends_on.map((d) => `task-${d}`),
         interruptible: true,
+        agentType: task.agent_type || undefined,
       }
     })
 
@@ -329,15 +332,32 @@ export function useNodeGraph(
 
   /**
    * 从节点列表派生依赖边
+   * 自动添加 orchestrator→leaf-task 的边，保证所有节点都有连线
    */
   const edges = computed<NodeEdge[]>(() => {
-    return nodes.value.flatMap((node) =>
+    const deps = nodes.value.flatMap((node) =>
       node.dependsOn.map((from) => ({
         from,
         to: node.id,
         label: node.type === 'agent' ? '依赖' : undefined,
       })),
     )
+    // 为所有没有 depends_on 的 agent 节点自动添加 orchestrator → agent 边
+    const leafIds = new Set(
+      nodes.value
+        .filter(n => n.type === 'agent' && n.dependsOn.length === 0)
+        .map(n => n.id),
+    )
+    const hasEdgeTo = new Set(deps.map(e => e.to))
+    const orchestrator = nodes.value.find(n => n.type === 'orchestrator')
+    if (orchestrator) {
+      for (const leafId of leafIds) {
+        if (!hasEdgeTo.has(leafId)) {
+          deps.push({ from: orchestrator.id, to: leafId, label: undefined })
+        }
+      }
+    }
+    return deps
   })
 
   /**

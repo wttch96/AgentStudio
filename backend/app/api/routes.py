@@ -166,14 +166,16 @@ def update_skill(name: str):
 
 @api.get("/workspace")
 def get_workspace():
-    return jsonify({"path": str(services().workspace.current())})
+    project_id = request.args.get("project_id", "")
+    return jsonify({"path": str(services().workspace.current(project_id=project_id))})
 
 
 @api.put("/workspace")
 def update_workspace():
     try:
         payload = WorkspaceUpdate.model_validate(request.get_json(silent=True) or {})
-        root = services().workspace.update(payload.path)
+        project_id = (request.args.get("project_id") or "").strip()
+        root = services().workspace.update(payload.path, project_id=project_id)
         return jsonify({"path": str(root)})
     except ValidationError as error:
         return jsonify({"error": "工作目录配置无效", "details": error.errors()}), 400
@@ -245,21 +247,24 @@ def pick_folder():
 
 @api.get("/scheduler")
 def get_scheduler():
-    return jsonify(services().scheduler.current().model_dump())
+    project_id = request.args.get("project_id", "")
+    return jsonify(services().scheduler.current(project_id=project_id).model_dump())
 
 
 @api.put("/scheduler")
 def update_scheduler():
     try:
         payload = SchedulerConfiguration.model_validate(request.get_json(silent=True) or {})
-        return jsonify(services().scheduler.update(payload).model_dump())
+        project_id = (request.args.get("project_id") or "").strip()
+        return jsonify(services().scheduler.update(payload, project_id=project_id).model_dump())
     except ValidationError as error:
         return jsonify({"error": "调度配置无效", "details": error.errors()}), 400
 
 
 @api.get("/brain")
 def get_brain():
-    return jsonify(services().brain.current().model_dump())
+    project_id = request.args.get("project_id", "")
+    return jsonify(services().brain.current(project_id=project_id).model_dump())
 
 
 @api.get("/brain/default")
@@ -271,7 +276,8 @@ def get_default_brain():
 def update_brain():
     try:
         payload = BrainConfiguration.model_validate(request.get_json(silent=True) or {})
-        return jsonify(services().brain.update(payload).model_dump())
+        project_id = (request.args.get("project_id") or "").strip()
+        return jsonify(services().brain.update(payload, project_id=project_id).model_dump())
     except ValidationError as error:
         return jsonify({"error": "主脑配置无效", "details": error.errors()}), 400
 
@@ -302,7 +308,8 @@ def create_run():
 
 @api.get("/runs")
 def list_runs():
-    return jsonify({"items": services().store.list_runs()})
+    project_id = request.args.get("project_id", "")
+    return jsonify({"items": services().store.list_runs(project_id=project_id if project_id else None)})
 
 
 @api.get("/runs/<run_id>")
@@ -372,6 +379,57 @@ def delete_run(run_id: str):
     return "", 204
 
 
+@api.post("/runs/<run_id>/index-to-knowledge")
+def index_run_to_knowledge(run_id: str):
+    """将 run 的对话内容索引到知识库，用于删除前保留知识。"""
+    run = services().store.get_run(run_id)
+    if not run:
+        return jsonify({"error": "运行不存在"}), 404
+
+    events = services().store.list_events(run_id)
+    project_id = run.get("project_id", "")
+    # 尝试从 workspace 读取当前项目 ID 作为 fallback
+    if not project_id:
+        try:
+            current = services().config_reader.read_setting("currentProject")
+            if current:
+                project_id = current.get("project_id", "")
+        except Exception:
+            pass
+
+    if not project_id:
+        return jsonify({"error": "运行缺少项目关联，请先在Header选择项目"}), 400
+
+    title = f"对话记录: {(run.get('objective') or '')[:80]}"
+    content_parts = [f"用户目标: {run.get('objective', '')}"]
+    if run.get("final_answer"):
+        content_parts.append(f"最终回答: {run['final_answer']}")
+
+    for e in events:
+        if e.get("type") == "agent.message":
+            text = (e.get("payload") or {}).get("text")
+            if text and isinstance(text, str) and text.strip():
+                content_parts.append(
+                    f"[{e.get('agent_id', 'agent')}]: {text[:3000]}"
+                )
+
+    content = "\n\n---\n\n".join(content_parts)[:50000]
+
+    try:
+        entry_id = services().knowledge_store.add(
+            title=title,
+            content=content,
+            category="conversation",
+            tags=["auto-indexed", run.get("status", "")],
+            source=f"run:{run_id}",
+            source_type="auto",
+            project_id=project_id,
+        )
+        return jsonify({"id": entry_id, "indexed": True}), 201
+    except Exception as exc:
+        return jsonify({"error": f"知识库写入失败: {exc}"}), 500
+
+
 @api.post("/runs/<run_id>/cancel")
 def cancel_run(run_id: str):
     if not services().store.get_run(run_id):
@@ -414,14 +472,16 @@ def list_events(run_id: str):
 
 @api.get("/memory")
 def get_memory_config():
-    return jsonify(services().memory_settings.current().model_dump())
+    project_id = request.args.get("project_id", "")
+    return jsonify(services().memory_settings.current(project_id=project_id).model_dump())
 
 
 @api.put("/memory")
 def update_memory_config():
     try:
         payload = MemoryConfiguration.model_validate(request.get_json(silent=True) or {})
-        return jsonify(services().memory_settings.update(payload).model_dump())
+        project_id = (request.args.get("project_id") or "").strip()
+        return jsonify(services().memory_settings.update(payload, project_id=project_id).model_dump())
     except ValidationError as error:
         return jsonify({"error": "记忆配置无效", "details": error.errors()}), 400
 
@@ -682,6 +742,30 @@ def create_project():
         return jsonify(project), 201
     except ValueError as error:
         return jsonify({"error": str(error)}), 400
+
+
+@api.put("/projects/current")
+def set_current_project():
+    """将当前选中项目 ID 写入 .workspace/currentProject.yml"""
+    data = request.get_json(silent=True) or {}
+    project_id = data.get("project_id", "")
+    if not project_id:
+        return jsonify({"error": "缺少 project_id"}), 400
+    try:
+        services().config_reader.write_setting("currentProject", {"project_id": project_id})
+        return jsonify({"ok": True, "project_id": project_id})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@api.get("/projects/current")
+def get_current_project():
+    """读取 .workspace/currentProject.yml 中的当前项目 ID"""
+    try:
+        data = services().config_reader.read_setting("currentProject")
+        return jsonify({"project_id": (data or {}).get("project_id", "")})
+    except Exception:
+        return jsonify({"project_id": ""})
 
 
 @api.get("/projects/<project_id>")

@@ -360,11 +360,11 @@ function nodeStrokeColor(node: LayoutNode) {
         style="width:100%;height:auto;min-height:160px"
       >
         <defs>
-          <marker id="dag-arrow" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
-            <polygon points="0 0, 7 2.5, 0 5" fill="#636366" />
+          <marker id="dag-arrow" markerWidth="9" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 9 3.5, 0 7" fill="#636366" />
           </marker>
-          <marker id="dag-arrow-conv" markerWidth="5" markerHeight="4" refX="5" refY="2" orient="auto">
-            <polygon points="0 0, 5 2, 0 4" fill="#0a84ff" />
+          <marker id="dag-arrow-conv" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
+            <polygon points="0 0, 7 2.5, 0 5" fill="#0a84ff" />
           </marker>
         </defs>
 
@@ -375,10 +375,10 @@ function nodeStrokeColor(node: LayoutNode) {
             :key="'e' + i"
             :d="getEdgePath(edge)"
             :stroke="edgeStrokeColor(edge)"
-            stroke-width="1.2"
+            stroke-width="1.6"
             fill="none"
             :marker-end="edgeMarker(edge)"
-            :opacity="edgeOpacity(edge)"
+            :opacity="edgeOpacity(edge) || 0.7"
             :stroke-dasharray="edgeDashArray(edge)"
           />
         </g>

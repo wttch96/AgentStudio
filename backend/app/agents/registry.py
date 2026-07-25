@@ -36,11 +36,12 @@ class AgentRegistry:
         self.config_reader = config_reader
         self._cache: dict[str, dict[str, AgentProfile]] = {}  # project_id -> {name: profile}
 
-    def _load_from_files(self) -> dict[str, AgentProfile]:
+    def _load_from_files(self, project_id: str = "") -> dict[str, AgentProfile]:
         """从 .agent-studio/agents/ 加载所有 Agent。"""
         if not self.config_reader:
             return {}
-        agents = self.config_reader.list_agents()
+        reader = self.config_reader.for_project(project_id) if project_id else self.config_reader
+        agents = reader.list_agents()
         profiles = {}
         for a in agents:
             name = a.get("name", "")
@@ -65,20 +66,20 @@ class AgentRegistry:
         """加载项目所有 Agent。缓存到内存。"""
         if project_id in self._cache:
             return self._cache[project_id]
-        profiles = self._load_from_files()
+        profiles = self._load_from_files(project_id)
         self._cache[project_id] = profiles
         return profiles
 
     def get(self, project_id: str = "", agent_name: str = "") -> AgentProfile:
         """查找指定 Agent。无 project_id 时从文件加载。"""
-        profiles = self._load_from_files() if not project_id else self.load_project_agents(project_id)
+        profiles = self._load_from_files(project_id) if not project_id else self.load_project_agents(project_id)
         if agent_name not in profiles:
             raise ValueError(f"Agent '{agent_name}' not found")
         return profiles[agent_name]
 
     def list_public(self, project_id: str = "") -> list[dict[str, Any]]:
         """列出所有公开 Agent（排除 brain/deepseek 类型）。"""
-        profiles = self._load_from_files() if not project_id else self.load_project_agents(project_id)
+        profiles = self._load_from_files(project_id) if not project_id else self.load_project_agents(project_id)
         return [
             {
                 "id": p.id,
