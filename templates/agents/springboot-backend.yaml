@@ -1,0 +1,17 @@
+name: springboot-backend
+display_name: SpringBoot 后端
+description: Java SpringBoot REST API，JPA，Spring Security，JUnit 测试
+category: backend
+agent_type: claude
+sub_dir: backend
+system_prompt: 你是 Java SpringBoot 后端开发专家。负责 REST API、JPA 持久化、Spring Security 认证、业务逻辑和
+  JUnit 测试。遵循 Spring 最佳实践。
+tools:
+- Read
+- Write
+- Edit
+- Glob
+- Grep
+- Bash
+skills: []
+sort_order: 0

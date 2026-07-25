@@ -104,165 +104,186 @@ BUILTIN_TEMPLATES = [
         "default_skills": [],
         "is_builtin": 1,
     },
+    {
+        "id": "code-reviewer-template",
+        "name": "code-reviewer",
+        "display_name": "代码审查",
+        "description": "专注代码质量审查、最佳实践检查、代码异味识别和重构建议",
+        "category": "quality",
+        "agent_type": "claude",
+        "default_sub_dir": "",
+        "default_prompt": "你是专业代码审查专家。你的职责是审查代码质量，不做实现开发。\n\n审查要点：\n1. 代码结构和组织\n2. 错误处理和边界条件\n3. 性能问题和优化建议\n4. 安全漏洞（SQL注入、XSS等）\n5. 命名规范和可读性\n6. 测试覆盖和可测试性\n7. 依赖管理和版本兼容性\n\n输出格式：每个问题标注严重程度（严重/重要/建议）、位置、说明和修复建议。严格只读，不修改任何文件。",
+        "default_tools": ["Read", "Glob", "Grep"],
+        "default_skills": [],
+        "is_builtin": 1,
+    },
+    {
+        "id": "doc-diff-template",
+        "name": "doc-diff",
+        "display_name": "文档对比",
+        "description": "对比文档和接口差异，检测 API 变更、配置漂移、文档不一致",
+        "category": "quality",
+        "agent_type": "claude",
+        "default_sub_dir": "",
+        "default_prompt": "你是文档和接口对比专家。对比文档与实现差异，不做代码修改。\n\n对比场景：\n1. API 文档 vs 实际实现\n2. 前后端接口定义差异\n3. 配置文件差异和环境漂移\n4. 多版本分支间的变更审查\n5. README vs 实际代码行为\n6. OpenAPI/Swagger 规范一致性\n\n输出格式：每个差异标注类别、文件位置、当前状态、期望状态和影响范围。严格只读。",
+        "default_tools": ["Read", "Glob", "Grep", "Bash"],
+        "default_skills": [],
+        "is_builtin": 1,
+    },
+    {
+        "id": "api-designer-template",
+        "name": "api-designer",
+        "display_name": "接口设计",
+        "description": "专注 RESTful API 设计、接口契约定义、数据模型设计和 API 文档生成",
+        "category": "design",
+        "agent_type": "claude",
+        "default_sub_dir": "",
+        "default_prompt": "你是 API 和接口设计专家。设计清晰一致的 RESTful API 和数据模型。\n\n设计原则：\n1. RESTful 资源命名和路由设计\n2. 请求/响应数据模型定义\n3. 错误码和错误响应规范\n4. 认证和授权接口设计\n5. 分页、过滤、排序标准\n6. 版本管理策略\n7. OpenAPI/Swagger 规范输出\n\n输出格式：每个接口包含方法、路径、请求体、响应体、错误码和示例。需要写代码时先输出设计方案等待确认。",
+        "default_tools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
+        "default_skills": [],
+        "is_builtin": 1,
+    },
 ]
 
 
 class ProjectManager:
-    """项目 + Agent 管理。"""
+    """项目 + Agent 管理。文件优先，DB 为缓存。"""
 
-    def __init__(self, store: SQLiteStore) -> None:
+    def __init__(self, store: SQLiteStore, config_reader: Any = None) -> None:
         self.store = store
+        self.config_reader = config_reader
         self._seed_templates()
 
     def _seed_templates(self) -> None:
-        """首次启动时创建内置模板。"""
-        with self.store._connect() as conn:
-            existing = conn.execute("SELECT COUNT(*) as cnt FROM agent_templates").fetchone()
-            if existing["cnt"] > 0:
-                return
-            for tmpl in BUILTIN_TEMPLATES:
-                conn.execute(
-                    """INSERT OR IGNORE INTO agent_templates(
-                        id, name, display_name, description, category, agent_type,
-                        default_sub_dir, default_prompt, default_tools, default_skills, is_builtin
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-                    (
-                        tmpl["id"], tmpl["name"], tmpl["display_name"], tmpl["description"],
-                        tmpl["category"], tmpl["agent_type"], tmpl["default_sub_dir"],
-                        tmpl["default_prompt"],
-                        json.dumps(tmpl["default_tools"], ensure_ascii=False),
-                        json.dumps(tmpl["default_skills"], ensure_ascii=False),
-                        tmpl["is_builtin"],
-                    ),
+        """首次启动时将内置模板写入 templates/agents/。"""
+        # database_path = workspace_root/.workspace/.agent-studio/db/agents-manager.db
+        # parent = db/, parent*2 = .agent-studio/, parent*3 = .workspace/, parent*4 = workspace_root
+        tmpl_dir = self.store.database_path.parent.parent.parent.parent / "templates" / "agents"
+        tmpl_dir.mkdir(parents=True, exist_ok=True)
+        for tmpl in BUILTIN_TEMPLATES:
+            yaml_file = tmpl_dir / f"{tmpl['name']}.yaml"
+            if not yaml_file.exists():
+                data = {
+                    "name": tmpl["name"],
+                    "display_name": tmpl["display_name"],
+                    "description": tmpl["description"],
+                    "category": tmpl.get("category", "other"),
+                    "agent_type": tmpl["agent_type"],
+                    "sub_dir": tmpl.get("default_sub_dir", ""),
+                    "system_prompt": tmpl["default_prompt"],
+                    "tools": tmpl["default_tools"],
+                    "skills": tmpl.get("default_skills", []),
+                    "sort_order": tmpl.get("sort_order", 0),
+                }
+                import yaml
+                yaml_file.write_text(
+                    yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+                    encoding="utf-8",
                 )
 
-    # ── 项目 CRUD ──
+    # ── 项目 CRUD (file-backed) ──
 
     def create_project(self, name: str, root_dir: str, description: str = "") -> dict:
         root = Path(root_dir).resolve()
         if not root.is_dir():
             raise ValueError(f"目录不存在: {root}")
-
-        pid = uuid.uuid4().hex
-        now = datetime.now(timezone.utc).isoformat()
-        with self.store._connect() as conn:
-            conn.execute(
-                "INSERT INTO projects(id, name, root_dir, description, created_at, updated_at) VALUES (?,?,?,?,?,?)",
-                (pid, name, str(root), description, now, now),
-            )
-        return self.get_project(pid) or {}
+        data = {"name": name, "description": description, "root_dir": str(root)}
+        if self.config_reader:
+            self.config_reader.save_project(data)
+        return data
 
     def delete_project(self, project_id: str) -> bool:
-        with self.store._connect() as conn:
-            cursor = conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
-        return cursor.rowcount > 0
+        # File-backed: just return True (project is the workspace itself)
+        return True
 
     def list_projects(self) -> list[dict]:
-        with self.store._connect() as conn:
-            rows = conn.execute("SELECT * FROM projects ORDER BY created_at DESC").fetchall()
-        return [dict(r) for r in rows]
+        if self.config_reader:
+            try:
+                return [self.config_reader.load_project()]
+            except Exception:
+                pass
+        return []
 
     def get_project(self, project_id: str) -> dict | None:
-        with self.store._connect() as conn:
-            row = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
-        return dict(row) if row else None
+        if self.config_reader:
+            try:
+                p = self.config_reader.load_project()
+                return p
+            except Exception:
+                pass
+        return None
 
-    # ── Agent CRUD ──
+    # ── Agent CRUD (file-backed) ──
 
     def add_agent(self, project_id: str, template_id: str, sub_dir: str = "",
                   custom_prompt: str = "", display_name: str = "") -> dict | None:
-        with self.store._connect() as conn:
-            tmpl = conn.execute("SELECT * FROM agent_templates WHERE id = ?", (template_id,)).fetchone()
-            if not tmpl:
-                raise ValueError(f"模板不存在: {template_id}")
-            tmpl = dict(tmpl)
+        """从模板创建 Agent YAML 文件。"""
+        if not self.config_reader:
+            return None
+        # Find template by id or name
+        templates = self.config_reader.list_agent_templates()
+        tmpl = None
+        for t in templates:
+            if t.get("id") == template_id or t.get("name") == template_id:
+                tmpl = t
+                break
+        if not tmpl:
+            raise ValueError(f"模板不存在: {template_id}")
 
-            name_base = tmpl["name"]
-            name = name_base
-            suffix = 2
-            while conn.execute(
-                "SELECT id FROM project_agents WHERE project_id = ? AND name = ?", (project_id, name)
-            ).fetchone():
-                name = f"{name_base}-{suffix}"
-                suffix += 1
-
-            aid = uuid.uuid4().hex
-            conn.execute(
-                """INSERT INTO project_agents(id, project_id, name, display_name, description, template_id,
-                agent_type, sub_dir, system_prompt, tools, skills, is_required, sort_order)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (
-                    aid, project_id, name,
-                    display_name or tmpl["display_name"],
-                    tmpl["description"],
-                    template_id,
-                    tmpl["agent_type"],
-                    sub_dir or tmpl["default_sub_dir"],
-                    custom_prompt or tmpl["default_prompt"],
-                    tmpl["default_tools"],
-                    tmpl["default_skills"],
-                    0,  # claude agents are not required
-                    99,  # default sort_order
-                ),
-            )
-            row = conn.execute(
-                "SELECT * FROM project_agents WHERE id = ?", (aid,)
-            ).fetchone()
-        return dict(row) if row else None
+        name = tmpl["name"]
+        data = {
+            "name": name,
+            "display_name": display_name or tmpl.get("display_name", name),
+            "description": tmpl.get("description", ""),
+            "agent_type": tmpl.get("agent_type", "claude"),
+            "sub_dir": sub_dir or tmpl.get("sub_dir", ""),
+            "system_prompt": custom_prompt or tmpl.get("system_prompt", ""),
+            "tools": tmpl.get("tools", []),
+            "skills": tmpl.get("skills", []),
+            "sort_order": 0,
+        }
+        self.config_reader.save_agent(name, data)
+        return data
 
     def update_agent(self, project_id: str, agent_id: str, updates: dict) -> dict | None:
+        if not self.config_reader:
+            return None
+        try:
+            existing = self.config_reader.get_agent(agent_id)
+        except Exception:
+            return None
         allowed = {"display_name", "description", "system_prompt", "tools",
                    "skills", "sub_dir", "sort_order"}
-        fields = {k: v for k, v in updates.items() if k in allowed and v is not None}
-        if not fields:
-            return None
-        if "tools" in fields and not isinstance(fields["tools"], str):
-            fields["tools"] = json.dumps(fields["tools"], ensure_ascii=False)
-        if "skills" in fields and not isinstance(fields["skills"], str):
-            fields["skills"] = json.dumps(fields["skills"], ensure_ascii=False)
-        set_clause = ", ".join(f"{k} = ?" for k in fields)
-        set_clause += ", updated_at = ?"
-        values = list(fields.values()) + [datetime.now(timezone.utc).isoformat(), agent_id, project_id]
-        with self.store._connect() as conn:
-            cursor = conn.execute(
-                f"UPDATE project_agents SET {set_clause} WHERE id = ? AND project_id = ?",
-                values,
-            )
-            if cursor.rowcount == 0:
-                return None
-            row = conn.execute(
-                "SELECT * FROM project_agents WHERE id = ?", (agent_id,)
-            ).fetchone()
-        return dict(row) if row else None
+        for k, v in updates.items():
+            if k in allowed and v is not None:
+                existing[k] = v
+        self.config_reader.save_agent(agent_id, existing)
+        return existing
 
     def delete_agent(self, project_id: str, agent_id: str) -> bool:
-        with self.store._connect() as conn:
-            # 检查是否为必选 Agent
-            row = conn.execute(
-                "SELECT is_required FROM project_agents WHERE id = ? AND project_id = ?",
-                (agent_id, project_id),
-            ).fetchone()
-            if not row:
-                return False
-            if row["is_required"]:
-                raise ValueError("必选 Agent 不可删除")
-            cursor = conn.execute(
-                "DELETE FROM project_agents WHERE id = ? AND project_id = ?",
-                (agent_id, project_id),
-            )
-        return cursor.rowcount > 0
+        if not self.config_reader:
+            return False
+        try:
+            self.config_reader.delete_agent(agent_id)
+            return True
+        except Exception:
+            return False
 
     def list_agents(self, project_id: str) -> list[dict]:
-        with self.store._connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM project_agents WHERE project_id = ? ORDER BY sort_order",
-                (project_id,),
-            ).fetchall()
-        return [dict(r) for r in rows]
+        if self.config_reader:
+            return self.config_reader.list_agents()
+        return []
 
-    # ── 模板管理 ──
+    # ── 模板管理 (file-backed) ──
 
     def list_templates(self, category: str | None = None) -> list[dict]:
+        """列出全局模板目录中的 Agent 模板。文件优先。"""
+        if self.config_reader:
+            all_tmpl = self.config_reader.list_agent_templates()
+            if category:
+                return [t for t in all_tmpl if t.get("category") == category]
+            return all_tmpl
+        # Fallback to DB
         with self.store._connect() as conn:
             if category:
                 rows = conn.execute(
@@ -282,69 +303,13 @@ class ProjectManager:
         return results
 
     def create_template(self, data: dict) -> dict | None:
-        tid = data.get("id") or uuid.uuid4().hex
-        with self.store._connect() as conn:
-            conn.execute(
-                """INSERT INTO agent_templates(
-                    id, name, display_name, description, category, agent_type,
-                    default_sub_dir, default_prompt, default_tools, default_skills, is_builtin
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-                (
-                    tid,
-                    data["name"],
-                    data.get("display_name", data["name"]),
-                    data.get("description", ""),
-                    data.get("category", "general"),
-                    data.get("agent_type", "claude"),
-                    data.get("default_sub_dir", ""),
-                    data.get("default_prompt", ""),
-                    json.dumps(data.get("default_tools", []), ensure_ascii=False),
-                    json.dumps(data.get("default_skills", []), ensure_ascii=False),
-                    0,  # 用户创建的模板不是内置模板
-                ),
-            )
-        return {"id": tid}
+        """模板只读 — 用户直接在 templates/agents/ 编辑 YAML 文件。"""
+        return {"id": data.get("name", ""), "note": "请直接在 templates/agents/ 编辑模板 YAML"}
 
     def update_template(self, template_id: str, updates: dict) -> dict | None:
-        """更新模板配置，后续从该模板创建的 Agent 将使用新默认值。"""
-        allowed = {"display_name", "description", "default_sub_dir",
-                   "default_prompt", "default_tools", "default_skills", "category"}
-        fields = {k: v for k, v in updates.items() if k in allowed and v is not None}
-        if not fields:
-            return None
-        if "default_tools" in fields and not isinstance(fields["default_tools"], str):
-            fields["default_tools"] = json.dumps(fields["default_tools"], ensure_ascii=False)
-        if "default_skills" in fields and not isinstance(fields["default_skills"], str):
-            fields["default_skills"] = json.dumps(fields["default_skills"], ensure_ascii=False)
-        set_clause = ", ".join(f"{k} = ?" for k in fields)
-        values = list(fields.values()) + [template_id]
-        with self.store._connect() as conn:
-            cursor = conn.execute(
-                f"UPDATE agent_templates SET {set_clause} WHERE id = ?", values
-            )
-            if cursor.rowcount == 0:
-                return None
-            row = conn.execute(
-                "SELECT * FROM agent_templates WHERE id = ?", (template_id,)
-            ).fetchone()
-        if not row:
-            return None
-        r = dict(row)
-        r["default_tools"] = json.loads(r.get("default_tools", "[]"))
-        r["default_skills"] = json.loads(r.get("default_skills", "[]"))
-        return r
+        """模板只读 — 用户直接在 templates/agents/ 编辑 YAML 文件。"""
+        return {"id": template_id, "note": "请直接在 templates/agents/ 编辑模板 YAML"}
 
     def delete_template(self, template_id: str) -> bool:
-        """删除非内置模板。内置模板不可删除。"""
-        with self.store._connect() as conn:
-            row = conn.execute(
-                "SELECT is_builtin FROM agent_templates WHERE id = ?", (template_id,)
-            ).fetchone()
-            if not row:
-                return False
-            if row["is_builtin"]:
-                raise ValueError("内置模板不可删除")
-            cursor = conn.execute(
-                "DELETE FROM agent_templates WHERE id = ?", (template_id,)
-            )
-        return cursor.rowcount > 0
+        """模板只读 — 用户直接在 templates/agents/ 删除 YAML 文件。"""
+        return True

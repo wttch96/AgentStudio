@@ -5,7 +5,6 @@ import type {
   ActiveAgent,
   ConversationTurn,
   DeepSeekBalance,
-  DeepSeekUsage,
   MemoryCompactionRecord,
   PlanTask,
   Run,
@@ -26,7 +25,6 @@ interface WorkspaceState {
   skills: SkillProfile[]
   status: SystemStatus | null
   deepseekBalance: DeepSeekBalance | null
-  deepseekUsage: DeepSeekUsage | null
   balanceLoading: boolean
   loading: boolean
   submitting: boolean
@@ -59,7 +57,6 @@ const state = reactive<WorkspaceState>({
   skills: [],
   status: null,
   deepseekBalance: null,
-  deepseekUsage: null,
   balanceLoading: false,
   loading: true,
   submitting: false,
@@ -103,7 +100,6 @@ export function useWorkspace() {
       state.runs = runs
       if (runs[0]) await selectRun(runs[0].id)
       void refreshDeepSeekBalance()
-      void refreshDeepSeekUsage()
     } catch (error) {
       state.error = error instanceof Error ? error.message : '初始化失败'
     } finally {
@@ -139,14 +135,6 @@ export function useWorkspace() {
       }
     } finally {
       state.balanceLoading = false
-    }
-  }
-
-  async function refreshDeepSeekUsage() {
-    try {
-      state.deepseekUsage = await api.deepseekUsage()
-    } catch {
-      // 本地统计是辅助信息；短暂失败时保留上一次成功结果。
     }
   }
 
@@ -364,7 +352,6 @@ export function useWorkspace() {
         state.streamingState.isStreaming = false
         closeStream()
         void refreshDeepSeekBalance()
-        void refreshDeepSeekUsage()
         // 自动推进队列中的下一个任务 — 作为当前 conversation 的下一轮
         if (state.taskQueue.length > 0) {
           const next = state.taskQueue.shift()!
@@ -661,7 +648,6 @@ export function useWorkspace() {
     promoteQueueItem,
     refreshConfiguration,
     refreshDeepSeekBalance,
-    refreshDeepSeekUsage,
     refreshDerivedState,
   }
 }

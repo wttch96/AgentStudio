@@ -46,6 +46,7 @@ class ClaudeAgentExecutor:
         max_turns: int | None = None,
         timeout_seconds: int | None = None,
         project_id: str | None = None,
+        interrupt_router: Any = None,
     ) -> AgentResult:
         if cancel_event.is_set():
             return self._cancelled(task)
@@ -61,6 +62,7 @@ class ClaudeAgentExecutor:
                 max_turns or self.settings.agent_max_turns,
                 timeout_seconds or self.settings.agent_timeout_seconds,
                 project_id or "",
+                interrupt_router=interrupt_router,
             )
         )
 
@@ -74,6 +76,7 @@ class ClaudeAgentExecutor:
         max_turns: int,
         timeout_seconds: int,
         project_id: str = "",
+        interrupt_router: Any = None,
     ) -> AgentResult:
         profile = self.registry.get(project_id, task.agent)
         dependency_context = "\n".join(
@@ -125,6 +128,11 @@ class ClaudeAgentExecutor:
                 async for message in query(prompt=prompt, options=options):
                     if cancel_event.is_set():
                         return self._cancelled(task)
+                    # Per-agent pause check
+                    if interrupt_router and interrupt_router.check_agent_paused(run_id, task.agent):
+                        await self._wait_agent_resume(run_id, task.agent, interrupt_router, cancel_event)
+                        if cancel_event.is_set():
+                            return self._cancelled(task)
                     self._handle_message(run_id, task, message, text_parts, changed_files)
                     if isinstance(message, ResultMessage) and message.is_error:
                         result_subtype = message.subtype
@@ -285,3 +293,16 @@ class ClaudeAgentExecutor:
             status="cancelled",
             summary="任务已按用户请求取消",
         )
+
+    @staticmethod
+    async def _wait_agent_resume(
+        run_id: str,
+        agent_id: str,
+        interrupt_router: Any,
+        cancel_event: threading.Event,
+        poll_interval: float = 1.0,
+    ) -> None:
+        """Async wait until agent pause is cleared or run is cancelled."""
+        import asyncio as _asyncio
+        while not cancel_event.is_set() and interrupt_router.check_agent_paused(run_id, agent_id):
+            await _asyncio.sleep(poll_interval)

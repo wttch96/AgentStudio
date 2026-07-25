@@ -26,14 +26,42 @@ const injectTarget = ref('all')
 const injectInstruction = ref('')
 
 const commandOptions = [
+  { command: '/+', label: '执行预定义流程 (用法: /+流程名)', isFlow: true },
   { command: '/agent', label: '指定 Agent 并传递引导指令 (用法: /agent <名称> <指令>)' },
   { command: '/frontend', label: '快捷引导 vue-frontend' },
   { command: '/backend', label: '快捷引导 flask-backend' },
   { command: '/retry', label: '重试失败节点（后接 task-id）' },
 ]
+// Flow names for /+ auto-completion
+import { api } from '../api/client'
+import type { FlowDefinition } from '../types'
+const flowOptions = ref<Array<{ command: string; label: string; isFlow: boolean }>>([])
+const loadingFlows = ref(false)
+
+async function fetchFlows() {
+  if (loadingFlows.value) return
+  loadingFlows.value = true
+  try {
+    const items = await api.flows()
+    flowOptions.value = items.map((f: FlowDefinition) => ({
+      command: `/+${f.name}`,
+      label: `${f.description} (v${f.version}, ${f.node_count || '?'} 节点)`,
+      isFlow: true,
+    }))
+  } catch {
+    flowOptions.value = []
+  } finally {
+    loadingFlows.value = false
+  }
+}
 const visibleCommands = computed(() => {
   const value = objective.value.trim().toLowerCase()
   if (!value.startsWith('/') || value.includes(' ')) return []
+  // Fetch flows when user types /+
+  if (value.startsWith('/+')) {
+    fetchFlows()
+    return flowOptions.value.filter((item) => item.command.startsWith(value))
+  }
   return commandOptions.filter((item) => item.command.startsWith(value))
 })
 

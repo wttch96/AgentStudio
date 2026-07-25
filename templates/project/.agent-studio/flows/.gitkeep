@@ -1,0 +1,20 @@
+# 在此目录下放置流程 YAML 定义文件
+# 每个文件定义一个流程，文件名即流程名称
+# 示例 my-flow.yaml:
+#
+# name: my-flow
+# description: 自定义流程
+# version: "1.0"
+# keywords: [自定义, 流程]
+# nodes:
+#   - id: step1
+#     agent: my-agent
+#     title: 第一步
+#     objective: 执行第一步任务...
+#     depends_on: []
+# synthesize:
+#   template: |
+#     ## 结果汇总
+#     {% for nid, r in results.items() %}
+#     - {{ nid }}: {{ r.status }}
+#     {% endfor %}

@@ -3,8 +3,6 @@
 backend/.venv/
 backend/instance/
 backend/*.egg-info/
-backend/*.db
-instance/
 frontend/node_modules/
 frontend/dist/
 frontend/*.tsbuildinfo
@@ -16,5 +14,5 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 *.pyc
-../.agent-studio-checkpoints.db
 .sandbox/
+.workspace/

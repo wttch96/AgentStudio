@@ -1,13 +1,12 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import type { AgentProfile, DeepSeekBalance, DeepSeekUsage, RunEvent } from '../types'
+import type { AgentProfile, DeepSeekBalance, RunEvent } from '../types'
 import { api } from '../api/client'
 
 const props = defineProps<{
   agents: AgentProfile[]
   events: RunEvent[]
   deepseekBalance: DeepSeekBalance | null
-  deepseekUsage: DeepSeekUsage | null
   balanceLoading: boolean
   projectId: string
 }>()
@@ -107,8 +106,7 @@ function brainStatus() {
 function brainActivity() {
   const plans = props.events.filter(e => e.type === 'plan.created').length
   const contracts = props.events.filter(e => e.type === 'brain.contract_created').length
-  const tokens = props.deepseekUsage?.all_time?.total_tokens || 0
-  return { plans, contracts, tokens }
+  return { plans, contracts }
 }
 function memoryActivity() {
   const compacted = props.events.filter(e => e.type === 'memory.compacted').length
@@ -181,7 +179,6 @@ function memoryStatus() {
             <span class="mini-status"><i />{{ brainStatus() }}</span>
             <span>{{ brainActivity().plans }} 次规划</span>
             <span v-if="brainActivity().contracts">{{ brainActivity().contracts }} 份契约</span>
-            <span v-if="brainActivity().tokens" class="token-stat">累计 {{ formatKTokens(brainActivity().tokens) }} token</span>
           </div>
         </div>
       </article>

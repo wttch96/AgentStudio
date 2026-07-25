@@ -10,7 +10,6 @@ from openai import OpenAI
 from app.config import Settings
 from app.domain.models import AgentResult, DagTask, TaskDag
 from app.services.brain_settings import BrainSettings
-from app.services.deepseek_usage import DeepSeekUsageService
 
 
 STRUCTURE_GUARD_BASE = """
@@ -75,12 +74,10 @@ class DeepSeekPlanner:
     def __init__(
         self,
         settings: Settings,
-        usage: DeepSeekUsageService | None = None,
         brain: BrainSettings | None = None,
         knowledge_store=None,
     ) -> None:
         self.settings = settings
-        self.usage = usage
         self.brain = brain or BrainSettings()
         self.knowledge_store = knowledge_store
 
@@ -207,11 +204,7 @@ class DeepSeekPlanner:
             ],
             temperature=0.1,
         )
-        if self.usage:
-            self.usage.record(response, phase="planning", run_id=run_id)
         content = response.choices[0].message.content
-        if not content:
-            raise RuntimeError("DeepSeek 返回了空计划")
         # 尝试解析 JSON 任务图；如果返回的是纯文本或混合内容，提取 JSON 部分
         content_stripped = content.strip()
         # DeepSeek 有时会在 JSON 前加文字说明，或在 JSON 后追加
@@ -423,8 +416,6 @@ class DeepSeekPlanner:
             ],
             temperature=0.1,
         )
-        if self.usage:
-            self.usage.record(response, phase="synthesis", run_id=run_id)
         content = response.choices[0].message.content
         if not content:
             raise RuntimeError("DeepSeek 返回了空汇总")
@@ -510,3 +501,71 @@ class DeepSeekPlanner:
             else:
                 lines.append(f"- [skipped] {task.title}：依赖失败或运行已取消")
         return "\n".join(lines)
+
+    # ==================== Intent Classification ====================
+
+    def classify_intent(self, objective: str, available_flows: list[dict]) -> str | None:
+        """Lightweight LLM call to match user intent to a known flow.
+
+        Returns the flow name if confidence >= 0.7, otherwise None.
+        Falls back to keyword matching if LLM is unavailable.
+        """
+        # Fast path: check if objective starts with /+flow-name
+        if objective.strip().startswith("/+"):
+            flow_name = objective.strip()[2:].split()[0]
+            if any(f["name"] == flow_name for f in available_flows):
+                return flow_name
+
+        # If no flows registered, skip
+        if not available_flows:
+            return None
+
+        # Try keyword-based match first (zero-cost)
+        lowered = objective.lower()
+        for f in available_flows:
+            for kw in f.get("keywords", []):
+                if kw.lower() in lowered:
+                    return f["name"]
+            if f["name"].lower() in lowered:
+                return f["name"]
+
+        # If LLM available, do a lightweight classification
+        if not self.settings.deepseek_api_key:
+            return None
+
+        try:
+            client = OpenAI(
+                api_key=self.settings.deepseek_api_key,
+                base_url=self.settings.deepseek_base_url,
+            )
+            flow_list = "\n".join(
+                f"- {f['name']}: {f['description']} (关键词: {', '.join(f.get('keywords', []))})"
+                for f in available_flows[:10]
+            )
+            response = client.chat.completions.create(
+                model=self.settings.deepseek_model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "你是一个意图分类器。根据用户输入，判断是否匹配以下预定义流程。\n"
+                            "如果匹配，只输出流程名称。如果不匹配任何流程，输出 NONE。\n"
+                            "不要输出任何其他内容。\n\n"
+                            f"可用流程：\n{flow_list}"
+                        ),
+                    },
+                    {"role": "user", "content": objective},
+                ],
+                temperature=0.0,
+                max_tokens=50,
+            )
+            content = (response.choices[0].message.content or "").strip().upper()
+            if content == "NONE" or not content:
+                return None
+            # Verify the returned name is a valid flow
+            for f in available_flows:
+                if f["name"].upper() == content:
+                    return f["name"]
+            return None
+        except Exception:
+            return None

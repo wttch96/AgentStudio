@@ -1,0 +1,93 @@
+name: feature-implement
+description: 前后端功能实现流程 — 分析需求 → 后端实现 → 前端实现 → 验证
+version: "1.0"
+keywords: [功能实现, feature, 前后端, fullstack, implement, 新功能, 开发]
+
+nodes:
+  - id: plan
+    agent: flask-backend
+    title: 分析需求和设计实现方案
+    objective: |
+      分析用户需求并设计前后端实现方案：
+      {% if input.prompt %}
+      需求：{{ input.prompt }}
+      {% endif %}
+      输出：需要修改的文件列表、接口约定、数据模型变更。
+    write_scope: []
+    max_turns: 8
+    interruptible: true
+    depends_on: []
+
+  - id: backend
+    agent: flask-backend
+    title: 实现后端逻辑
+    objective: |
+      根据设计方案实现后端：
+      {{ plan.output.summary }}
+
+      实现 API、数据模型、业务逻辑。完成后运行已有测试确保不破坏现有功能。
+    write_scope: ["backend/"]
+    timeout_seconds: 600
+    max_turns: 12
+    interruptible: true
+    depends_on: [plan]
+
+  - id: frontend
+    agent: vue-frontend
+    title: 实现前端界面
+    objective: |
+      根据设计方案和已完成的后端实现前端界面：
+
+      ## 设计方案
+      {{ plan.output.summary }}
+
+      ## 后端实现结果
+      {{ backend.output.summary }}
+
+      实现前端组件、页面路由、状态管理和 API 调用。
+    write_scope: ["frontend/"]
+    timeout_seconds: 600
+    max_turns: 12
+    interruptible: true
+    depends_on: [plan, backend]
+
+  - id: verify
+    agent: vue-frontend
+    title: 端到端验证
+    objective: |
+      验证前后端集成的完整功能：
+
+      ## 后端
+      {{ backend.output.summary }}
+
+      ## 前端
+      {{ frontend.output.summary }}
+
+      检查：接口对齐、数据流正确、错误处理、UI 交互。
+      如有问题，直接修复对应端的代码。
+    write_scope: ["frontend/", "backend/"]
+    timeout_seconds: 300
+    max_turns: 8
+    interruptible: true
+    depends_on: [frontend]
+
+synthesize:
+  template: |
+    ## 功能实现报告
+
+    | 阶段 | 状态 |
+    |------|------|
+    {% for nid, r in results.items() %}
+    | {{ nid }} | {{ r.status }} |
+    {% endfor %}
+
+    {% for nid, r in results.items() %}
+    ### {{ nid }}
+    {{ r.summary[:300] }}
+    {% if r.changed_files %}
+    *变更文件：{{ r.changed_files | join(', ') }}*
+    {% endif %}
+
+    {% endfor %}
+
+    > 实现完成。请手动验证核心路径后部署。

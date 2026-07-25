@@ -3,7 +3,6 @@ import { computed, onMounted, ref, watch } from 'vue'
 import MainCanvas from './components/MainCanvas.vue'
 import DetailPanel from './components/DetailPanel.vue'
 import AppHeader from './components/AppHeader.vue'
-import DagModal from './components/DagModal.vue'
 import PromptComposer from './components/PromptComposer.vue'
 import RunSidebar from './components/RunSidebar.vue'
 import ConfigCenter from './components/config/ConfigCenter.vue'
@@ -23,7 +22,6 @@ const showConfiguration = ref(false)
 const showProjectDialog = ref(false)
 const leftPanelOpen = ref(true)
 const rightPanelOpen = ref(true)
-const showDagModal = ref(false)
 
 // Project state
 const projects = ref<Project[]>([])
@@ -83,7 +81,7 @@ const timeoutDetection = useTimeoutDetection(activeRun, {
 const { interruptState, pauseAll, pauseAgent, injectGuidance, abortRun, handleInterruptEvent, reset: resetInterrupt } = useInterrupt(activeRun)
 
 // 对话时间线
-const { conversationTurns, activeAgents, memoryCompactions, planTasks, planContract } = useRunTimeline(
+const { conversationTurns, activeAgents, memoryCompactions } = useRunTimeline(
   computed(() => workspace.state.conversationRuns),
   computed(() => workspace.state.conversationEvents),
   computed(() => workspace.state.events),
@@ -165,13 +163,6 @@ function handleInjectGuidance(nodeId: string, instruction: string) {
   const node = findNode(nodeId)
   void injectGuidance(node?.agentId ?? null, instruction)
 }
-
-// DAG 统计
-const dagStats = computed(() => {
-  const tasks = planTasks.value
-  const turns = conversationTurns.value
-  return `${turns.length}轮 ${tasks.length}任务`
-})
 
 onMounted(async () => {
   await loadProjects()
@@ -271,26 +262,7 @@ onMounted(async () => {
               @select-node="selectNode"
               @interrupt-node="handleInterruptNode"
               @update-filter="updateFilter"
-              @toggle-dag-modal="showDagModal = true"
             />
-          </div>
-
-          <!-- DAG 按钮 + 停止按钮 -->
-          <div class="run-status-bar">
-            <div class="run-status-left">
-              <span class="eyebrow">
-                {{ workspace.state.activeRun.objective.slice(0, 60) }}{{ workspace.state.activeRun.objective.length > 60 ? '…' : '' }}
-              </span>
-            </div>
-            <div class="run-status-right">
-              <button type="button" class="dag-trigger-btn" @click="showDagModal = true" title="全屏 DAG 视图">
-                <span aria-hidden="true">◇</span> DAG
-                <span class="dag-trigger-badge">{{ dagStats }}</span>
-              </button>
-              <button class="stop-button" type="button" @click="workspace.cancelActiveRun()">
-                <span aria-hidden="true">■</span> 停止任务
-              </button>
-            </div>
           </div>
         </template>
 
@@ -346,16 +318,6 @@ onMounted(async () => {
       @close="showProjectDialog = false; workspace.refreshConfiguration()"
     />
 
-    <!-- DAG Modal -->
-    <DagModal
-      :visible="showDagModal"
-      :tasks="planTasks"
-      :events="[...workspace.state.conversationEvents, ...workspace.state.events]"
-      :contract="planContract"
-      :turns="conversationTurns"
-      :memory-compactions="memoryCompactions"
-      @close="showDagModal = false"
-    />
   </div>
 </template>
 
@@ -368,55 +330,4 @@ onMounted(async () => {
   gap: 0;
 }
 
-/* Run status bar */
-.run-status-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  max-width: var(--content-width);
-  margin: 0 auto 0.25rem;
-  width: 100%;
-  flex-shrink: 0;
-  overflow: hidden;
-}
-
-.run-status-left {
-  display: flex;
-  align-items: center;
-}
-
-.run-status-right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-/* DAG trigger button */
-.dag-trigger-btn {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 5px 12px;
-  border: 1px solid rgba(10, 132, 255, 0.25);
-  border-radius: 8px;
-  background: rgba(10, 132, 255, 0.08);
-  color: #64d2ff;
-  font-size: 0.65rem;
-  font-weight: 550;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
-}
-
-.dag-trigger-btn:hover {
-  background: rgba(10, 132, 255, 0.16);
-  border-color: rgba(10, 132, 255, 0.45);
-}
-
-.dag-trigger-badge {
-  font-size: 0.5rem;
-  padding: 1px 5px;
-  border-radius: 4px;
-  background: rgba(10, 132, 255, 0.15);
-  color: #64d2ff;
-}
 </style>

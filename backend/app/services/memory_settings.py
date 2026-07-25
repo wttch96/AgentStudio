@@ -1,12 +1,12 @@
-"""持久化记忆系统配置，模式与 BrainSettings / SchedulerSettings 一致。"""
+"""持久化记忆系统配置。文件为 .agent-studio/memory.yaml。"""
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from threading import RLock
 
 from app.domain.configuration import MemoryConfiguration
+from app.services.config_reader import ConfigReader
 
 
 DEFAULT_MEMORY_CONFIG = MemoryConfiguration(
@@ -20,28 +20,18 @@ DEFAULT_MEMORY_CONFIG = MemoryConfiguration(
 
 
 class MemorySettings:
-    """持久化记忆配置，每次运行读取一次。"""
+    """持久化记忆配置，文件为 .agent-studio/memory.yaml。"""
 
-    def __init__(self, config_path: Path | None = None, store=None,
-                 config_key: str = "memory") -> None:
-        self.config_path = config_path
-        self.store = store
-        self.config_key = config_key
+    def __init__(self, config_reader: ConfigReader | None = None) -> None:
+        self.config_reader = config_reader
         self._lock = RLock()
 
     def current(self) -> MemoryConfiguration:
         with self._lock:
-            if self.store:
-                self.store.migrate_config_from_file(self.config_key, str(self.config_path)) if self.config_path else None
-                data = self.store.get_config(self.config_key)
+            if self.config_reader:
+                data = self.config_reader.read_setting("memory")
                 if data:
                     return MemoryConfiguration.model_validate(data)
-            if self.config_path and self.config_path.exists():
-                try:
-                    payload = json.loads(self.config_path.read_text(encoding="utf-8"))
-                    return MemoryConfiguration.model_validate(payload)
-                except (OSError, ValueError, json.JSONDecodeError):
-                    pass
             return DEFAULT_MEMORY_CONFIG.model_copy()
 
     def default(self) -> MemoryConfiguration:
@@ -49,14 +39,6 @@ class MemorySettings:
 
     def update(self, configuration: MemoryConfiguration) -> MemoryConfiguration:
         with self._lock:
-            if self.store:
-                self.store.set_config(self.config_key, configuration.model_dump())
-            elif self.config_path:
-                self.config_path.parent.mkdir(parents=True, exist_ok=True)
-                temporary = self.config_path.with_suffix(".json.tmp")
-                temporary.write_text(
-                    json.dumps(configuration.model_dump(), ensure_ascii=False, indent=2) + "\n",
-                    encoding="utf-8",
-                )
-                temporary.replace(self.config_path)
+            if self.config_reader:
+                self.config_reader.write_setting("memory", configuration.model_dump())
         return configuration.model_copy()

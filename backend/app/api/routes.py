@@ -228,10 +228,6 @@ def deepseek_balance():
     return jsonify(services().deepseek_balance.current(refresh=refresh))
 
 
-@api.get("/deepseek/usage")
-def deepseek_usage():
-    return jsonify(services().deepseek_usage.summary())
-
 
 @api.post("/runs")
 def create_run():
@@ -382,11 +378,84 @@ def get_memory_stats(conversation_id: str):
     return jsonify(services().memory_manager.get_stats(conversation_id))
 
 
+# ==================== 流程管理 (Flow Engine) ====================
+
+@api.get("/flows")
+def list_flows():
+    """列出所有可用的流程定义。"""
+    return jsonify({"items": services().flow_store.list_all()})
+
+
+@api.get("/flows/matches")
+def match_flows():
+    """模糊匹配流程名（用于自动补全和意图分类）。"""
+    q = request.args.get("q", "")
+    return jsonify({"items": services().flow_store.fuzzy_match(q)})
+
+
+@api.get("/flows/<name>")
+def get_flow(name: str):
+    """获取单个流程的完整定义。"""
+    try:
+        flow = services().flow_store.load(name)
+        return jsonify(flow.model_dump())
+    except KeyError:
+        return jsonify({"error": f"流程 {name} 不存在"}), 404
+
+
+@api.post("/flows")
+def create_flow():
+    """创建或更新流程 YAML 定义。"""
+    data = request.get_json(silent=True) or {}
+    yaml_content = data.get("yaml_content", "")
+    flow_name = data.get("name", "")
+    if not flow_name or not yaml_content:
+        return jsonify({"error": "需要 name 和 yaml_content"}), 400
+    try:
+        flow = services().flow_store.save(flow_name, yaml_content)
+        return jsonify(flow.model_dump()), 201
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+
+
+@api.put("/flows/<name>")
+def update_flow(name: str):
+    """更新现有流程。"""
+    data = request.get_json(silent=True) or {}
+    yaml_content = data.get("yaml_content", "")
+    if not yaml_content:
+        return jsonify({"error": "需要 yaml_content"}), 400
+    try:
+        flow = services().flow_store.save(name, yaml_content)
+        return jsonify(flow.model_dump())
+    except (ValueError, KeyError) as error:
+        return jsonify({"error": str(error)}), 400
+
+
+@api.delete("/flows/<name>")
+def delete_flow(name: str):
+    """删除流程定义。"""
+    try:
+        services().flow_store.delete(name)
+        return "", 204
+    except KeyError:
+        return jsonify({"error": f"流程 {name} 不存在"}), 404
+
+
+@api.get("/runs/<run_id>/flow-traces")
+def get_flow_traces(run_id: str):
+    """获取流程运行中每个节点的输入/输出跟踪。"""
+    if not services().store.get_run(run_id):
+        return jsonify({"error": "运行不存在"}), 404
+    traces = services().store.list_flow_traces(run_id)
+    return jsonify({"items": traces})
+
+
 # ==================== 中断指令 ====================
 
 @api.post("/runs/<run_id>/interrupt")
 def send_interrupt(run_id: str):
-    """发送中断指令：暂停 agent、触发重规划或中止运行。"""
+    """发送中断指令：暂停 agent/节点、触发重规划或中止运行。"""
     if not services().store.get_run(run_id):
         return jsonify({"error": "运行不存在"}), 404
     try:
@@ -400,6 +469,14 @@ def send_interrupt(run_id: str):
             instruction=data.get("instruction", ""),
         )
         command_id = services().interrupt_router.send(command)
+
+        # Flow-specific: handle per-node pause
+        target_node = data.get("target_node")
+        if target_node and data.get("action") == "pause":
+            services().interrupt_router.pause_node(run_id, target_node)
+        elif target_node and data.get("action") == "resume":
+            services().interrupt_router.resume_node(run_id, target_node)
+
         return jsonify({"id": command_id, "accepted": True}), 202
     except ValueError as error:
         return jsonify({"error": str(error)}), 400

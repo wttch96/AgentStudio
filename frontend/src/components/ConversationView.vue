@@ -74,6 +74,7 @@ const items = computed<TimelineItem[]>(() => {
         'skill.loaded', 'agent.completed', 'agent.failed',
         'agent.usage', 'run.summary',
         'interrupt.requested', 'interrupt.received', 'interrupt.resolved',
+        'flow.started', 'flow.completed',
       ].includes(e.type)
     })
     .map((e) => ({
@@ -116,6 +117,8 @@ function typeLabel(type: string): string {
     'interrupt.requested': '中断请求',
     'interrupt.received': '中断接收',
     'interrupt.resolved': '中断已处理',
+    'flow.started': '流程开始',
+    'flow.completed': '流程完成',
   }
   return labels[type] || type
 }
@@ -130,6 +133,7 @@ function typeIcon(type: string): string {
   if (type.startsWith('agent.')) return '&#x25CF;'
   if (type.startsWith('brain.')) return '&#x25A0;'
   if (type.startsWith('interrupt.')) return '&#x26A0;'
+  if (type.startsWith('flow.')) return '&#x2691;'
   return '&#x25CB;'
 }
 
@@ -143,6 +147,7 @@ function typeCssClass(type: string): string {
   if (type.startsWith('agent.failed')) return 'event-error'
   if (type.startsWith('brain.')) return 'event-brain'
   if (type.startsWith('interrupt.')) return 'event-interrupt'
+  if (type.startsWith('flow.')) return 'event-flow'
   if (type.startsWith('agent.')) return 'event-agent'
   return 'event-default'
 }

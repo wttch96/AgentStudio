@@ -85,31 +85,6 @@ export interface DeepSeekBalance {
   error: string | null
 }
 
-export interface DeepSeekUsagePeriod {
-  requests: number
-  prompt_tokens: number
-  cache_hit_tokens: number
-  cache_miss_tokens: number
-  completion_tokens: number
-  total_tokens: number
-  estimated_cost_usd: string
-  first_recorded_at: string | null
-}
-
-export interface DeepSeekUsage {
-  local: true
-  estimated: true
-  model: string
-  today: DeepSeekUsagePeriod
-  month: DeepSeekUsagePeriod
-  all_time: DeepSeekUsagePeriod
-  pricing_usd_per_million: {
-    cache_hit: number
-    cache_miss: number
-    output: number
-  }
-}
-
 export interface PlanTask {
   id: string
   title: string
@@ -455,4 +430,42 @@ export interface SkillTemplate {
   content: string
   is_builtin: boolean
   created_at: string
+}
+
+// ==================== 流程编排 (Flow Engine) ====================
+
+export interface FlowNode {
+  id: string
+  agent: string
+  title: string
+  objective: string  // Jinja2 template
+  write_scope: string[]
+  timeout_seconds: number
+  max_turns: number
+  interruptible: boolean
+  retry_on_failure: boolean
+  depends_on: string[]
+}
+
+export interface FlowDefinition {
+  name: string
+  description: string
+  version: string
+  keywords: string[]
+  nodes: FlowNode[]
+  synthesize?: { template: string }
+  node_count?: number  // computed, from API
+}
+
+export interface FlowTrace {
+  run_id: string
+  node_id: string
+  sequence: number
+  rendered_prompt: string
+  inputs_json: string
+  outputs_json: string | null
+  result_status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
+  started_at: string | null
+  completed_at: string | null
+  duration_ms: number | null
 }

@@ -60,21 +60,6 @@ class SQLiteStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_events_run_sequence
                 ON events(run_id, sequence);
-                CREATE TABLE IF NOT EXISTS deepseek_usage (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    run_id TEXT,
-                    phase TEXT NOT NULL,
-                    model TEXT NOT NULL,
-                    prompt_tokens INTEGER NOT NULL,
-                    cache_hit_tokens INTEGER NOT NULL,
-                    cache_miss_tokens INTEGER NOT NULL,
-                    completion_tokens INTEGER NOT NULL,
-                    total_tokens INTEGER NOT NULL,
-                    estimated_cost_usd REAL NOT NULL,
-                    occurred_at TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS idx_deepseek_usage_occurred_at
-                ON deepseek_usage(occurred_at);
                 CREATE TABLE IF NOT EXISTS memories (
                     id TEXT PRIMARY KEY,
                     run_id TEXT NOT NULL,
@@ -133,51 +118,6 @@ class SQLiteStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_interrupt_run
                 ON interrupt_commands(run_id, status);
-                CREATE TABLE IF NOT EXISTS projects (
-                    id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    root_dir TEXT NOT NULL,
-                    description TEXT DEFAULT '',
-                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-                );
-                CREATE TABLE IF NOT EXISTS project_agents (
-                    id TEXT PRIMARY KEY,
-                    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-                    name TEXT NOT NULL,
-                    display_name TEXT NOT NULL,
-                    description TEXT DEFAULT '',
-                    template_id TEXT,
-                    agent_type TEXT NOT NULL CHECK(agent_type IN ('brain','rag','claude','file-ops')),
-                    sub_dir TEXT DEFAULT '',
-                    system_prompt TEXT NOT NULL,
-                    tools TEXT NOT NULL DEFAULT '[]',
-                    skills TEXT NOT NULL DEFAULT '[]',
-                    is_required INTEGER NOT NULL DEFAULT 0,
-                    sort_order INTEGER NOT NULL DEFAULT 0,
-                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(project_id, name)
-                );
-                CREATE TABLE IF NOT EXISTS agent_templates (
-                    id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL UNIQUE,
-                    display_name TEXT NOT NULL,
-                    description TEXT DEFAULT '',
-                    category TEXT NOT NULL,
-                    agent_type TEXT NOT NULL DEFAULT 'claude',
-                    default_sub_dir TEXT DEFAULT '',
-                    default_prompt TEXT NOT NULL,
-                    default_tools TEXT NOT NULL DEFAULT '[]',
-                    default_skills TEXT NOT NULL DEFAULT '[]',
-                    is_builtin INTEGER NOT NULL DEFAULT 1,
-                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-                );
-                CREATE TABLE IF NOT EXISTS configs (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL,
-                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-                );
                 CREATE TABLE IF NOT EXISTS knowledge_entries (
                     id TEXT PRIMARY KEY,
                     project_id TEXT NOT NULL DEFAULT '',
@@ -206,45 +146,22 @@ class SQLiteStore:
                     feedback TEXT NOT NULL CHECK(feedback IN ('up', 'down')),
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
-CREATE TABLE IF NOT EXISTS project_skills (
-                    id TEXT PRIMARY KEY,
-                    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-                    name TEXT NOT NULL,
-                    description TEXT DEFAULT '',
-                    content TEXT NOT NULL DEFAULT '',
-                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(project_id, name)
+CREATE TABLE IF NOT EXISTS flow_traces (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+                    node_id TEXT NOT NULL,
+                    sequence INTEGER NOT NULL,
+                    rendered_prompt TEXT NOT NULL DEFAULT '',
+                    inputs_json TEXT NOT NULL DEFAULT '{}',
+                    outputs_json TEXT,
+                    result_status TEXT NOT NULL DEFAULT 'pending',
+                    started_at TEXT,
+                    completed_at TEXT,
+                    duration_ms INTEGER,
+                    UNIQUE(run_id, node_id)
                 );
-CREATE INDEX IF NOT EXISTS idx_interrupt_run
-                ON interrupt_commands(run_id, status);
-                CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
-                    title, content, category, tags
-                );
-                CREATE TRIGGER IF NOT EXISTS knowledge_fts_insert
-                AFTER INSERT ON knowledge_entries BEGIN
-                    INSERT INTO knowledge_fts(rowid, title, content, category, tags)
-                    VALUES (new.rowid, new.title, new.content, new.category, new.tags);
-                END;
-                CREATE TRIGGER IF NOT EXISTS knowledge_fts_update
-                AFTER UPDATE ON knowledge_entries BEGIN
-                    UPDATE knowledge_fts SET title=new.title, content=new.content,
-                        category=new.category, tags=new.tags WHERE rowid=old.rowid;
-                END;
-                CREATE TRIGGER IF NOT EXISTS knowledge_fts_delete
-                AFTER DELETE ON knowledge_entries BEGIN
-                    DELETE FROM knowledge_fts WHERE rowid=old.rowid;
-                END;
-                CREATE TABLE IF NOT EXISTS skill_templates (
-                    id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL UNIQUE,
-                    display_name TEXT NOT NULL,
-                    description TEXT DEFAULT '',
-                    category TEXT DEFAULT 'general',
-                    content TEXT NOT NULL,
-                    is_builtin INTEGER NOT NULL DEFAULT 0,
-                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-                );
+                CREATE INDEX IF NOT EXISTS idx_flow_traces_run
+                ON flow_traces(run_id);
                 """
             )
             columns = {
@@ -487,50 +404,6 @@ CREATE INDEX IF NOT EXISTS idx_interrupt_run
                 ),
             )
         return event
-
-    def append_deepseek_usage(self, record: dict[str, Any]) -> None:
-        """保存一次 DeepSeek 响应的 usage；与远端账单完全独立。"""
-
-        columns = (
-            "run_id",
-            "phase",
-            "model",
-            "prompt_tokens",
-            "cache_hit_tokens",
-            "cache_miss_tokens",
-            "completion_tokens",
-            "total_tokens",
-            "estimated_cost_usd",
-            "occurred_at",
-        )
-        with self._connect() as connection:
-            connection.execute(
-                f"INSERT INTO deepseek_usage({', '.join(columns)}) "
-                f"VALUES ({', '.join('?' for _ in columns)})",
-                tuple(record[column] for column in columns),
-            )
-
-    def summarize_deepseek_usage(self, since: str | None = None) -> dict[str, Any]:
-        where = "WHERE occurred_at >= ?" if since else ""
-        parameters = (since,) if since else ()
-        with self._connect() as connection:
-            row = connection.execute(
-                f"""
-                SELECT COUNT(*) AS requests,
-                       COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
-                       COALESCE(SUM(cache_hit_tokens), 0) AS cache_hit_tokens,
-                       COALESCE(SUM(cache_miss_tokens), 0) AS cache_miss_tokens,
-                       COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
-                       COALESCE(SUM(total_tokens), 0) AS total_tokens,
-                       COALESCE(SUM(estimated_cost_usd), 0) AS estimated_cost_usd,
-                       MIN(occurred_at) AS first_recorded_at
-                FROM deepseek_usage {where}
-                """,
-                parameters,
-            ).fetchone()
-        result = dict(row)
-        result["estimated_cost_usd"] = f"{float(result['estimated_cost_usd']):.8f}"
-        return result
 
     def list_events(self, run_id: str, after: int = 0) -> list[dict[str, Any]]:
         with self._connect() as connection:
@@ -797,43 +670,6 @@ CREATE INDEX IF NOT EXISTS idx_interrupt_run
 
     # ==================== 配置存储 ====================
 
-    def get_config(self, key):
-        with self._connect() as connection:
-            row = connection.execute(
-                "SELECT value FROM configs WHERE key = ?", (key,)
-            ).fetchone()
-        return json.loads(row["value"]) if row else None
-
-    def set_config(self, key, value):
-        with self._connect() as connection:
-            connection.execute(
-                "INSERT INTO configs(key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) "
-                "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP",
-                (key, json.dumps(value, ensure_ascii=False)),
-            )
-
-    def list_configs(self):
-        with self._connect() as connection:
-            rows = connection.execute(
-                "SELECT key, updated_at FROM configs ORDER BY key"
-            ).fetchall()
-        return [dict(row) for row in rows]
-
-    def migrate_config_from_file(self, key, file_path):
-        import os
-        if not os.path.isfile(file_path):
-            return False
-        if self.get_config(key) is not None:
-            return False
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            self.set_config(key, data)
-            os.remove(file_path)
-            return True
-        except Exception:
-            return False
-
     # ==================== 知识库 CRUD ====================
 
     def insert_knowledge(self, record):
@@ -1006,3 +842,40 @@ CREATE INDEX IF NOT EXISTS idx_interrupt_run
                 ") WHERE id = ?",
                 (entry_id, entry_id),
             )
+
+    # ==================== Flow Definitions & Traces ====================
+
+    def save_flow_trace(self, trace: dict) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO flow_traces(
+                    run_id, node_id, sequence, rendered_prompt, inputs_json,
+                    outputs_json, result_status, started_at, completed_at, duration_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_id, node_id) DO UPDATE SET
+                    sequence = excluded.sequence,
+                    rendered_prompt = excluded.rendered_prompt,
+                    inputs_json = excluded.inputs_json,
+                    outputs_json = excluded.outputs_json,
+                    result_status = excluded.result_status,
+                    started_at = excluded.started_at,
+                    completed_at = excluded.completed_at,
+                    duration_ms = excluded.duration_ms""",
+                (
+                    trace["run_id"], trace["node_id"], trace.get("sequence", 0),
+                    trace.get("rendered_prompt", ""),
+                    trace.get("inputs_json", "{}"),
+                    trace.get("outputs_json"),
+                    trace.get("result_status", "pending"),
+                    trace.get("started_at"), trace.get("completed_at"),
+                    trace.get("duration_ms"),
+                ),
+            )
+
+    def list_flow_traces(self, run_id: str) -> list[dict]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM flow_traces WHERE run_id = ? ORDER BY sequence",
+                (run_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]

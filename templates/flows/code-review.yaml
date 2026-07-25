@@ -1,0 +1,69 @@
+name: code-review
+description: 多 Agent 代码审查流程 — 分析代码质量 + 安全扫描 + 应用修复
+version: "1.0"
+keywords: [代码审查, code review, PR review, 安全检查, 代码质量, review]
+
+nodes:
+  - id: analyze
+    agent: vue-frontend
+    title: 分析代码质量
+    objective: |
+      分析工作区中最新变更的代码质量问题。
+      {% if input.prompt %}
+      用户需求：{{ input.prompt }}
+      {% endif %}
+      请关注：代码结构、错误处理、性能、可维护性。
+      列出发现的问题和改进建议。
+    write_scope: []
+    timeout_seconds: 300
+    max_turns: 10
+    interruptible: true
+    depends_on: []
+
+  - id: security
+    agent: flask-backend
+    title: 安全审查
+    objective: |
+      对以下代码分析的结果进行安全审查：
+      {{ analyze.output.summary }}
+
+      检查：SQL注入、XSS、CSRF、敏感信息泄露、权限校验缺失、依赖漏洞。
+      不要修改代码，只输出安全审查报告。
+    write_scope: []
+    max_turns: 8
+    interruptible: true
+    depends_on: [analyze]
+
+  - id: fix
+    agent: vue-frontend
+    title: 应用审查修正
+    objective: |
+      基于以下审查结果修复代码问题：
+
+      ## 代码质量分析
+      {{ analyze.output.summary }}
+
+      ## 安全审查
+      {{ security.output.summary }}
+
+      逐个修复发现的问题，完成后验证所有改动。
+    write_scope: ["src/"]
+    timeout_seconds: 600
+    max_turns: 15
+    interruptible: true
+    depends_on: [analyze, security]
+
+synthesize:
+  template: |
+    ## 代码审查报告
+
+    {% for nid, r in results.items() %}
+    ### {{ nid }} ({{ r.status }})
+    {{ r.summary[:500] }}
+    {% if r.changed_files %}
+    **变更文件**：{{ r.changed_files | join(', ') }}
+    {% endif %}
+
+    {% endfor %}
+
+    > 审查流程已完成。请检查所有修复并确认通过。

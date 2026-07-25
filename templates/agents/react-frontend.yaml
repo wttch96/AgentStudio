@@ -1,0 +1,19 @@
+name: react-frontend
+display_name: React 前端
+description: React + TypeScript，Hooks，React Router，前端测试
+category: frontend
+agent_type: claude
+sub_dir: frontend
+system_prompt: '你是 React 前端开发专家。使用 TypeScript、React Hooks、React Router。负责组件开发、状态管理、路由配置和前端测试。
+
+
+  工具使用：CLI 命令前加 rtk 前缀可节省 token。Read 只读取需要的文件片段。输出简洁。'
+tools:
+- Read
+- Write
+- Edit
+- Glob
+- Grep
+- Bash
+skills: []
+sort_order: 0

@@ -3,7 +3,8 @@ import type {
   AgentProfile,
   BrainConfiguration,
   DeepSeekBalance,
-  DeepSeekUsage,
+  FlowDefinition,
+  FlowTrace,
   Run,
   RunEvent,
   MemoryConfiguration,
@@ -86,7 +87,6 @@ export const api = {
     }),
   deepseekBalance: (refresh = false) =>
     request<DeepSeekBalance>(`/deepseek/balance${refresh ? '?refresh=1' : ''}`),
-  deepseekUsage: () => request<DeepSeekUsage>('/deepseek/usage'),
   createRun: (objective: string, parentRunId?: string, projectId?: string) =>
     request<Run>('/runs', {
       method: 'POST',
@@ -109,6 +109,7 @@ export const api = {
     action: string
     target_agent?: string
     target_task?: string
+    target_node?: string
     instruction?: string
   }) =>
     request<{ id: string; accepted: boolean }>(`/runs/${runId}/interrupt`, {
@@ -179,5 +180,27 @@ export const api = {
   publishSkillTemplate: (payload: { name: string; display_name?: string; description?: string; content: string; category?: string }) =>
     request<{ id: string }>("/template-center/skills", { method: "POST", body: JSON.stringify(payload) }),
   streamUrl: (id: string, after: number) => API_BASE + '/runs/' + id + '/stream?after=' + after,
+
+  // ---- Flow Engine ----
+  flows: () => request<{ items: FlowDefinition[] }>('/flows'),
+  flow: (name: string) => request<FlowDefinition>('/flows/' + name),
+  createFlow: (name: string, yamlContent: string) =>
+    request<FlowDefinition>('/flows', {
+      method: 'POST',
+      body: JSON.stringify({ name, yaml_content: yamlContent }),
+    }),
+  updateFlow: (name: string, yamlContent: string) =>
+    request<FlowDefinition>('/flows/' + name, {
+      method: 'PUT',
+      body: JSON.stringify({ yaml_content: yamlContent }),
+    }),
+  deleteFlow: (name: string) =>
+    fetch(API_BASE + '/flows/' + name, { method: 'DELETE' }).then(r => {
+      if (!r.ok) throw new Error('删除失败')
+    }),
+  matchFlows: (q: string) =>
+    request<{ items: Array<FlowDefinition & { score: number }> }>('/flows/matches?q=' + encodeURIComponent(q)),
+  flowTraces: (runId: string) =>
+    request<{ items: FlowTrace[] }>('/runs/' + runId + '/flow-traces'),
 
 }

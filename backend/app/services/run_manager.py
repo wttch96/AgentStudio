@@ -37,6 +37,7 @@ class RunManager:
         interrupt_router: InterruptRouter | None = None,
         rag_executor=None,
         file_agent_executor=None,
+        flow_engine: Any = None,
     ) -> None:
         self.store = store
         self.events = events
@@ -48,6 +49,7 @@ class RunManager:
         self.interrupt_router = interrupt_router
         self.rag_executor = rag_executor
         self.file_agent_executor = file_agent_executor
+        self.flow_engine = flow_engine
         self._cancel_events: dict[str, threading.Event] = {}
         self._agent_pause_events: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
@@ -61,6 +63,8 @@ class RunManager:
         scheduler = self.scheduler_settings.current()
         run_id = uuid.uuid4().hex
         preset_dag = self._preset_dag(command, parent_run_id)
+        flow_name = command.flow_name if command.kind == "flow" else None
+        flow_inputs = command.flow_inputs if command.kind == "flow" else None
         run = self.store.create_run(run_id, objective, str(root), parent_run_id, project_id)
         cancel_event = threading.Event()
         with self._lock:
@@ -81,6 +85,8 @@ class RunManager:
                 self.memory_manager,
                 self.store.get_run(run_id).get("conversation_id", run_id),
                 project_id,
+                flow_name,
+                flow_inputs,
             ),
             name=f"run-{run_id[:8]}",
             daemon=True,
@@ -174,6 +180,8 @@ class RunManager:
         memory_manager: MemoryManager | None = None,
         conversation_id: str = "",
         project_id: str | None = None,
+        flow_name: str | None = None,
+        flow_inputs: dict | None = None,
     ) -> None:
         started_at_iso = datetime.now(timezone.utc).isoformat()
         self.store.update_run(run_id, "running", started_at=started_at_iso)
@@ -188,7 +196,45 @@ class RunManager:
             },
         )
         try:
-            # 加载项目 Agent 列表（未指定 project_id 时加载全部项目的 Agent）
+            # ---- Flow engine path (deterministic YAML pipeline) ----
+            if flow_name and self.flow_engine:
+                flow = self.flow_engine._flow_store_loader(flow_name)
+                if flow:
+                    output = self.flow_engine.execute(
+                        flow=flow,
+                        inputs=flow_inputs or {},
+                        run_id=run_id,
+                        workspace_root=str(workspace_root),
+                        cancel_event=cancel_event,
+                        interrupt_router=interrupt_router,
+                        scheduler=scheduler,
+                        project_id=project_id or "",
+                    )
+                    final_answer = output.get("final_answer", "")
+                    status = "cancelled" if cancel_event.is_set() else "completed"
+                    # Long-term memory
+                    if memory_manager and conversation_id:
+                        try:
+                            memory_manager.extract_long_term_memory(
+                                conversation_id, run_id,
+                                session_summary=str(final_answer)[:4000],
+                                agent_results=output.get("results", [])[-20:],
+                            )
+                            memory_manager.summarize_thread(
+                                conversation_id,
+                                [
+                                    {"role": "user", "content": objective},
+                                    {"role": "assistant", "content": final_answer},
+                                ],
+                            )
+                        except Exception:
+                            pass
+                    self.store.update_run(run_id, status, final_answer=final_answer)
+                    self.events.emit(run_id, f"run.{status}", payload={"text": final_answer})
+                    return
+
+            # ---- Existing LangGraph path ----
+            # Load project agents
             project_agents = []
             try:
                 if project_id:

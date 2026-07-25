@@ -38,7 +38,10 @@ class Settings:
     agent_max_turns: int = 12
     agent_timeout_seconds: int = 900
     workspace_root: Path = WORKSPACE_ROOT
-    instance_dir: Path = BACKEND_ROOT / "instance"
+
+    @property
+    def instance_dir(self) -> Path:
+        return self.workspace_root / ".workspace" / ".agent-studio" / "db"
 
     @property
     def database_path(self) -> Path:

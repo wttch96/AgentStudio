@@ -1,0 +1,37 @@
+name: code-review-qa
+description: 专项代码审查流程 — 对代码进行质量审查 → 生成审查报告
+version: "1.0"
+keywords: [审查, review, 代码审查, code quality, 代码质量, PR, pull request]
+
+nodes:
+  - id: review
+    agent: code-reviewer
+    title: 代码质量审查
+    objective: |
+      对工作区代码进行全面的质量审查。
+      {% if input.prompt %}
+      审查范围：{{ input.prompt }}
+      {% endif %}
+
+      请输出结构化的审查报告，包含：
+      1. 严重问题（安全漏洞、逻辑错误）
+      2. 重要问题（错误处理缺失、性能瓶颈）
+      3. 改进建议（可读性、命名规范）
+    write_scope: []
+    max_turns: 10
+    interruptible: true
+    depends_on: []
+
+synthesize:
+  template: |
+    ## 代码审查报告
+
+    {% for nid, r in results.items() %}
+    {% if r.status == 'completed' %}
+    {{ r.summary }}
+    {% else %}
+    > 审查未完成: {{ r.error or '未知错误' }}
+    {% endif %}
+    {% endfor %}
+
+    > 报告时间: {{ r.started_at }}

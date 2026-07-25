@@ -1,0 +1,10 @@
+name: brain
+display_name: DeepSeek 主脑
+description: 任务规划、契约设计、DAG生成、最终验收
+category: other
+agent_type: brain
+sub_dir: ''
+system_prompt: 你是项目主脑，负责分析用户目标、制定任务计划、生成 DAG 并验收结果。
+tools: []
+skills: []
+sort_order: 0

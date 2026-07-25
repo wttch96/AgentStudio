@@ -1,7 +1,6 @@
 """持久化 DeepSeek 主脑提示词。
 
-页面只编辑主脑的任务理解、项目选择、契约设计和验收偏好。Agent 白名单、
-JSON Schema 等运行安全约束仍由 planner 在请求时追加，避免误配置破坏控制协议。
+文件优先：.agent-studio/brain.yaml 为主源，YAML 文件可手动编辑。
 """
 
 from __future__ import annotations
@@ -11,6 +10,7 @@ from pathlib import Path
 from threading import RLock
 
 from app.domain.configuration import BrainConfiguration
+from app.services.config_reader import ConfigReader
 
 
 DEFAULT_ORCHESTRATION_PROMPT = """
@@ -44,7 +44,6 @@ DEFAULT_ORCHESTRATION_PROMPT = """
 
 ## 你的 Agent 团队
 - Claude Agent：读写代码、运行命令、文件操作
-- DeepSeek Agent：通用推理和代码生成
 - 文件操作 Agent：文件复制、移动、删除、列表、搜索 (FileManagementToolkit)
 - RAG Agent：知识库检索和录入（search/get/add/list_knowledge）
 
@@ -62,17 +61,19 @@ DEFAULT_ORCHESTRATION_PROMPT = """
 
 
 class BrainSettings:
-    def __init__(self, store=None, defaults_path: Path | None = None,
-                 config_path: Path | None = None) -> None:
-        self.store = store
-        self.config_path = config_path
+    """主脑编排提示词配置。文件为 .agent-studio/brain.yaml。"""
+
+    def __init__(
+        self,
+        config_reader: ConfigReader | None = None,
+        defaults_path: Path | None = None,
+    ) -> None:
+        self.config_reader = config_reader
         self.defaults_path = defaults_path
         self.defaults = self._load_defaults()
         self._lock = RLock()
 
     def _load_defaults(self) -> BrainConfiguration:
-        """优先加载版本库模板；模板缺失或损坏时使用代码内置的安全兜底。"""
-
         if self.defaults_path and self.defaults_path.is_file():
             try:
                 return BrainConfiguration.model_validate_json(
@@ -85,37 +86,20 @@ class BrainSettings:
         )
 
     def current(self) -> BrainConfiguration:
+        """读取当前编排提示词。优先 .agent-studio/brain.yaml，其次默认值。"""
         with self._lock:
-            # 自动迁移：首次调用时从旧 JSON 文件迁移到 SQLite
-            if self.store and self.config_path and self.config_path.exists():
-                self.store.migrate_config_from_file("brain", str(self.config_path))
-            if self.store:
-                data = self.store.get_config("brain")
+            if self.config_reader:
+                data = self.config_reader.read_setting("brain")
                 if data:
                     return BrainConfiguration.model_validate(data)
-            if self.config_path and self.config_path.exists():
-                try:
-                    payload = json.loads(self.config_path.read_text(encoding="utf-8"))
-                    return BrainConfiguration.model_validate(payload)
-                except (OSError, ValueError, json.JSONDecodeError):
-                    pass
             return self.defaults.model_copy()
 
     def default(self) -> BrainConfiguration:
-        """返回版本库模板的副本，供配置页面显式恢复默认值。"""
-
         return self.defaults.model_copy()
 
     def update(self, configuration: BrainConfiguration) -> BrainConfiguration:
         with self._lock:
-            if self.store:
-                self.store.set_config("brain", configuration.model_dump())
-            elif self.config_path:
-                self.config_path.parent.mkdir(parents=True, exist_ok=True)
-                temporary = self.config_path.with_suffix(".json.tmp")
-                temporary.write_text(
-                    json.dumps(configuration.model_dump(), ensure_ascii=False, indent=2) + "\n",
-                    encoding="utf-8",
-                )
-                temporary.replace(self.config_path)
+            payload = configuration.model_dump()
+            if self.config_reader:
+                self.config_reader.write_setting("brain", payload)
         return configuration.model_copy()
