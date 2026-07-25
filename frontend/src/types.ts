@@ -1,4 +1,4 @@
-export type RunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
+export type RunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timeout' | 'interrupted'
 
 export interface Run {
   id: string
@@ -12,6 +12,9 @@ export interface Run {
   error: string | null
   created_at: string
   updated_at: string
+  started_at?: string | null
+  project_id?: string
+  forked_from_run_id?: string
 }
 
 export interface RunEvent {
@@ -128,6 +131,123 @@ export interface AgentResult {
   duration_ms: number | null
 }
 
+
+// ==================== 执行图节点类型 ====================
+
+/** 节点状态：PENDING → RUNNING → SUCCEEDED/FAILED/CANCELLED/INTERRUPTED/TIMEOUT */
+export type NodeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timeout' | 'interrupted'
+
+/** 节点类型：ORCHESTRATOR=主脑编排, AGENT=执行Agent */
+export type NodeType = 'orchestrator' | 'agent'
+
+/** 工具调用状态 */
+export type ToolCallStatus = 'pending' | 'running' | 'completed' | 'failed'
+
+/** 错误分类 */
+export type ErrorType = 'EXCEPTION' | 'TIMEOUT' | 'USER_CANCEL' | 'UNKNOWN'
+
+/** 中间步骤类型 */
+export type StepType = 'thought' | 'action' | 'observation' | 'message'
+
+/** 错误信息 */
+export interface TaskError {
+  nodeId: string
+  type: ErrorType
+  message: string
+  stack: string | null  // 待后端补充：结构化堆栈跟踪
+}
+
+/** 单次工具调用 */
+export interface ToolCall {
+  id: string
+  toolName: string
+  input: Record<string, unknown>
+  output: string | null   // 待后端补充: tool.completed 事件数据
+  status: ToolCallStatus  // 待后端补充: tool.completed/failed 事件
+  startedAt: string
+  finishedAt: string | null
+  durationMs: number | null  // 待后端补充: 工具调用耗时
+  error: string | null
+}
+
+/** 工具调用分组（连续同名工具自动折叠） */
+export interface ToolCallGroup {
+  key: string
+  toolName: string
+  calls: ToolCall[]
+  count: number
+  collapsed: boolean
+}
+
+/** 中间推理步骤 */
+export interface IntermediateStep {
+  id: string
+  type: StepType
+  content: string
+  timestamp: string
+  sequence: number
+  action?: {
+    tool: string
+    input: Record<string, unknown>
+  }
+}
+
+/** 执行图节点（Canvas + DetailPanel 的核心数据模型） */
+export interface ExecutionNode {
+  id: string
+  type: NodeType
+  name: string                    // Agent 名称 或 "主脑编排"
+  sub: string                     // 副标题 (任务标题/目标摘要)
+  status: NodeStatus
+  parentId: string | null
+  agentId: string | null
+  taskId: string | null
+  runId: string
+  depth: number                   // 依赖深度 (用于布局)
+  startedAt: string | null
+  finishedAt: string | null
+  durationMs: number | null
+  objective: string | null        // 任务目标 (task 节点)
+  summary: string | null          // Agent 输出摘要
+  input: Record<string, unknown> | null   // 节点输入
+  output: Record<string, unknown> | null  // 节点输出
+  error: TaskError | null
+  hasError: boolean
+  hasToolCalls: boolean
+  toolCallCount: number
+  intermediateSteps: IntermediateStep[]
+  toolCallGroups: ToolCallGroup[]
+  dependsOn: string[]             // 前置节点 ID 列表
+  interruptible: boolean          // 是否允许中断
+}
+
+/** 节点依赖边 (Canvas 渲染用) */
+export interface NodeEdge {
+  from: string
+  to: string
+  label?: string
+}
+
+/** 超时状态 */
+export interface TimeoutState {
+  nodeId: string
+  startedAt: string
+  thresholdMs: number
+  elapsedMs: number
+  isTimedOut: boolean
+}
+
+/** 中断请求状态 */
+export interface PendingInterrupt {
+  id: string
+  runId: string
+  targetNodeId: string | null
+  targetAgent: string | null
+  action: 'pause' | 'inject' | 'abort'
+  instruction: string
+  createdAt: string
+  status: 'pending' | 'sent' | 'applied' | 'rejected'
+}
 
 // ==================== 记忆系统类型 ====================
 

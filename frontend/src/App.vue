@@ -1,16 +1,21 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import AgentInspector from './components/AgentInspector.vue'
+import MainCanvas from './components/MainCanvas.vue'
+import DetailPanel from './components/DetailPanel.vue'
 import AppHeader from './components/AppHeader.vue'
 import DagModal from './components/DagModal.vue'
-import StreamingChat from './components/StreamingChat.vue'
 import PromptComposer from './components/PromptComposer.vue'
 import RunSidebar from './components/RunSidebar.vue'
 import ConfigCenter from './components/config/ConfigCenter.vue'
 import ProjectDialog from './components/ProjectDialog.vue'
 import { useWorkspace } from './composables/useWorkspace'
+import { useNodeGraph } from './composables/useNodeGraph'
+import { useTaskErrors } from './composables/useTaskErrors'
+import { useTimeoutDetection } from './composables/useTimeoutDetection'
+import { useInterrupt } from './composables/useInterrupt'
+import { useRunTimeline } from './composables/useRunTimeline'
 import { api } from './api/client'
-import type { Project } from './types'
+import type { Project, NodeStatus } from './types'
 
 const workspace = useWorkspace()
 const composer = ref<InstanceType<typeof PromptComposer> | null>(null)
@@ -18,8 +23,6 @@ const showConfiguration = ref(false)
 const showProjectDialog = ref(false)
 const leftPanelOpen = ref(true)
 const rightPanelOpen = ref(true)
-
-// DAG modal
 const showDagModal = ref(false)
 
 // Project state
@@ -54,11 +57,59 @@ watch(currentProject, (p) => {
   if (p) applyProject(p)
 })
 
+// ==================== 新 composables ====================
+
+// 计算属性提供响应式依赖给 composables
+const allEvents = computed(() => {
+  const convEvents = workspace.state.conversationEvents
+  return convEvents.length ? convEvents : workspace.state.events
+})
+const activeRunId = computed(() => workspace.state.activeRun?.id ?? null)
+const activeRun = computed(() => workspace.state.activeRun)
+
+// 节点图
+const { nodes, edges, findNode } = useNodeGraph(allEvents, activeRunId)
+
+// 错误
+const { errors, errorNodeIds } = useTaskErrors(allEvents)
+
+// 超时检测
+const timeoutDetection = useTimeoutDetection(activeRun, {
+  defaultTimeoutMs: 300_000, // 5 分钟默认
+  checkIntervalMs: 2_000,
+})
+
+// 中断
+const { interruptState, pauseAll, pauseAgent, injectGuidance, abortRun, handleInterruptEvent, reset: resetInterrupt } = useInterrupt(activeRun)
+
+// 对话时间线
+const { conversationTurns, activeAgents, memoryCompactions, planTasks, planContract } = useRunTimeline(
+  computed(() => workspace.state.conversationRuns),
+  computed(() => workspace.state.conversationEvents),
+  computed(() => workspace.state.events),
+  activeRun,
+)
+
+// 同步派生状态到 workspace（兼容旧代码）
+watch([conversationTurns, activeAgents, memoryCompactions], () => {
+  workspace.state.conversationTurns = conversationTurns.value
+  workspace.state.activeAgents = activeAgents.value
+  workspace.state.memoryCompactions = memoryCompactions.value
+}, { deep: true })
+
+// 将超时节点同步到使用 useNodeGraph 的节点
+// ... timeout integration handled in MainCanvas
+
+// ==================== 事件处理 ====================
+
 const subtitle = computed(() => {
   const run = workspace.state.activeRun
   if (!run) return '描述目标，主调度器会生成任务 DAG 并调用专业 Agent。'
-  const labels = { queued: '等待执行', running: '正在执行', completed: '执行完成', failed: '执行失败', cancelled: '已取消' }
-  return labels[run.status]
+  const labels: Record<string, string> = {
+    queued: '等待执行', running: '正在执行', completed: '执行完成',
+    failed: '执行失败', cancelled: '已取消', timeout: '超时', interrupted: '已中断',
+  }
+  return labels[run.status] || run.status
 })
 
 async function submit(objective: string) {
@@ -84,10 +135,41 @@ async function configurationSaved() {
   await workspace.refreshConfiguration()
 }
 
-// Conversation-aware summary for DAG button
+// ==================== 节点交互 ====================
+
+const selectedNodeId = computed(() => workspace.state.selectedNodeId)
+const selectedNode = computed(() => {
+  if (!selectedNodeId.value) return null
+  return findNode(selectedNodeId.value) ?? null
+})
+
+function selectNode(nodeId: string) {
+  workspace.state.selectedNodeId = nodeId
+}
+function deselectNode() {
+  workspace.state.selectedNodeId = null
+}
+
+function updateFilter(status: NodeStatus | 'all') {
+  workspace.state.filterStatus = status
+}
+
+function handleInterruptNode(nodeId: string) {
+  const node = findNode(nodeId)
+  if (node?.agentId) {
+    void pauseAgent(node.agentId)
+  }
+}
+
+function handleInjectGuidance(nodeId: string, instruction: string) {
+  const node = findNode(nodeId)
+  void injectGuidance(node?.agentId ?? null, instruction)
+}
+
+// DAG 统计
 const dagStats = computed(() => {
-  const tasks = workspace.plan.value
-  const turns = workspace.state.conversationTurns
+  const tasks = planTasks.value
+  const turns = conversationTurns.value
   return `${turns.length}轮 ${tasks.length}任务`
 })
 
@@ -111,10 +193,12 @@ onMounted(async () => {
       :left-panel-open="leftPanelOpen"
       :right-panel-open="rightPanelOpen"
       :project-name="currentProject?.name"
+      :is-running="workspace.isRunning.value"
       @toggle-left="leftPanelOpen = !leftPanelOpen"
       @toggle-right="rightPanelOpen = !rightPanelOpen"
       @configure="showConfiguration = true"
       @switch-project="showProjectDialog = true"
+      @interrupt="abortRun"
     />
     <RunSidebar
       :runs="workspace.state.runs"
@@ -146,6 +230,7 @@ onMounted(async () => {
 
       <!-- Has project -->
       <template v-else>
+        <!-- Loading -->
         <div v-if="workspace.state.loading" class="loading-state">
           <span class="loading-orb" /> 正在连接本地调度器…
         </div>
@@ -160,17 +245,7 @@ onMounted(async () => {
             </div>
           </div>
 
-          <!-- 历史对话 -->
-          <StreamingChat
-            :turns="workspace.state.conversationTurns"
-            :events="workspace.state.conversationEvents"
-            :streaming="workspace.state.streamingState"
-            :active-run-id="null"
-            :is-running="false"
-            @fork="forkRun"
-            @show-dag="showDagModal = true"
-          />
-
+          <!-- 欢迎区不显示画布，直接显示提示 -->
           <section class="welcome-panel" style="min-height:120px">
             <div class="suggestion-grid">
               <button type="button" @click="submit('分析当前项目，并制定前后端下一阶段的实现计划')">分析项目并制定计划</button>
@@ -179,21 +254,36 @@ onMounted(async () => {
           </section>
         </template>
 
-        <!-- 有活跃运行：流式对话 -->
+        <!-- 有活跃运行：三列布局 -->
         <template v-else>
+          <div class="workspace-content">
+            <!-- 中间：画布 -->
+            <MainCanvas
+              :nodes="nodes"
+              :edges="edges"
+              :selected-node-id="selectedNodeId"
+              :filter-status="workspace.state.filterStatus"
+              :is-running="workspace.isRunning.value"
+              :active-run-objective="workspace.state.activeRun?.objective || ''"
+              :streaming-thinking="workspace.state.streamingState.thinkingText"
+              :streaming-response="workspace.state.streamingState.responseText"
+              :is-streaming="workspace.state.streamingState.isStreaming"
+              @select-node="selectNode"
+              @interrupt-node="handleInterruptNode"
+              @update-filter="updateFilter"
+              @toggle-dag-modal="showDagModal = true"
+            />
+          </div>
+
+          <!-- DAG 按钮 + 停止按钮 -->
           <div class="run-status-bar">
             <div class="run-status-left">
               <span class="eyebrow">
-                正在执行: {{ workspace.state.activeRun.objective.slice(0, 60) }}{{ workspace.state.activeRun.objective.length > 60 ? '…' : '' }}
+                {{ workspace.state.activeRun.objective.slice(0, 60) }}{{ workspace.state.activeRun.objective.length > 60 ? '…' : '' }}
               </span>
             </div>
             <div class="run-status-right">
-              <button
-                type="button"
-                class="dag-trigger-btn"
-                @click="showDagModal = true"
-                title="查看完整任务流程图"
-              >
+              <button type="button" class="dag-trigger-btn" @click="showDagModal = true" title="全屏 DAG 视图">
                 <span aria-hidden="true">◇</span> DAG
                 <span class="dag-trigger-badge">{{ dagStats }}</span>
               </button>
@@ -202,17 +292,6 @@ onMounted(async () => {
               </button>
             </div>
           </div>
-
-          <!-- 主对话区域 -->
-          <StreamingChat
-            :turns="workspace.state.conversationTurns"
-            :events="workspace.state.conversationEvents"
-            :streaming="workspace.state.streamingState"
-            :active-run-id="workspace.state.activeRun?.id ?? null"
-            :is-running="workspace.isRunning.value"
-            @fork="forkRun"
-            @show-dag="showDagModal = true"
-          />
         </template>
 
         <!-- 底部输入框始终存在 -->
@@ -221,7 +300,7 @@ onMounted(async () => {
           :submitting="workspace.state.submitting"
           :is-running="workspace.isRunning.value"
           :queue-items="workspace.state.taskQueue"
-          :active-agents="workspace.state.activeAgents"
+          :active-agents="activeAgents"
           :active-run-id="workspace.state.activeRun?.id ?? null"
           @submit="submit"
           @interrupt="workspace.cancelActiveRun()"
@@ -241,14 +320,14 @@ onMounted(async () => {
       </template>
     </main>
 
-    <AgentInspector
-      :agents="workspace.state.agents"
-      :events="[...workspace.state.conversationEvents, ...workspace.state.events]"
-      :deepseek-balance="workspace.state.deepseekBalance"
-      :deepseek-usage="workspace.state.deepseekUsage"
-      :balance-loading="workspace.state.balanceLoading"
-      :project-id="currentProject?.id || ''"
-      @refresh-balance="workspace.refreshDeepSeekBalance(true)"
+    <!-- 右侧详情面板 -->
+    <DetailPanel
+      v-if="selectedNode"
+      :selected-node="selectedNode"
+      :is-running="workspace.isRunning.value"
+      @close="deselectNode"
+      @interrupt-node="handleInterruptNode"
+      @inject-guidance="handleInjectGuidance"
     />
 
     <ConfigCenter
@@ -270,24 +349,32 @@ onMounted(async () => {
     <!-- DAG Modal -->
     <DagModal
       :visible="showDagModal"
-      :tasks="workspace.plan.value"
+      :tasks="planTasks"
       :events="[...workspace.state.conversationEvents, ...workspace.state.events]"
-      :contract="workspace.planContract.value"
-      :turns="workspace.state.conversationTurns"
-      :memory-compactions="workspace.state.memoryCompactions"
+      :contract="planContract"
+      :turns="conversationTurns"
+      :memory-compactions="memoryCompactions"
       @close="showDagModal = false"
     />
   </div>
 </template>
 
 <style scoped>
+/* 工作区内容（中间列 + 右侧面板） */
+.workspace-content {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  gap: 0;
+}
+
 /* Run status bar */
 .run-status-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   max-width: var(--content-width);
-  margin: 0 auto 0.5rem;
+  margin: 0 auto 0.25rem;
   width: 100%;
   flex-shrink: 0;
   overflow: hidden;

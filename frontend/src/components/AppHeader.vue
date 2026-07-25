@@ -3,13 +3,20 @@ import { ref } from 'vue'
 import type { SystemStatus } from '../types'
 import { useTheme } from '../composables/useTheme'
 
-defineProps<{
+const props = defineProps<{
   status: SystemStatus | null
   leftPanelOpen: boolean
   rightPanelOpen: boolean
   projectName?: string
+  isRunning: boolean
 }>()
-defineEmits<{ configure: []; toggleLeft: []; toggleRight: []; switchProject: [] }>()
+const emit = defineEmits<{
+  configure: []
+  toggleLeft: []
+  toggleRight: []
+  switchProject: []
+  interrupt: []
+}>()
 
 
 const theme = useTheme()
@@ -33,30 +40,41 @@ function toggleTheme() {
       type="button"
       :aria-pressed="leftPanelOpen"
       :title="leftPanelOpen ? '关闭任务侧栏' : '打开任务侧栏'"
-      @click="$emit('toggleLeft')"
+      @click="emit('toggleLeft')"
     >
       <span class="panel-icon left" aria-hidden="true" />
       <span class="sr-only">{{ leftPanelOpen ? '关闭' : '打开' }}任务侧栏</span>
     </button>
     <div class="header-spacer" />
+    <!-- 全局中断按钮 -->
+    <button
+      v-if="isRunning"
+      class="global-interrupt-btn"
+      type="button"
+      title="中断所有任务"
+      @click="emit('interrupt')"
+    >
+      <span aria-hidden="true">⏸</span>
+      中断
+    </button>
     <button
       class="panel-toggle"
       :class="{ active: rightPanelOpen }"
       type="button"
       :aria-pressed="rightPanelOpen"
-      :title="rightPanelOpen ? '关闭 Agent 状态栏' : '打开 Agent 状态栏'"
-      @click="$emit('toggleRight')"
+      :title="rightPanelOpen ? '关闭详情面板' : '打开详情面板'"
+      @click="emit('toggleRight')"
     >
       <span class="panel-icon right" aria-hidden="true" />
-      <span class="sr-only">{{ rightPanelOpen ? '关闭' : '打开' }} Agent 状态栏</span>
+      <span class="sr-only">{{ rightPanelOpen ? '关闭' : '打开' }}详情面板</span>
     </button>
     <button class="theme-toggle" type="button" :title="isDark ? '切换到浅色模式' : '切换到深色模式'" @click="toggleTheme">
       {{ isDark ? '☀' : '☽' }}
     </button>
-    <button class="header-action" type="button" @click="$emit('switchProject')">
+    <button class="header-action" type="button" @click="emit('switchProject')">
       {{ projectName || '项目管理' }}
     </button>
-    <button class="header-action" type="button" @click="$emit('configure')">配置中心</button>
+    <button class="header-action" type="button" @click="emit('configure')">配置中心</button>
     <div v-if="status" class="connection-chip" :class="{ demo: status.demo_mode }">
       <span class="status-dot" />
       {{ status.demo_mode ? '演示模式' : status.claude_route === 'cc-switch' ? 'CC Switch 已连接' : '模型已连接' }}
@@ -64,3 +82,29 @@ function toggleTheme() {
     <div class="local-chip" title="服务仅监听本机回环地址">仅本机</div>
   </header>
 </template>
+
+<style scoped>
+.global-interrupt-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(255, 69, 58, 0.14);
+  color: #ff6961;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+  margin-right: 8px;
+}
+
+.global-interrupt-btn:hover {
+  background: rgba(255, 69, 58, 0.24);
+}
+
+.global-interrupt-btn span {
+  font-size: 0.5625rem;
+}
+</style>

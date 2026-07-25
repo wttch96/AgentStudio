@@ -13,6 +13,7 @@ import type {
   SkillProfile,
   StreamingState,
   SystemStatus,
+  NodeStatus,
 } from '../types'
 
 interface WorkspaceState {
@@ -40,6 +41,10 @@ interface WorkspaceState {
   streamingState: StreamingState
   memoryCompactions: MemoryCompactionRecord[]
   activeAgents: ActiveAgent[]
+  // 新：UI 交互状态
+  selectedNodeId: string | null
+  filterStatus: NodeStatus | 'all'
+  interrupting: boolean
 }
 
 const state = reactive<WorkspaceState>({
@@ -73,6 +78,10 @@ const state = reactive<WorkspaceState>({
   },
   memoryCompactions: [],
   activeAgents: [],
+  // 新：UI 交互状态
+  selectedNodeId: null,
+  filterStatus: 'all',
+  interrupting: false,
 })
 
 let eventSource: EventSource | null = null
