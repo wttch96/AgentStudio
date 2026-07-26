@@ -64,7 +64,6 @@
       "name": "code-reviewer",
       "display_name": "Code Reviewer",
       "description": "Reviews code changes",
-      "tools": ["Read", "Write", "Bash"],
       "skills": ["lint"],
       "skill_count": 1,
       "builtin": true,
@@ -90,7 +89,6 @@
   "display_name": "Code Reviewer",
   "description": "Reviews code changes",
   "prompt": "You are a code reviewer...",
-  "tools": ["Read", "Write"],
   "skills": ["lint"],
   "skill_count": 1,
   "sub_dir": "src",
@@ -644,7 +642,8 @@ data: {"run_id":"...","sequence":42,"type":"agent_message","timestamp":"...","ag
   "name": "My Project",
   "project_name": "my-project",
   "root_dir": "/path/to/project",
-  "description": "Project description"
+  "description": "Project description",
+  "mode": "auto"
 }
 ```
 
@@ -653,6 +652,9 @@ data: {"run_id":"...","sequence":42,"type":"agent_message","timestamp":"...","ag
 
 **Response** (201): `Project`
 
+`mode` 可选值：`manual`、`editAutomatically`、`plan`、`auto`；不传时默认为
+`auto`。
+
 #### `GET /api/projects/{id}`
 
 获取项目详情。
@@ -660,6 +662,14 @@ data: {"run_id":"...","sequence":42,"type":"agent_message","timestamp":"...","ag
 **Response** (200): `Project`（不含 `updated_at` — 后端 `Project` 模型无此字段，但前端类型含此字段）
 
 **协商确认**: 后端 `Project` 模型无 `updated_at` 字段，前端类型声明了该字段。前端调用方需处理其可能为 `undefined` 的情况。
+
+#### `PUT /api/projects/{id}`
+
+更新项目名称、描述或 Project Mode。
+
+```json
+{ "mode": "plan" }
+```
 
 #### `DELETE /api/projects/{id}`
 
@@ -698,7 +708,8 @@ data: {"run_id":"...","sequence":42,"type":"agent_message","timestamp":"...","ag
 
 **Request**: 部分字段 JSON，支持 `role`、`sub_dir`、`system_prompt`、
 `capabilities`、`limitations`、`preferred_tasks`、`forbidden_tasks`、
-`tools`、`skills`、输入/输出契约、`priority` 和 `max_iterations`。
+`skills`、输入/输出契约、`priority` 和 `max_iterations`。Agent 不再配置预批准
+工具；关联 Skill 后即可由执行器加载。
 
 **Response** (200): `ProjectAgent`
 

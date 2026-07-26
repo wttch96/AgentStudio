@@ -6,12 +6,11 @@ import type { AgentDetail, AgentProfile, SkillProfile, AgentTemplate } from '../
 
 const props = defineProps<{ agents: AgentProfile[]; skills: SkillProfile[]; projectId: string }>()
 const emit = defineEmits<{ saved: [] }>()
-const knownTools = ['Read', 'Glob', 'Grep', 'Write', 'Edit', 'Bash', 'Skill']
 const selectedName = ref('__new__')
 const saving = ref(false)
 const message = ref('')
 const form = reactive<AgentDetail & { id: string; sub_dir: string; display_name: string; agent_type: string }>({
-  id: '', name: '', display_name: '', description: '', tools: [], skills: [],
+  id: '', name: '', display_name: '', description: '', skills: [],
   skill_count: 0, builtin: false, prompt: '', sub_dir: '', agent_type: 'claude', model: '',
   role: 'implementation_agent', capabilities: [], limitations: [], preferred_tasks: [],
   forbidden_tasks: [], input_contract: {}, output_contract: {}, dependencies_info: [],
@@ -41,7 +40,7 @@ watch(() => props.agents, (agents) => {
 }, { immediate: true })
 
 function reset() {
-  Object.assign(form, { id: '', name: '', display_name: '', description: '', tools: [], skills: [],
+  Object.assign(form, { id: '', name: '', display_name: '', description: '', skills: [],
     skill_count: 0, builtin: false, prompt: '', sub_dir: '', agent_type: 'claude', model: '' })
   Object.assign(form, {
     role: 'implementation_agent', capabilities: [], limitations: [], preferred_tasks: [],
@@ -107,7 +106,7 @@ async function createManual() {
       agent_type: manualAgentType.value, sub_dir: manualSubDir.value, system_prompt: manualPrompt.value,
       description: manualDescription.value,
       model: manualAgentType.value === 'rag' || manualAgentType.value === 'chat' ? manualModel.value : undefined,
-      skills: manualAgentType.value === 'rag' || manualAgentType.value === 'chat' ? manualSkills.value : undefined,
+      skills: manualSkills.value,
     })
     message.value = 'Agent 已创建'; emit('saved')
     selectedName.value = agentName
@@ -128,7 +127,7 @@ async function save() {
       dependencies_info: form.dependencies_info, priority: form.priority,
       max_iterations: form.max_iterations,
     }
-    if (form.agent_type === 'claude') { payload.tools = form.tools; payload.sub_dir = form.sub_dir }
+    if (form.agent_type === 'claude') { payload.sub_dir = form.sub_dir }
     if (form.agent_type === 'rag' || form.agent_type === 'chat') { payload.model = form.model }
     await api.updateProjectAgent(props.projectId, form.id, payload)
     message.value = 'Agent 配置已保存'; emit('saved')
@@ -232,16 +231,6 @@ watch(() => props.projectId, (pid) => { if (pid && selectedName.value && selecte
                 <ElOption value="deepseek-v4-flash" label="deepseek-v4-flash" />
               </ElSelect>
             </div>
-            <div v-if="skills.length" class="mb-3">
-              <label class="form-label">关联 Skill</label>
-              <div class="d-flex flex-wrap gap-2">
-                <ElCheckbox v-for="skill in skills" :key="skill.name" size="small"
-                  :model-value="manualSkills.includes(skill.name)"
-                  @change="manualToggleSkill(skill.name)" :title="skill.description">
-                  {{ skill.name }}
-                </ElCheckbox>
-              </div>
-            </div>
           </template>
 
           <!-- Claude Agent specific -->
@@ -261,17 +250,18 @@ watch(() => props.projectId, (pid) => { if (pid && selectedName.value && selecte
                 <ElOption value="deepseek-v4-flash" label="deepseek-v4-flash" />
               </ElSelect>
             </div>
-            <div v-if="skills.length" class="mb-3">
-              <label class="form-label">关联 Skill</label>
-              <div class="d-flex flex-wrap gap-2">
-                <ElCheckbox v-for="skill in skills" :key="skill.name" size="small"
-                  :model-value="manualSkills.includes(skill.name)"
-                  @change="manualToggleSkill(skill.name)" :title="skill.description">
-                  {{ skill.name }}
-                </ElCheckbox>
-              </div>
-            </div>
           </template>
+
+          <div v-if="skills.length" class="mb-3">
+            <label class="form-label">关联 Skill</label>
+            <div class="d-flex flex-wrap gap-2">
+              <ElCheckbox v-for="skill in skills" :key="skill.name" size="small"
+                :model-value="manualSkills.includes(skill.name)"
+                @change="manualToggleSkill(skill.name)" :title="skill.description">
+                {{ skill.name }}
+              </ElCheckbox>
+            </div>
+          </div>
 
           <div class="mb-3">
             <label class="form-label">系统提示词 <span class="text-secondary">(可选)</span></label>
@@ -340,14 +330,6 @@ watch(() => props.projectId, (pid) => { if (pid && selectedName.value && selecte
           <div class="mb-3">
             <label class="form-label">工作子目录</label>
             <ElInput v-model="form.sub_dir" size="small" placeholder="例如 frontend / backend" />
-          </div>
-          <div class="mb-3">
-            <label class="form-label">预批准工具</label>
-            <div class="d-flex flex-wrap gap-2">
-              <ElCheckbox v-for="tool in knownTools" :key="tool" size="small" :model-value="form.tools.includes(tool)" @change="toggle(form.tools, tool)">
-                {{ tool }}
-              </ElCheckbox>
-            </div>
           </div>
         </template>
 

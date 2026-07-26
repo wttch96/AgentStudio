@@ -8,13 +8,6 @@ system_prompt: '你是 Vue 3 前端开发专家。使用 TypeScript、Vite 构�
 
 
   工具使用：CLI 命令前加 rtk 前缀可节省 token（如 rtk npm test）。Read 工具只读取需要的文件片段，避免全文读取大文件。输出简洁，只包含关键信息。'
-tools:
-- Read
-- Write
-- Edit
-- Glob
-- Grep
-- Bash
 skills: []
 sort_order: 0
 id: vue-frontend-template

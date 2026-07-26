@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import threading
+import time
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -25,6 +27,8 @@ from app.agents.registry import AgentRegistry
 from app.config import Settings
 from app.domain.models import AgentResult, DagTask
 from app.events.publisher import EventPublisher
+
+logger = logging.getLogger(__name__)
 
 
 class ClaudeAgentExecutor:
@@ -70,23 +74,56 @@ class ClaudeAgentExecutor:
         project_id: str | None = None,
         interrupt_router: Any = None,
     ) -> AgentResult:
-        if cancel_event.is_set():
-            return self._cancelled(task)
-        if not self.settings.claude_configured:
-            return self._execute_demo(run_id, task, cancel_event)
-        return asyncio.run(
-            self._execute_live(
-                run_id,
-                task,
-                dependency_results,
-                cancel_event,
-                Path(workspace_root),
-                max_turns or self.settings.agent_max_turns,
-                timeout_seconds or self.settings.agent_timeout_seconds,
-                project_id or "",
-                interrupt_router=interrupt_router,
-            )
+        started_at = time.perf_counter()
+        logger.info(
+            "agent.started run_id=%s task_id=%s agent=%s project_id=%s "
+            "dependencies=%s workspace=%s",
+            run_id,
+            task.id,
+            task.agent,
+            project_id or "-",
+            len(dependency_results),
+            workspace_root,
         )
+        if cancel_event.is_set():
+            result = self._cancelled(task)
+        elif not self.settings.claude_configured:
+            result = self._execute_demo(run_id, task, cancel_event)
+        else:
+            try:
+                result = asyncio.run(
+                    self._execute_live(
+                        run_id,
+                        task,
+                        dependency_results,
+                        cancel_event,
+                        Path(workspace_root),
+                        max_turns or self.settings.agent_max_turns,
+                        timeout_seconds or self.settings.agent_timeout_seconds,
+                        project_id or "",
+                        interrupt_router=interrupt_router,
+                    )
+                )
+            except Exception:
+                logger.exception(
+                    "agent.crashed run_id=%s task_id=%s agent=%s",
+                    run_id,
+                    task.id,
+                    task.agent,
+                )
+                raise
+        logger.info(
+            "agent.finished run_id=%s task_id=%s agent=%s status=%s "
+            "duration_ms=%.1f changed_files=%s error=%s",
+            run_id,
+            task.id,
+            task.agent,
+            result.status,
+            (time.perf_counter() - started_at) * 1000,
+            len(result.changed_files),
+            result.error or "-",
+        )
+        return result
 
     async def _execute_live(
         self,
@@ -134,9 +171,7 @@ class ClaudeAgentExecutor:
             model=self.settings.claude_model,
             system_prompt=system_prompt,
             cwd=str(workspace_root),
-            # Skill 由 SDK 的 skills 选项按名称启用；不再依赖已弃用的裸
-            # `allowed_tools=["Skill"]` 行为。其余工具仍遵循 Agent Markdown。
-            allowed_tools=[tool for tool in profile.tools if tool != "Skill"],
+            permission_mode="auto",
             # Project skills are YAML under .workspace/<project>/skills and are
             # injected above. SDK-native .claude skills with the same names may
             # still be loaded when available.
@@ -161,7 +196,11 @@ class ClaudeAgentExecutor:
         self.events.emit(
             run_id, "agent.prompt",
             agent_id=task.agent, task_id=task.id,
-            payload={"prompt_chars": prompt_chars, "system_prompt_chars": len(system_prompt)},
+            payload={
+                "prompt_chars": prompt_chars,
+                "system_prompt_chars": len(system_prompt),
+                "sdk_permission_mode": "auto",
+            },
         )
         for attempt in range(self._MAX_TRANSIENT_RETRIES + 1):
             result_error = None
@@ -248,6 +287,16 @@ class ClaudeAgentExecutor:
                     "api_error_status": result_api_status,
                     "resume_session": True,
                 },
+            )
+            logger.warning(
+                "agent.retrying run_id=%s task_id=%s agent=%s attempt=%s "
+                "api_status=%s reason=%s",
+                run_id,
+                task.id,
+                task.agent,
+                attempt + 1,
+                result_api_status or "-",
+                result_error,
             )
             await asyncio.sleep(0.5)
 

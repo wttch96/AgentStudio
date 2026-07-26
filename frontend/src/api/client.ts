@@ -165,8 +165,10 @@ export const api = {
     return request<import('../types').KnowledgeStats>('/knowledge-stats' + p)
   },
   projects: () => request<{ items: import("../types").Project[] }>("/projects"),
-  createProject: (name: string, root_dir: string, description?: string, project_name?: string) =>
-    request<import("../types").Project>("/projects", { method: "POST", body: JSON.stringify({ name, root_dir, description, project_name }) }),
+  createProject: (name: string, root_dir: string, description?: string, project_name?: string, mode?: import("../types").ProjectMode) =>
+    request<import("../types").Project>("/projects", { method: "POST", body: JSON.stringify({ name, root_dir, description, project_name, mode }) }),
+  updateProject: (id: string, updates: { name?: string; description?: string; mode?: import("../types").ProjectMode }) =>
+    request<import("../types").Project>("/projects/" + id, { method: "PUT", body: JSON.stringify(updates) }),
   deleteProject: (id: string) =>
     fetch(API_BASE + "/projects/" + id, { method: "DELETE" }).then(r => { if (!r.ok) throw new Error("delete failed") }),
   setCurrentProject: (projectId: string) =>
@@ -175,7 +177,7 @@ export const api = {
     request<{ project_id: string }>("/projects/current"),
   projectAgents: (projectId: string) =>
     request<{ items: import("../types").ProjectAgent[] }>("/projects/" + projectId + "/agents"),
-  addProjectAgent: (projectId: string, params: { template_id?: string; name?: string; display_name?: string; agent_type?: string; sub_dir?: string; system_prompt?: string; description?: string; tools?: string[]; skills?: string[]; model?: string }) =>
+  addProjectAgent: (projectId: string, params: { template_id?: string; name?: string; display_name?: string; agent_type?: string; sub_dir?: string; system_prompt?: string; description?: string; skills?: string[]; model?: string }) =>
     request<import("../types").ProjectAgent>("/projects/" + projectId + "/agents", { method: "POST", body: JSON.stringify(params) }),
   updateProjectAgent: (projectId: string, agentId: string, updates: Record<string, unknown>) =>
     request<import("../types").ProjectAgent>("/projects/" + projectId + "/agents/" + agentId, { method: "PUT", body: JSON.stringify(updates) }),

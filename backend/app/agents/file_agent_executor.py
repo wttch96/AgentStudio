@@ -36,7 +36,7 @@ def _build_file_tools(base_dir: Path) -> list:
 class FileAgentExecutor:
     """纯文件操作 Agent —— FileManagementToolkit + DeepSeek 推理。
 
-    不由 AgentProfile.tools 驱动，直接使用 FileManagementToolkit
+    直接使用 FileManagementToolkit，不依赖 Agent 配置白名单
     提供的 7 个标准文件工具。在 DAG 中作为 agent_type='file-ops' 调度。
     """
 

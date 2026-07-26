@@ -24,7 +24,6 @@ def _make_profile(name: str, agent_type: str = "claude",
                   limitations: list[str] | None = None,
                   preferred_tasks: list[str] | None = None,
                   forbidden_tasks: list[str] | None = None,
-                  tools: list[str] | None = None,
                   priority: int = 0) -> AgentProfile:
     return AgentProfile(
         name=name, agent_type=agent_type,
@@ -32,7 +31,6 @@ def _make_profile(name: str, agent_type: str = "claude",
         limitations=limitations or [],
         preferred_tasks=preferred_tasks or [],
         forbidden_tasks=forbidden_tasks or [],
-        tools=tools or ["Read", "Write", "Bash"],
         priority=priority,
     )
 

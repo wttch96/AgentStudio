@@ -3,7 +3,7 @@
 名称只允许安全的短横线标识符，避免页面输入被解释成任意文件路径。
 """
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator
 
 
 SAFE_NAME_PATTERN = r"^[a-z][a-z0-9-]{1,63}$"
@@ -11,22 +11,15 @@ SAFE_NAME_PATTERN = r"^[a-z][a-z0-9-]{1,63}$"
 
 class AgentUpdate(BaseModel):
     description: str = Field(min_length=1, max_length=500)
-    tools: list[str] = Field(default_factory=list, max_length=30)
     skills: list[str] = Field(default_factory=list, max_length=30)
     prompt: str = Field(min_length=10, max_length=30_000)
 
-    @field_validator("tools", "skills")
+    @field_validator("skills")
     @classmethod
     def unique_items(cls, value: list[str]) -> list[str]:
         if len(value) != len(set(value)):
             raise ValueError("列表中不能包含重复项")
         return value
-
-    @model_validator(mode="after")
-    def skill_tool_is_required(self) -> "AgentUpdate":
-        if self.skills and "Skill" not in self.tools:
-            raise ValueError("关联 Skill 时必须保留 Skill 工具")
-        return self
 
 
 class SkillCreate(BaseModel):

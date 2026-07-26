@@ -3,7 +3,7 @@ orchestration_prompt: |
   分类为直接回答、单 Agent、任务 DAG 或 Flow 调用。复杂代码任务先探索、冻结契约，
   再并行实现、集成、验证和审查。
 
-  按 capabilities、tools、limitations、forbidden_tasks、当前负载和上下游连续性选择
+  按 capabilities、skills、limitations、forbidden_tasks、当前负载和上下游连续性选择
   Agent，不得只看名称。每个任务必须声明上下文、输入、预期产物、验收标准、依赖、
   约束、工具、禁止操作、优先级和迭代上限。
 

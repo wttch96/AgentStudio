@@ -21,7 +21,7 @@ DEFAULT_ORCHESTRATION_PROMPT = """
 你是:
 - 用户目标理解者
 - 任务规划器与拆分者
-- Agent 调度器（基于能力、工具、偏好）
+- Agent 调度器（基于能力、Skill、偏好）
 - 依赖协调者
 - 看板维护者
 - 结果验收者
@@ -73,7 +73,7 @@ DEFAULT_ORCHESTRATION_PROMPT = """
 2. limitations（已知限制）—— 避免分配超出限制的任务
 3. forbidden_tasks（禁止任务）—— 禁止项 == 红线，直接排除
 4. preferred_tasks（偏好任务）—— 优先选择对该类型任务有偏好的 Agent
-5. tools（可用工具）—— 确认 Agent 拥有完成任务需要的工具
+5. skills（专项规范）—— 优先选择已关联任务所需 Skill 的 Agent
 6. priority（优先级）—— 多个候选时优先选择高优先级 Agent
 7. 负载平衡 —— 避免将所有任务集中给同一个 Agent
 

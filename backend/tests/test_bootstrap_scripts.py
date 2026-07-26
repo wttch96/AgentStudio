@@ -103,6 +103,15 @@ def test_stop_script_removes_stale_pid_file(tmp_path: Path):
     assert not started_file.exists()
 
 
+def test_start_script_follows_and_rotates_backend_log_by_default():
+    script = (REPOSITORY / "scripts" / "start-local.sh").read_text(encoding="utf-8")
+
+    assert 'BACKEND_LOG_FOLLOW="${BACKEND_LOG_FOLLOW:-1}"' in script
+    assert 'tail -n "${BACKEND_LOG_LINES}" -F "${RUN_DIR}/backend.log"' in script
+    assert 'rotate_log "${RUN_DIR}/backend.log"' in script
+    assert 'kill "${LOG_TAIL_PID}"' in script
+
+
 def test_stop_script_stops_matching_backend_process(tmp_path: Path):
     scripts_dir = tmp_path / "scripts"
     run_dir = tmp_path / ".run"

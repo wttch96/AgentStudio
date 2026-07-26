@@ -61,6 +61,69 @@ def test_only_expected_execution_agents_are_registered(client):
     assert all("capabilities" in agent and "priority" in agent for agent in agents)
 
 
+def test_project_mode_can_be_updated_and_is_validated(client):
+    updated = client.put(
+        "/api/projects/test-project",
+        json={"mode": "plan"},
+    )
+    assert updated.status_code == 200
+    assert updated.json["mode"] == "plan"
+
+    detail = client.get("/api/projects/test-project")
+    assert detail.status_code == 200
+    assert detail.json["mode"] == "plan"
+
+    invalid = client.put(
+        "/api/projects/test-project",
+        json={"mode": "unsafe"},
+    )
+    assert invalid.status_code == 400
+
+
+def test_http_requests_include_request_id_and_lifecycle_logs(client, caplog):
+    caplog.set_level("INFO", logger="app")
+
+    response = client.get("/api/projects")
+
+    assert response.status_code == 200
+    assert response.headers["X-Request-ID"]
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("http.started" in message for message in messages)
+    assert any("http.completed" in message and "status=200" in message for message in messages)
+
+
+def test_plan_project_mode_creates_plan_without_starting_agents(client):
+    updated = client.put(
+        "/api/projects/test-project",
+        json={"mode": "plan"},
+    )
+    assert updated.status_code == 200
+
+    response = client.post(
+        "/api/runs",
+        json={
+            "objective": "修改前后端并补充自动化测试",
+            "project_id": "test-project",
+        },
+    )
+    assert response.status_code == 202
+    run_id = response.json["id"]
+
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        run = client.get(f"/api/runs/{run_id}").json
+        if run["status"] in {"completed", "failed", "cancelled"}:
+            break
+        time.sleep(0.1)
+
+    assert run["status"] == "completed"
+    assert "Plan 模式" in run["final_answer"]
+    event_types = [event["type"] for event in run["events"]]
+    assert "project.mode" in event_types
+    assert "plan.created" in event_types
+    assert "agent.started" not in event_types
+
+
 def test_skill_creation_and_agent_assignment(client):
     created = client.post(
         "/api/skills",
@@ -79,10 +142,11 @@ def test_skill_creation_and_agent_assignment(client):
     agent["skills"] = ["netty-framing"]
     updated = client.put(
         "/api/projects/test-project/agents/backend-agent",
-        json={"skills": agent["skills"]},
+        json={"skills": agent["skills"], "tools": ["Read", "Skill"]},
     )
     assert updated.status_code == 200
     assert updated.json["skills"] == ["netty-framing"]
+    assert "tools" not in updated.json
     skill_path = (
         client.application.extensions["services"].settings.workspace_root
         / ".workspace" / "test-project" / "skills" / "netty-framing.yaml"

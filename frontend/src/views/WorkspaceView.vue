@@ -30,9 +30,15 @@ const projects = computed(() => workspace.state.projects)
 const currentProject = computed(() =>
   workspace.state.projectId
     ? workspace.state.projects.find(p => p.id === workspace.state.projectId)
-      || { id: workspace.state.projectId, name: workspace.state.projectName || workspace.state.projectId.slice(0, 8), root_dir: '', description: '' } as Project
+      || { id: workspace.state.projectId, name: workspace.state.projectName || workspace.state.projectId.slice(0, 8), root_dir: '', description: '', mode: 'auto' } as Project
     : null
 )
+const currentModeLabel = computed(() => ({
+  manual: 'Manual',
+  editAutomatically: 'Edit Automatically',
+  plan: 'Plan',
+  auto: 'Auto',
+}[currentProject.value?.mode || 'auto']))
 
 const allEvents = computed(() => {
   const convEvents = workspace.state.conversationEvents
@@ -204,7 +210,10 @@ onMounted(async () => {
         <!-- No active run: welcome -->
         <div v-if="!workspace.state.activeRun && !workspace.state.loading" class="welcome-area">
           <div class="p-4">
-            <ElTag type="info" class="mb-2">{{ currentProject?.name }}</ElTag>
+            <div class="d-flex gap-2 mb-2">
+              <ElTag type="info">{{ currentProject?.name }}</ElTag>
+              <ElTag type="primary">{{ currentModeLabel }}</ElTag>
+            </div>
             <h1 style="font-size:1.5rem;font-weight:600">今天想让 Agent 团队完成什么？</h1>
             <p class="text-secondary">{{ subtitle }}</p>
             <div class="d-flex gap-2 mt-3">
@@ -310,6 +319,7 @@ onMounted(async () => {
       v-if="showProjectDialog"
       :projects="projects"
       @created="onProjectCreated"
+      @updated="workspace.loadProjects()"
       @close="showProjectDialog = false; workspace.refreshConfiguration()"
     />
   </ElContainer>

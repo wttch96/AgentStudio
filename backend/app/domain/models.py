@@ -5,12 +5,15 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Literal
+from typing import Any, Literal, TypeAlias
 
 from pydantic import BaseModel, Field, model_validator
 
 
 
+
+
+ProjectMode: TypeAlias = Literal["manual", "editAutomatically", "plan", "auto"]
 
 
 class DagTask(BaseModel):
@@ -272,6 +275,7 @@ class Project(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     root_dir: str = Field(min_length=1, max_length=4096)
     description: str = ""
+    mode: ProjectMode = "auto"
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
@@ -286,7 +290,6 @@ class ProjectAgent(BaseModel):
     agent_type: Literal["brain", "rag", "claude", "file-ops", "chat", "todo", "blackboard", "doc-diff"] = "claude"
     sub_dir: str = ""
     system_prompt: str = Field(min_length=10, max_length=30000)
-    tools: list[str] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
     model: str = ""
     is_required: bool = False
@@ -312,7 +315,6 @@ class AgentTemplate(BaseModel):
     agent_type: str = "claude"
     default_sub_dir: str = ""
     default_prompt: str = Field(min_length=10, max_length=30000)
-    default_tools: list[str] = Field(default_factory=list)
     default_skills: list[str] = Field(default_factory=list)
     is_builtin: bool = True
 
@@ -326,6 +328,7 @@ class CreateProjectRequest(BaseModel):
     )
     root_dir: str = Field(min_length=1, max_length=4096)
     description: str = ""
+    mode: ProjectMode = "auto"
 
 
 # ==================== Blackboard 黑板系统模型 ====================

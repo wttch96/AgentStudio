@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 import re
 import shutil
@@ -10,24 +11,13 @@ from pathlib import Path
 from typing import Any
 
 from app.storage.sqlite_store import SQLiteStore
-from app.domain.models import ProjectAgent
+from app.domain.models import Project, ProjectAgent
+
+logger = logging.getLogger(__name__)
 
 
 # 内置 Agent 模板
 BUILTIN_TEMPLATES = [
-    {
-        "id": "brain-template",
-        "name": "brain",
-        "display_name": "DeepSeek 主脑",
-        "description": "任务规划、契约设计、DAG生成、最终验收",
-        "category": "other",
-        "agent_type": "brain",
-        "default_sub_dir": "",
-        "default_prompt": "你是项目主脑，负责分析用户目标、制定任务计划、生成 DAG 并验收结果。",
-        "default_tools": [],
-        "default_skills": [],
-        "is_builtin": 1,
-    },
     {
         "id": "rag-template",
         "name": "rag",
@@ -37,7 +27,6 @@ BUILTIN_TEMPLATES = [
         "agent_type": "rag",
         "default_sub_dir": "",
         "default_prompt": "你是知识库管理 Agent，负责检索知识库、录入新知识和建立知识关联。使用 search_knowledge 检索、add_knowledge 录入、get_knowledge 查看详情、list_knowledge 浏览条目。优先从知识库检索相关信息，综合后回答。",
-        "default_tools": [],
         "default_skills": [],
         "is_builtin": 1,
     },
@@ -50,7 +39,6 @@ BUILTIN_TEMPLATES = [
         "agent_type": "claude",
         "default_sub_dir": "frontend",
         "default_prompt": "你是 Vue 3 前端开发专家。使用 TypeScript、Vite 构建工具，遵循 Vue 3 Composition API 规范。负责页面组件、路由、状态管理和前端测试。\n\n工具使用：CLI 命令前加 rtk 前缀可节省 token（如 rtk npm test）。Read 工具只读取需要的文件片段，避免全文读取大文件。输出简洁，只包含关键信息。",
-        "default_tools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
         "default_skills": [],
         "is_builtin": 1,
     },
@@ -63,7 +51,6 @@ BUILTIN_TEMPLATES = [
         "agent_type": "claude",
         "default_sub_dir": "frontend",
         "default_prompt": "你是 React 前端开发专家。使用 TypeScript、React Hooks、React Router。负责组件开发、状态管理、路由配置和前端测试。\n\n工具使用：CLI 命令前加 rtk 前缀可节省 token。Read 只读取需要的文件片段。输出简洁。",
-        "default_tools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
         "default_skills": [],
         "is_builtin": 1,
     },
@@ -76,7 +63,6 @@ BUILTIN_TEMPLATES = [
         "agent_type": "claude",
         "default_sub_dir": "backend",
         "default_prompt": "你是 Python Flask 后端开发专家。负责 REST API 设计、数据库 ORM、业务逻辑、认证授权和后端测试。遵循 Flask 最佳实践。\n\n工具使用：CLI 命令前加 rtk 前缀（如 rtk pytest）。Read 只读取需要的文件片段。输出简洁。",
-        "default_tools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
         "default_skills": [],
         "is_builtin": 1,
     },
@@ -89,7 +75,6 @@ BUILTIN_TEMPLATES = [
         "agent_type": "claude",
         "default_sub_dir": "backend",
         "default_prompt": "你是 Java SpringBoot 后端开发专家。负责 REST API、JPA 持久化、Spring Security 认证、业务逻辑和 JUnit 测试。遵循 Spring 最佳实践。",
-        "default_tools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
         "default_skills": [],
         "is_builtin": 1,
     },
@@ -102,7 +87,6 @@ BUILTIN_TEMPLATES = [
         "agent_type": "claude",
         "default_sub_dir": "netty",
         "default_prompt": "你是 Java Netty 数据传输专家。负责 TCP/UDP 连接管理、数据接收、粘包拆包处理、协议编解码、ByteBuf 管理和传输层测试。",
-        "default_tools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
         "default_skills": [],
         "is_builtin": 1,
     },
@@ -115,7 +99,6 @@ BUILTIN_TEMPLATES = [
         "agent_type": "claude",
         "default_sub_dir": "",
         "default_prompt": "你是专业代码审查专家。你的职责是审查代码质量，不做实现开发。\n\n审查要点：\n1. 代码结构和组织\n2. 错误处理和边界条件\n3. 性能问题和优化建议\n4. 安全漏洞（SQL注入、XSS等）\n5. 命名规范和可读性\n6. 测试覆盖和可测试性\n7. 依赖管理和版本兼容性\n\n输出格式：每个问题标注严重程度（严重/重要/建议）、位置、说明和修复建议。严格只读，不修改任何文件。",
-        "default_tools": ["Read", "Glob", "Grep"],
         "default_skills": [],
         "is_builtin": 1,
     },
@@ -128,7 +111,6 @@ BUILTIN_TEMPLATES = [
         "agent_type": "claude",
         "default_sub_dir": "",
         "default_prompt": "你是文档和接口对比专家。对比文档与实现差异，不做代码修改。\n\n对比场景：\n1. API 文档 vs 实际实现\n2. 前后端接口定义差异\n3. 配置文件差异和环境漂移\n4. 多版本分支间的变更审查\n5. README vs 实际代码行为\n6. OpenAPI/Swagger 规范一致性\n\n输出格式：每个差异标注类别、文件位置、当前状态、期望状态和影响范围。严格只读。",
-        "default_tools": ["Read", "Glob", "Grep", "Bash"],
         "default_skills": [],
         "is_builtin": 1,
     },
@@ -141,7 +123,6 @@ BUILTIN_TEMPLATES = [
         "agent_type": "claude",
         "default_sub_dir": "",
         "default_prompt": "你是 API 和接口设计专家。设计清晰一致的 RESTful API 和数据模型。\n\n设计原则：\n1. RESTful 资源命名和路由设计\n2. 请求/响应数据模型定义\n3. 错误码和错误响应规范\n4. 认证和授权接口设计\n5. 分页、过滤、排序标准\n6. 版本管理策略\n7. OpenAPI/Swagger 规范输出\n\n输出格式：每个接口包含方法、路径、请求体、响应体、错误码和示例。需要写代码时先输出设计方案等待确认。",
-        "default_tools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
         "default_skills": [],
         "is_builtin": 1,
     },
@@ -172,7 +153,6 @@ class ProjectManager:
                     "agent_type": tmpl["agent_type"],
                     "sub_dir": tmpl.get("default_sub_dir", ""),
                     "system_prompt": tmpl["default_prompt"],
-                    "tools": tmpl["default_tools"],
                     "skills": tmpl.get("default_skills", []),
                     "sort_order": tmpl.get("sort_order", 0),
                 }
@@ -190,6 +170,7 @@ class ProjectManager:
         root_dir: str,
         description: str = "",
         project_name: str | None = None,
+        mode: str = "auto",
     ) -> dict:
         root = Path(root_dir).resolve()
         if not root.is_dir():
@@ -199,7 +180,13 @@ class ProjectManager:
         project_dir = self.config_reader.workspace_root / ".workspace" / project_id
         if (project_dir / "project.yaml").exists():
             raise ValueError(f"项目标识已存在: {project_id}")
-        data = {"id": project_id, "name": name, "description": description, "root_dir": str(root)}
+        data = {
+            "id": project_id,
+            "name": name,
+            "description": description,
+            "root_dir": str(root),
+            "mode": mode,
+        }
         if self.config_reader:
             project_cfg = self.config_reader.for_project(project_id)
             project_cfg.save_project(data)
@@ -245,6 +232,12 @@ class ProjectManager:
                     target = project_cfg.flows_dir / source.name
                     if not target.exists():
                         shutil.copy2(source, target)
+        logger.info(
+            "project.created project_id=%s mode=%s root=%s",
+            project_id,
+            mode,
+            root,
+        )
         return data
 
     @staticmethod
@@ -256,29 +249,58 @@ class ProjectManager:
 
     def delete_project(self, project_id: str) -> bool:
         if self.config_reader:
-            return self.config_reader.delete_project(project_id)
+            deleted = self.config_reader.delete_project(project_id)
+            logger.info("project.deleted project_id=%s deleted=%s", project_id, deleted)
+            return deleted
         return False
 
     def list_projects(self) -> list[dict]:
         if self.config_reader:
-            return self.config_reader.list_projects()
+            projects = self.config_reader.list_projects()
+            for project in projects:
+                project.setdefault("mode", "auto")
+            return projects
         return []
 
     def get_project(self, project_id: str) -> dict | None:
         if self.config_reader:
             try:
                 project_cfg = self.config_reader.for_project(project_id)
-                return project_cfg.load_project()
+                project = project_cfg.load_project()
+                project.setdefault("mode", "auto")
+                return project
             except Exception:
                 pass
         return None
+
+    def update_project(self, project_id: str, updates: dict) -> dict | None:
+        if not self.config_reader:
+            return None
+        project_cfg = self.config_reader.for_project(project_id)
+        try:
+            existing = project_cfg.load_project()
+        except (FileNotFoundError, ValueError):
+            return None
+        for key in ("name", "description", "mode"):
+            if key in updates and updates[key] is not None:
+                existing[key] = updates[key]
+        validated = Project.model_validate(existing)
+        data = validated.model_dump(exclude={"created_at"})
+        project_cfg.save_project(data)
+        logger.info(
+            "project.updated project_id=%s fields=%s mode=%s",
+            project_id,
+            ",".join(sorted(set(updates) & {"name", "description", "mode"})) or "-",
+            data.get("mode", "auto"),
+        )
+        return data
 
     # ── Agent CRUD (file-backed) ──
 
     def add_agent(self, project_id: str, template_id: str = "", sub_dir: str = "",
                   custom_prompt: str = "", display_name: str = "",
                   name: str = "", agent_type: str = "",
-                  tools: list | None = None, skills: list | None = None,
+                  skills: list | None = None,
                   description: str = "", model: str = "",
                   role: str = "implementation_agent",
                   capabilities: list | None = None,
@@ -318,7 +340,6 @@ class ProjectManager:
                 "agent_type": tmpl.get("agent_type", "claude"),
                 "sub_dir": sub_dir or tmpl.get("sub_dir", ""),
                 "system_prompt": custom_prompt or tmpl.get("system_prompt", ""),
-                "tools": tools if tools is not None else tmpl.get("tools", []),
                 "skills": skills if skills is not None else tmpl.get("skills", []),
                 "sort_order": 0,
                 "model": model or tmpl.get("model", ""),
@@ -348,7 +369,6 @@ class ProjectManager:
                 "system_prompt": custom_prompt or (
                     f"你是 {display_name or name}，请严格按任务边界执行，并报告产物、风险和验证结果。"
                 ),
-                "tools": tools or [],
                 "skills": skills or [],
                 "sort_order": 0,
                 "model": model or "",
@@ -368,6 +388,14 @@ class ProjectManager:
             exclude_none=True,
         )
         project_cfg.save_agent(data["name"], data)
+        logger.info(
+            "agent_config.created project_id=%s agent=%s type=%s template=%s skills=%s",
+            project_id,
+            data["name"],
+            data["agent_type"],
+            template_id or "-",
+            ",".join(data["skills"]) or "-",
+        )
         return data
 
     def update_agent(self, project_id: str, agent_id: str, updates: dict) -> dict | None:
@@ -379,7 +407,7 @@ class ProjectManager:
         except Exception:
             return None
         allowed = {
-            "display_name", "description", "role", "system_prompt", "tools",
+            "display_name", "description", "role", "system_prompt",
             "skills", "sub_dir", "sort_order", "model", "capabilities",
             "limitations", "preferred_tasks", "forbidden_tasks",
             "input_contract", "output_contract", "dependencies_info",
@@ -394,6 +422,13 @@ class ProjectManager:
             exclude_none=True,
         )
         project_cfg.save_agent(agent_id, existing)
+        logger.info(
+            "agent_config.updated project_id=%s agent=%s fields=%s skills=%s",
+            project_id,
+            agent_id,
+            ",".join(sorted(set(updates) & allowed)) or "-",
+            ",".join(existing["skills"]) or "-",
+        )
         return existing
 
     def delete_agent(self, project_id: str, agent_id: str) -> bool:
@@ -402,8 +437,19 @@ class ProjectManager:
         project_cfg = self.config_reader.for_project(project_id)
         try:
             project_cfg.delete_agent(agent_id)
+            logger.info(
+                "agent_config.deleted project_id=%s agent=%s",
+                project_id,
+                agent_id,
+            )
             return True
         except Exception:
+            logger.warning(
+                "agent_config.delete_failed project_id=%s agent=%s",
+                project_id,
+                agent_id,
+                exc_info=True,
+            )
             return False
 
     def list_agents(self, project_id: str) -> list[dict]:

@@ -100,11 +100,7 @@ class PlanValidator:
         if self._registry and self._project_id:
             self._check_forbidden_tasks(plan, result)
 
-        # 7. 工具检查
-        if self._registry and self._project_id:
-            self._check_required_tools(plan, result)
-
-        # 8. 计算 ready/backlog
+        # 7. 计算 ready/backlog
         if result.is_valid:
             ready, backlog = self._compute_status(task_by_id)
             result.ready_task_ids = ready
@@ -182,28 +178,6 @@ class PlanValidator:
                     result.errors.append(
                         f"任务 {task.id}: Agent '{task.agent}' 的禁止项 "
                         f"'{forbidden}' 与任务目标冲突"
-                    )
-                    result.is_valid = False
-
-    def _check_required_tools(
-        self, plan: ExecutionPlan, result: ValidationResult,
-    ) -> None:
-        try:
-            profiles = self._registry.load_project_agents(self._project_id)  # type: ignore[union-attr]
-        except Exception:
-            return
-
-        for task in plan.tasks:
-            if not task.allowed_tools:
-                continue
-            profile = profiles.get(task.agent)
-            if profile is None:
-                continue
-            agent_tools = {t.lower() for t in profile.tools}
-            for required in task.allowed_tools:
-                if required.lower() not in agent_tools:
-                    result.errors.append(
-                        f"任务 {task.id}: Agent '{task.agent}' 缺少必需工具 '{required}'"
                     )
                     result.is_valid = False
 

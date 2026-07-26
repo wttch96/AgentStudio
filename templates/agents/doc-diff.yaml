@@ -23,11 +23,6 @@ system_prompt: '你是文档和接口对比专家。对比文档与实现差异�
 
 
   输出格式：每个差异标注类别、文件位置、当前状态、期望状态和影响范围。严格只读。'
-tools:
-- Read
-- Glob
-- Grep
-- Bash
 skills: []
 sort_order: 0
 id: doc-diff-template

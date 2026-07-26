@@ -108,7 +108,6 @@ def get_agent(name: str):
             "description": profile.description,
             "role": profile.role,
             "prompt": profile.prompt,
-            "tools": list(profile.tools),
             "skills": list(profile.skills),
             "skill_count": len(profile.skills),
             "sub_dir": profile.sub_dir,
@@ -949,7 +948,11 @@ def create_project():
         return jsonify({"error": "项目参数无效", "details": error.errors()}), 400
     try:
         project = services().project_manager.create_project(
-            payload.name, payload.root_dir, payload.description, payload.project_name,
+            payload.name,
+            payload.root_dir,
+            payload.description,
+            payload.project_name,
+            payload.mode,
         )
         return jsonify(project), 201
     except ValueError as error:
@@ -997,6 +1000,18 @@ def get_project(project_id: str):
     return jsonify(project)
 
 
+@api.put("/projects/<project_id>")
+def update_project(project_id: str):
+    data = request.get_json(silent=True) or {}
+    try:
+        project = services().project_manager.update_project(project_id, data)
+    except (ValueError, ValidationError) as error:
+        return jsonify({"error": "项目配置无效", "details": str(error)}), 400
+    if not project:
+        return jsonify({"error": "项目不存在"}), 404
+    return jsonify(project)
+
+
 @api.delete("/projects/<project_id>")
 def delete_project(project_id: str):
     current_services = services()
@@ -1031,7 +1046,6 @@ def add_project_agent(project_id: str):
             custom_prompt=data.get("system_prompt", ""),
             display_name=data.get("display_name", ""),
             description=data.get("description", ""),
-            tools=data.get("tools"),
             skills=data.get("skills"),
             model=data.get("model"),
             role=data.get("role", "implementation_agent"),

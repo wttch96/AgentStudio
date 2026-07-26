@@ -620,7 +620,6 @@ data: {"run_id":"abc123","sequence":42,"type":"agent.completed","timestamp":"202
 | `agent_type` | TEXT | NOT NULL, CHECK(`brain`/`rag`/`claude`/`deepseek`) | 执行器类型 |
 | `sub_dir` | TEXT | DEFAULT '' | 子目录约束 |
 | `system_prompt` | TEXT | NOT NULL | 系统提示词 |
-| `tools` | TEXT | DEFAULT '[]' | JSON 工具列表 |
 | `skills` | TEXT | DEFAULT '[]' | JSON Skill 列表 |
 | `is_required` | INTEGER | DEFAULT 0 | 是否必选 |
 | `sort_order` | INTEGER | DEFAULT 0 | 排序 |
@@ -639,7 +638,6 @@ data: {"run_id":"abc123","sequence":42,"type":"agent.completed","timestamp":"202
 | `agent_type` | TEXT | DEFAULT 'claude' | |
 | `default_sub_dir` | TEXT | DEFAULT '' | |
 | `default_prompt` | TEXT | NOT NULL | |
-| `default_tools` | TEXT | DEFAULT '[]' | JSON |
 | `default_skills` | TEXT | DEFAULT '[]' | JSON |
 | `is_builtin` | INTEGER | DEFAULT 1 | 内置模板不可删除 |
 | `created_at` | TEXT | DEFAULT CURRENT_TIMESTAMP | |
@@ -765,7 +763,7 @@ UNIQUE 约束：`(source_id, target_id, relation_type)`
 
 | 模型 | 说明 | 字段 |
 |------|------|------|
-| `AgentUpdate` | Agent 配置更新校验 | description, tools(去重), skills(去重), prompt |
+| `AgentUpdate` | Agent 配置更新校验 | description, skills(去重), prompt |
 | `SkillCreate` | Skill 创建 | name(安全标识符), description, content |
 | `SkillUpdate` | Skill 更新 | description, content |
 | `WorkspaceUpdate` | 工作目录更新 | path |
@@ -798,7 +796,6 @@ UNIQUE 约束：`(source_id, target_id, relation_type)`
 
 | 模板 ID | 名称 | 类型 | 子目录 | 描述 |
 |---------|------|------|--------|------|
-| `brain-template` | brain | brain | — | DeepSeek 主脑 |
 | `rag-template` | knowledge-rag | rag | — | 知识库 RAG Agent |
 | `vue-frontend-template` | vue-frontend | claude | frontend | Vue 3 + TypeScript 前端 |
 | `react-frontend-template` | react-frontend | claude | frontend | React 前端 |
@@ -837,12 +834,12 @@ worker(state)
 
 ### 10.3 Agent 注册表
 
-`AgentRegistry` 从 `project_agents` 表加载配置，支持：
+`AgentRegistry` 从 `.workspace/<project_id>/agents/*.yaml` 加载配置，支持：
 - 按 `project_id` 加载/缓存 Agent 列表
-- 无 `project_id` 时遍历所有项目
+- 无 `project_id` 时读取当前项目
 - 只读缓存，配置变更后需调用 `invalidate()` 清除缓存
 
-`AgentProfile` 使用 `__slots__` 优化内存，工具和技能使用 `tuple` 不可变存储。
+`AgentProfile` 使用 `__slots__` 优化内存，Skill 使用 `tuple` 不可变存储。
 
 ---
 
@@ -893,8 +890,8 @@ worker(state)
 | 回环地址强制 | `Settings.from_env()` 中校验 `BACKEND_HOST` 仅允许 `127.0.0.1`、`localhost`、`::1` |
 | API Key 保密 | 任何 API 响应不返回 Key 明文，仅返回 bool 配置状态 |
 | CORS 白名单 | 仅允许前后端回环地址的跨域访问 |
-| 文件路径越界防护 | `DeepSeekAgentExecutor` 的 `_build_tools` 验证所有路径在工作空间内 |
-| 领域隔离 | Claude Agent SDK 的 `cwd` 和 `add_dirs` 约束文件访问范围 |
+| 文件路径越界防护 | File Agent 对所有路径执行工作空间边界校验 |
+| 领域隔离 | Claude Agent SDK 的 `cwd`、任务 `write_scope` 和项目 Mode 约束操作范围 |
 | 输入校验 | Pydantic `Field` 约束（min_length, max_length, pattern）+ `model_validator` 规则 |
 | SQL 注入防御 | 全部使用参数化查询（`?` 占位符） |
 | XSS 防护 | SSE 心跳使用 SSE 注释格式（`: keep-alive\n\n`）而非数据进行轮询 |
@@ -957,13 +954,11 @@ worker(state)
    - daemon 线程在 `run.py` 的 `app.run()` 上下文中运行，不适合 gunicorn/uWSGI 的多 worker 模式
    - 重启时遗留的 `queued`/`running` 状态靠 `recover_interrupted_runs()` 修复，属于尽力而为方案
 
-5. **`DeepSeekExecutor` 工具实现**：`_build_tools()` 使用闭包动态创建工具函数，其中 `Read`/`Write`/`Edit`/`Glob`/`Grep`/`Bash` 全部是手写简化版，与 Claude Agent SDK 的完整工具集能力有差距。
+5. **Graph 中的内存泄漏风险**：`GraphState.results` 使用 `operator.add` reducer 不断累积，长时间多轮运行可能消耗过多内存。当前每轮 wave 后 `compact_memory` 处理 Agent 消息压缩，但 results 数组本身未做裁剪。
 
-6. **Graph 中的内存泄漏风险**：`GraphState.results` 使用 `operator.add` reducer 不断累积，长时间多轮运行可能消耗过多内存。当前每轮 wave 后 `compact_memory` 处理 Agent 消息压缩，但 results 数组本身未做裁剪。
+6. **无 OpenAPI 文档**：40+ 端点全部以代码即文档方式维护，缺乏自动生成的 OpenAPI/Swagger 规范。前后端 API 变更时容易出现契约不同步。
 
-7. **无 OpenAPI 文档**：40+ 端点全部以代码即文档方式维护，缺乏自动生成的 OpenAPI/Swagger 规范。前后端 API 变更时容易出现契约不同步。
-
-8. **Secret 管理**：API Key 通过 `.env` 文件管理，进程内纯文本存储。建议引入更安全的密钥管理方案（如系统密钥环或加密环境变量）。
+7. **Secret 管理**：API Key 通过 `.env` 文件管理，进程内纯文本存储。建议引入更安全的密钥管理方案（如系统密钥环或加密环境变量）。
 
 9. **去重索引问题**：`interrupt_commands` 表有两个同名索引 `idx_interrupt_run`（第 135 行和第 218-219 行）。
 

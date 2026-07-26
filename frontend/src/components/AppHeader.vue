@@ -93,6 +93,7 @@ onMounted(() => {
     v-if="showProjectDialog"
     :projects="projects"
     @created="onProjectCreated"
+    @updated="workspace.loadProjects()"
     @close="onDialogClosed"
   />
 </template>

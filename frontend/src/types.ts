@@ -32,7 +32,6 @@ export interface AgentProfile {
   name: string
   display_name?: string
   description: string
-  tools: string[]
   skills: string[]
   skill_count: number
   builtin: boolean
@@ -51,6 +50,8 @@ export interface AgentProfile {
   priority?: number
   max_iterations?: number
 }
+
+export type ProjectMode = 'manual' | 'editAutomatically' | 'plan' | 'auto'
 
 export interface AgentDetail extends AgentProfile {
   prompt: string
@@ -408,6 +409,7 @@ export interface Project {
   name: string
   root_dir: string
   description: string
+  mode: ProjectMode
   created_at?: string
   updated_at?: string
 }
@@ -423,7 +425,6 @@ export interface ProjectAgent {
   agent_type: 'brain' | 'rag' | 'claude' | 'file-ops' | 'chat'
   sub_dir: string
   system_prompt: string
-  tools: string[]
   skills: string[]
   is_required: boolean
   sort_order: number
@@ -447,7 +448,6 @@ export interface AgentTemplate {
   agent_type: string
   default_sub_dir: string
   default_prompt: string
-  default_tools: string[]
   default_skills: string[]
   is_builtin: boolean
 }

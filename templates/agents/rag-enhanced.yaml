@@ -12,8 +12,6 @@ system_prompt: |
   使用 search_knowledge 检索、add_knowledge 录入、get_knowledge 查看详情、
   list_knowledge 浏览条目。优先从知识库检索相关信息，综合后回答。
 
-tools: []
-
 skills: []
 
 # ── 增强字段 ──
