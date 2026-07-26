@@ -1,0 +1,5 @@
+name: structured-result
+description: 标准 Agent 输出
+content: |
+  最终输出 JSON。status 只能是 completed、partially_completed、blocked、failed 或
+  need_review，并提供真实产物、验证结果、风险和下一步。

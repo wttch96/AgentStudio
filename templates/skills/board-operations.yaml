@@ -1,0 +1,5 @@
+name: board-operations
+description: 看板维护协议
+content: |
+  开始时标记 in_progress；缺少依赖时添加 blocker；产物写 artifact；影响下游的选择
+  写 decision；验证后进入 review。失败不得标记 completed。

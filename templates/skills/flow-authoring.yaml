@@ -1,0 +1,5 @@
+name: flow-authoring
+description: Flow YAML 编写规范
+content: |
+  条件必须声明分支；并行必须汇流；循环必须设置上限；节点声明 Agent、输入、输出、
+  超时、重试和可中断属性。保存前验证所有引用与模板变量。
