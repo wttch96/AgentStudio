@@ -1,9 +1,0 @@
-name: rtk-output-compression
-description: 使用 RTK 压缩搜索、读取、Git、构建、测试和日志输出
-content: |
-  高输出量 CLI 命令存在等价 RTK 子命令时优先使用：文件与搜索用 `rtk read/ls/tree/find/rg`，
-  Git 用 `rtk git`，前端用 `rtk npm/npx/tsc/lint/vitest`，Python 用
-  `rtk pytest/ruff/mypy`，失败聚合用 `rtk test` 或 `rtk err`。
-  保持原命令语义、参数、工作目录、验证范围和退出码。需要完整原始输出、RTK 不支持或
-  压缩妨碍排障时使用原生命令。禁止给写入、迁移、部署和未知副作用命令盲目加前缀，
-  禁止用仅透传输出的 `rtk run` 冒充压缩。最终只引用关键错误、统计和验证结论。

@@ -1,4 +1,0 @@
-max_concurrent_agents: 3
-recursion_limit: 100
-agent_max_turns: 12
-agent_timeout_seconds: 900

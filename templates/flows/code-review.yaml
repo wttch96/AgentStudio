@@ -16,7 +16,7 @@ nodes:
       列出发现的问题和改进建议。
     write_scope: []
     timeout_seconds: 300
-    max_turns: 10
+    max_turns: 20
     interruptible: true
     depends_on: []
 
@@ -30,7 +30,7 @@ nodes:
       检查：SQL注入、XSS、CSRF、敏感信息泄露、权限校验缺失、依赖漏洞。
       不要修改代码，只输出安全审查报告。
     write_scope: []
-    max_turns: 8
+    max_turns: 25
     interruptible: true
     depends_on: [analyze]
 
@@ -49,7 +49,7 @@ nodes:
       逐个修复发现的问题，完成后验证所有改动。
     write_scope: ["src/"]
     timeout_seconds: 600
-    max_turns: 15
+    max_turns: 25
     interruptible: true
     depends_on: [analyze, security]
 

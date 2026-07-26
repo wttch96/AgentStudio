@@ -1,6 +1,0 @@
-name: collaboration-protocol
-description: 多 Agent 统一协作协议
-content: |
-  执行前读取任务、依赖和看板；只处理授权范围，不猜测结果。完成时结构化返回
-  status、summary、artifacts、decisions、assumptions、risks、dependencies、
-  verification 和 next_actions。

@@ -14,7 +14,7 @@ nodes:
       {% endif %}
       输出：需要修改的文件列表、接口约定、数据模型变更。
     write_scope: []
-    max_turns: 8
+    max_turns: 15
     interruptible: true
     depends_on: []
 
@@ -28,7 +28,7 @@ nodes:
       实现 API、数据模型、业务逻辑。完成后运行已有测试确保不破坏现有功能。
     write_scope: ["backend/"]
     timeout_seconds: 600
-    max_turns: 12
+    max_turns: 20
     interruptible: true
     depends_on: [plan]
 
@@ -47,7 +47,7 @@ nodes:
       实现前端组件、页面路由、状态管理和 API 调用。
     write_scope: ["frontend/"]
     timeout_seconds: 600
-    max_turns: 12
+    max_turns: 20
     interruptible: true
     depends_on: [plan, backend]
 
@@ -67,7 +67,7 @@ nodes:
       如有问题，直接修复对应端的代码。
     write_scope: ["frontend/", "backend/"]
     timeout_seconds: 300
-    max_turns: 8
+    max_turns: 15
     interruptible: true
     depends_on: [frontend]
 

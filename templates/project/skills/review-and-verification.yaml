@@ -1,5 +1,0 @@
-name: review-and-verification
-description: 验收与返工协议
-content: |
-  逐条检查 acceptance_criteria、真实产物、测试证据、约束和风险。Reviewer 只审查；
-  返工必须说明失败标准、问题、期望修改、不允许改变项和新验证要求。

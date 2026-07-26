@@ -410,6 +410,8 @@ def build_graph(
         dag = TaskDag.model_validate(state["dag"])
         task_by_id = {task.id: task for task in dag.tasks}
         active_task_ids = state.get("active_task_ids", [])
+        if not active_task_ids:
+            return "synthesize"
         if active_task_ids:
             sends = []
             for task_id in active_task_ids:

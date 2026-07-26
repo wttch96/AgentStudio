@@ -8,6 +8,7 @@
 # 用法:
 #   ./bootstrap.sh             一键自举（setup → start）
 #   ./bootstrap.sh setup       从 main 强制重建沙箱，并切换本地到 dev
+#   ./bootstrap.sh pull        拉取最新 main 代码更新沙箱（保留 .venv / node_modules）
 #   ./bootstrap.sh start       在沙箱内启动服务
 #   ./bootstrap.sh stop        停止沙箱内服务
 #   ./bootstrap.sh restart     重启沙箱服务
@@ -43,6 +44,7 @@ show_help() {
   echo
   echo "子命令:"
   echo "  setup      从 main 强制重建沙箱，并切换本地工作区到 dev"
+  echo "  pull       拉取 main 最新代码更新 .sandbox（保留 .venv / node_modules）"
   echo "  start      在沙箱内启动前后端服务"
   echo "  stop       停止沙箱内服务"
   echo "  restart    停止后重新启动"
@@ -56,6 +58,7 @@ show_help() {
 require_source_branch() {
   command -v git >/dev/null 2>&1 || die "缺少必需命令：git"
   command -v tar >/dev/null 2>&1 || die "缺少必需命令：tar"
+  command -v rsync >/dev/null 2>&1 || die "缺少必需命令：rsync"
   if ! git -C "${PROJECT_DIR}" show-ref --verify --quiet \
     "refs/heads/${SANDBOX_SOURCE_BRANCH}"; then
     die "缺少稳定分支 ${SANDBOX_SOURCE_BRANCH}，无法创建沙箱。"
@@ -282,6 +285,63 @@ print_service_status() {
   fi
 }
 
+# —— pull: 拉取最新 main 代码更新沙箱（保留 .venv / node_modules / .env / .run） ——
+cmd_pull() {
+  require_sandbox
+  require_source_branch
+
+  # 更新本地 main 分支
+  info "拉取远程 main 分支…"
+  git -C "${PROJECT_DIR}" fetch origin "${SANDBOX_SOURCE_BRANCH}" \
+    || die "无法从远程仓库拉取 ${SANDBOX_SOURCE_BRANCH}"
+
+  local source_commit new_commit
+  source_commit="$(cat "${SANDBOX_DIR}/.bootstrap-meta" 2>/dev/null | sed -n 's/^source_commit=//p' || echo "unknown")"
+  new_commit="$(git -C "${PROJECT_DIR}" rev-parse "refs/remotes/origin/${SANDBOX_SOURCE_BRANCH}")"
+
+  if [[ "${source_commit}" == "${new_commit}" ]]; then
+    success "沙箱已是最新版本 (${new_commit:0:12})，无需更新。"
+    return 0
+  fi
+
+  info "更新沙箱: ${source_commit:0:12} → ${new_commit:0:12}"
+
+  # 停止沙箱服务
+  cmd_stop 2>/dev/null || true
+
+  # 用 git archive 导出最新的 main 到临时目录，再同步到沙箱
+  local tmp_dir
+  tmp_dir="$(mktemp -d /tmp/bootstrap-pull.XXXXXX)"
+  trap "rm -rf ${tmp_dir}" EXIT
+
+  git -C "${PROJECT_DIR}" archive "refs/remotes/origin/${SANDBOX_SOURCE_BRANCH}" \
+    | tar -x -C "${tmp_dir}"
+
+  # rsync: 排除环境相关的目录和文件
+  info "同步源代码到沙箱（保留 .venv / .node_modules / .env / .run）…"
+  rsync -a --delete \
+    --exclude='.venv' \
+    --exclude='.venv/**' \
+    --exclude='node_modules' \
+    --exclude='node_modules/**' \
+    --exclude='frontend/node_modules' \
+    --exclude='frontend/node_modules/**' \
+    --exclude='.env' \
+    --exclude='.run' \
+    --exclude='.run/**' \
+    --exclude='.bootstrap-meta' \
+    "${tmp_dir}/" "${SANDBOX_DIR}/"
+
+  # 更新元数据
+  printf 'source_branch=%s\nsource_commit=%s\nupdated_at=%s\n' \
+    "${SANDBOX_SOURCE_BRANCH}" \
+    "${new_commit}" \
+    "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+    > "${SANDBOX_DIR}/.bootstrap-meta"
+
+  success "沙箱代码已更新到 ${new_commit:0:12}（环境文件保留不变）。"
+}
+
 # —— setup: 强制重建沙箱 ——
 cmd_setup() {
   if [[ -d "${SANDBOX_DIR}" ]]; then
@@ -454,6 +514,9 @@ main() {
   case "${cmd}" in
     setup)
       cmd_setup
+      ;;
+    pull)
+      cmd_pull
       ;;
     start)
       cmd_start
