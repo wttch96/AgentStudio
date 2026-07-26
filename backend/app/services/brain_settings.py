@@ -1,6 +1,6 @@
 """持久化 DeepSeek 主脑提示词。
 
-文件优先：.agent-studio/brain.yaml 为主源，YAML 文件可手动编辑。
+文件优先：.workspace/<project>/brain.yaml 为主源，YAML 文件可手动编辑。
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ DEFAULT_ORCHESTRATION_PROMPT = """
 - 需要录入知识 → 只创建一个 RAG Agent 任务
 - 需要读/写/搜索代码文件 → 只创建一个 Claude/DeepSeek/文件操作 Agent 任务
 - 需要文件管理（复制/移动/删除/列出）→ 只创建一个文件操作 Agent 任务
-- 用户明确指定了 Agent 名（如 "/agent xxx 做 yyy"）→ 只创建该 Agent 的任务
+- 用户明确使用 /<agent-name> 指定 Agent → 只创建该 Agent 的任务
 
 ### 第三级：多 Agent DAG（创建多个有依赖的任务）
 **仅当**以下条件全部满足时才创建多个任务：
@@ -103,6 +103,7 @@ DEFAULT_ORCHESTRATION_PROMPT = """
 1. 这个请求我能直接回答吗？→ 能，直接输出纯文本（第一级）
 2. 这个请求只需要一个 Agent 就能完成吗？→ 是，输出只有一个 task 的 JSON（第二级）
 3. 确实需要多个 Agent 协作？→ 输出完整 DAG JSON（第三级），但只包含必要的 Agent
+4. 已有项目 Flow 与目标、输入和 Agent 约束匹配？→ 输出 flow_invocation
 
 ## 关键约束
 - **绝对不要**为简单对话创建任务
@@ -111,11 +112,12 @@ DEFAULT_ORCHESTRATION_PROMPT = """
 - 知识库中 [manual] 和 [import] 来源的信息可信度高于 [auto]
 - 如果计划校验失败，仔细阅读反馈并修正
 - Agent 选择时不要只靠名称，要看能力和限制
+- /brain 是对全局计划的引导；/<agent-name> 只影响目标 Agent
 """.strip()
 
 
 class BrainSettings:
-    """主脑编排提示词配置。文件为 .agent-studio/brain.yaml。"""
+    """主脑编排提示词配置。文件为 .workspace/<project>/brain.yaml。"""
 
     def __init__(
         self,
@@ -140,10 +142,10 @@ class BrainSettings:
         )
 
     def current(self, project_id: str = "") -> BrainConfiguration:
-        """读取当前编排提示词。优先 .agent-studio/brain.yaml，其次默认值。"""
+        """读取当前编排提示词。优先项目 brain.yaml，其次默认值。"""
         with self._lock:
             if self.config_reader:
-                reader = self.config_reader.for_project(project_id) if project_id else self.config_reader
+                reader = self.config_reader.for_project(project_id) if project_id else self.config_reader.current()
                 data = reader.read_setting("brain")
                 if data:
                     return BrainConfiguration.model_validate(data)
@@ -156,7 +158,7 @@ class BrainSettings:
         with self._lock:
             payload = configuration.model_dump()
             if self.config_reader:
-                reader = self.config_reader.for_project(project_id) if project_id else self.config_reader
+                reader = self.config_reader.for_project(project_id) if project_id else self.config_reader.current()
                 reader._ensure_dirs()
                 reader.write_setting("brain", payload)
         return configuration.model_copy()

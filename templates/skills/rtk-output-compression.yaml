@@ -1,0 +1,21 @@
+id: rtk-output-compression-template
+name: rtk-output-compression
+display_name: RTK 输出压缩
+description: 使用 RTK 执行高输出量的搜索、读取、Git、构建、测试和日志命令，减少无关终端输出与上下文占用
+category: efficiency
+content: |
+  执行高输出量 CLI 命令前，先检查是否有等价 RTK 子命令；存在时优先使用 RTK。
+
+  常用映射：
+  - 文件与搜索：`rtk read`、`rtk ls`、`rtk tree`、`rtk find`、`rtk rg`
+  - Git：`rtk git status`、`rtk git diff`、`rtk git log`
+  - 前端：`rtk npm`、`rtk npx`、`rtk tsc`、`rtk lint`、`rtk vitest`
+  - Python：`rtk pytest`、`rtk ruff`、`rtk mypy`
+  - 通用检查：`rtk test` 仅显示失败，`rtk err` 仅显示错误和警告，`rtk log` 去重日志
+
+  使用规则：
+  1. 保持原命令语义、工作目录、参数和退出码，不为了压缩改变验证范围。
+  2. 需要完整原始输出、RTK 不支持该命令或压缩隐藏了排障信息时，改用原生命令。
+  3. 不给文件写入、数据库迁移、部署和其他有副作用的未知命令盲目添加 RTK 前缀。
+  4. 禁止用 `rtk run` 冒充输出压缩；它只透传原始输出。
+  5. 最终结果只引用关键错误、统计和验证结论，不粘贴完整终端输出。

@@ -42,23 +42,27 @@ class Settings:
     max_replan_iterations: int = 3
     max_task_revisions: int = 2
     workspace_root: Path = WORKSPACE_ROOT
+    # Explicit override is useful for tests and embedded deployments. Runtime
+    # installations normally leave it unset so storage follows current-project.yaml.
+    instance_dir: Path | None = None
 
     @property
-    def instance_dir(self) -> Path:
+    def data_dir(self) -> Path:
         """数据库存放目录。
 
         数据库跟随当前项目，保存在 .workspace/<current-project>/db/ 下。
-        从 current-project.yaml 读取当前项目名，无项目时使用 .workspace/.agent-studio/db/ 作为全局回退。
+        从 current-project.yaml 读取当前项目名；无项目时使用 .workspace/.system/db/。
         """
+        if self.instance_dir is not None:
+            return Path(self.instance_dir)
         current = self._read_current_project()
         if current:
             return self.workspace_root / ".workspace" / current / "db"
-        return self.workspace_root / ".workspace" / ".agent-studio" / "db"
+        return self.workspace_root / ".workspace" / ".system" / "db"
 
-    @staticmethod
-    def _read_current_project() -> str:
+    def _read_current_project(self) -> str:
         """从 .workspace/current-project.yaml 读取当前项目名称。"""
-        yaml_path = WORKSPACE_ROOT / ".workspace" / "current-project.yaml"
+        yaml_path = self.workspace_root / ".workspace" / "current-project.yaml"
         if not yaml_path.is_file():
             return ""
         try:
@@ -70,7 +74,7 @@ class Settings:
 
     @property
     def database_path(self) -> Path:
-        return self.instance_dir / "agents-manager.db"
+        return self.data_dir / "agents-manager.db"
 
     @property
     def demo_mode(self) -> bool:

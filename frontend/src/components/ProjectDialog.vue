@@ -7,7 +7,7 @@ const emit = defineEmits<{ created: [project: Project]; close: [] }>()
 const props = defineProps<{ projects: Project[] }>()
 
 const view = ref<'list' | 'create' | 'detail'>('list')
-const name = ref(''); const rootDir = ref(''); const description = ref('')
+const name = ref(''); const projectName = ref(''); const rootDir = ref(''); const description = ref('')
 const message = ref(''); const loading = ref(false)
 
 const allTemplates = ref<AgentTemplate[]>([])
@@ -65,7 +65,10 @@ async function createProject() {
   if (!name.value.trim() || !rootDir.value) return
   loading.value = true; message.value = ''
   try {
-    const project = await api.createProject(name.value.trim(), rootDir.value, description.value)
+    const project = await api.createProject(
+      name.value.trim(), rootDir.value, description.value,
+      projectName.value.trim() || undefined,
+    )
     for (const tid of [...selectedTemplates.value]) {
       await api.addProjectAgent(project.id, { template_id: tid })
     }
@@ -149,6 +152,11 @@ onMounted(async () => {
       <div class="mb-2">
         <label class="form-label small">项目名称</label>
         <ElInput v-model="name" size="small" placeholder="例如：电商平台" @keyup.enter="createProject" />
+      </div>
+      <div class="mb-2">
+        <label class="form-label small">项目标识 <span class="text-secondary">（数据目录名）</span></label>
+        <ElInput v-model="projectName" size="small" placeholder="例如 ecommerce-platform；留空自动生成" />
+        <small class="text-secondary">项目数据将保存到 .workspace/&lt;项目标识&gt;/</small>
       </div>
 
       <div class="mb-2">

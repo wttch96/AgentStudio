@@ -86,6 +86,7 @@ class FlowGraphState(TypedDict, total=False):
     project_id: str
     inputs: dict[str, Any]              # user-supplied params
     results: Annotated[list[dict[str, Any]], operator.add]
+    context_results: list[dict[str, Any]]  # read-only results copied into Send branches
     blackboard: dict[str, Any]          # serialized BlackboardState
     loop_counters: dict[str, int]       # loop_id → remaining iterations
     cancel_event_ref: str               # reserved for interrupt support
@@ -139,20 +140,20 @@ class YamlCompiler:
             self._register_agent_node(builder, node)
             registered.add(node.id)
 
-        # 2. Register condition blocks as conditional-edge nodes
-        for cond in flow.conditions:
-            self._register_condition(builder, cond, flow)
-            registered.add(cond.id)
-
-        # 3. Register loop blocks
+        # 2. Register loop blocks first so conditions can resolve loop entries.
         for loop in flow.loops:
             self._register_loop(builder, loop, flow)
             registered.add(loop.id)
 
-        # 4. Register parallel blocks
+        # 3. Register parallel blocks for the same reason.
         for par in flow.parallels:
             self._register_parallel(builder, par, flow)
             registered.add(par.id)
+
+        # 4. Register condition blocks after compound target entries exist.
+        for cond in flow.conditions:
+            self._register_condition(builder, cond, flow)
+            registered.add(cond.id)
 
         # 5. Wire up steps in order
         if flow.steps:
@@ -186,14 +187,19 @@ class YamlCompiler:
 
         The condition node itself is a no-op; routing happens on the outgoing edges.
         """
-        builder.add_node(cond.id, lambda s: s)
+        builder.add_node(cond.id, lambda _state: {})
 
-        def route_condition(state: FlowGraphState) -> str:
+        def route_condition(state: FlowGraphState) -> bool:
             return self._eval_condition(state, cond)
 
-        path_map = {cond.then_branch: cond.then_branch}
-        if cond.else_branch:
-            path_map[cond.else_branch] = cond.else_branch
+        path_map = {
+            True: self._resolve_entry(cond.then_branch, flow),
+            False: (
+                self._resolve_entry(cond.else_branch, flow)
+                if cond.else_branch
+                else "__synthesize__"
+            ),
+        }
         builder.add_conditional_edges(cond.id, route_condition, path_map)
 
     def _register_loop(self, builder: StateGraph, loop: LoopBlock, flow: FlowDefinition) -> None:
@@ -217,18 +223,18 @@ class YamlCompiler:
         def loop_check(state: FlowGraphState) -> FlowGraphState:
             counters = dict(state.get("loop_counters", {}))
             remaining = counters.get(loop.id, 0) - 1
-            counters[loop.id] = max(0, remaining)
+            counters[loop.id] = remaining
             return {"loop_counters": counters}
 
         builder.add_node(check_id, loop_check)
 
         # Exit: passthrough
-        builder.add_node(exit_id, lambda s: s)
+        builder.add_node(exit_id, lambda _state: {})
 
         # Routing from check: condition true + counter > 0 → body, else → exit
         def route_loop(state: FlowGraphState) -> str:
             counters = state.get("loop_counters", {})
-            if counters.get(loop.id, 0) <= 0:
+            if counters.get(loop.id, 0) < 0:
                 return exit_id
             if self._eval_condition(state, loop):
                 return loop.body  # back to body → check cycle
@@ -239,7 +245,7 @@ class YamlCompiler:
 
         # Wire: entry → check → (body → check / exit)
         builder.add_edge(entry_id, check_id)
-        # body → check is wired as a cycle via conditional edge routing
+        builder.add_edge(self._resolve_exit(loop.body, flow), check_id)
 
         # Replace the loop id with its entry point in the graph topology
         # The caller wires steps to entry_id, and exit_id is wired to next step
@@ -255,18 +261,28 @@ class YamlCompiler:
         fanout_id = f"{par.id}__fanout"
         barrier_id = f"{par.id}__barrier"
 
-        builder.add_node(fanout_id, lambda s: s)
-        builder.add_node(barrier_id, lambda s: s)
+        builder.add_node(fanout_id, lambda _state: {})
+        builder.add_node(barrier_id, lambda _state: {})
 
         def fanout(state: FlowGraphState) -> list[Send]:
             return [
-                Send(item_id, {"current_node": item_id, **{k: v for k, v in state.items() if k != "current_node"}})
+                Send(item_id, {
+                    "current_node": item_id,
+                    **{
+                        key: value
+                        for key, value in state.items()
+                        if key not in {"current_node", "results", "context_results"}
+                    },
+                    "context_results": state.get("results", []),
+                })
                 for item_id in par.items
             ]
 
-        builder.add_conditional_edges(fanout_id, fanout, par.items)
-        for item_id in par.items:
-            builder.add_edge(item_id, barrier_id)
+        builder.add_conditional_edges(fanout_id, fanout)
+        builder.add_edge(
+            [self._resolve_exit(item_id, flow) for item_id in par.items],
+            barrier_id,
+        )
 
         setattr(self, f"_parallel_{par.id}_fanout", fanout_id)
         setattr(self, f"_parallel_{par.id}_barrier", barrier_id)
@@ -283,9 +299,25 @@ class YamlCompiler:
         builder.add_edge(START, self._resolve_entry(flow.steps[0], flow))
 
         for i in range(len(flow.steps) - 1):
-            cur_exit = self._resolve_exit(flow.steps[i], flow)
             next_entry = self._resolve_entry(flow.steps[i + 1], flow)
-            builder.add_edge(cur_exit, next_entry)
+            self._wire_step_exit(builder, flow.steps[i], next_entry, flow)
+
+    def _wire_step_exit(
+        self,
+        builder: StateGraph,
+        step_id: str,
+        next_entry: str,
+        flow: FlowDefinition,
+    ) -> None:
+        condition = next((item for item in flow.conditions if item.id == step_id), None)
+        if condition is None:
+            builder.add_edge(self._resolve_exit(step_id, flow), next_entry)
+            return
+        targets = [condition.then_branch]
+        if condition.else_branch:
+            targets.append(condition.else_branch)
+        for target in targets:
+            builder.add_edge(self._resolve_exit(target, flow), next_entry)
 
     def _wire_from_depends_on(self, builder: StateGraph, flow: FlowDefinition) -> None:
         """Legacy mode: auto-generate steps from depends_on via topological sort."""
@@ -323,8 +355,7 @@ class YamlCompiler:
         if flow.steps:
             last = flow.steps[-1] if flow.steps else None
             if last:
-                last_exit = self._resolve_exit(last, flow)
-                builder.add_edge(last_exit, "__synthesize__")
+                self._wire_step_exit(builder, last, "__synthesize__", flow)
             return
 
         # Legacy: find terminal nodes (not depended on by anyone)
@@ -394,8 +425,17 @@ class YamlCompiler:
                 ))
 
         # Render the objective template
+        available_results = [
+            *state.get("context_results", []),
+            *state.get("results", []),
+        ]
+        result_map = {
+            item["task_id"]: AgentResult.model_validate(item)
+            for item in available_results
+            if isinstance(item, dict) and item.get("task_id")
+        }
         rendered = self.template_renderer.render_node(
-            node.objective, state.get("inputs", {}), {}
+            node.objective, state.get("inputs", {}), result_map
         )
 
         task = DagTask(
@@ -421,6 +461,8 @@ class YamlCompiler:
                 agent_id=node.agent, task_id=node.id,
                 payload={"title": node.title, "objective": rendered, "started_at": started_at},
             )
+        if self.todo_store:
+            self.todo_store.update_status(run_id, node.id, "in_progress", node.agent)
 
         try:
             result = active_executor.execute(
@@ -445,6 +487,13 @@ class YamlCompiler:
         if result is not None:
             result.started_at = started_at
             result.duration_ms = duration_ms
+            if self.todo_store:
+                self.todo_store.apply_result(
+                    run_id,
+                    node.id,
+                    result.model_dump(),
+                    node.agent,
+                )
 
         if self.events:
             self.events.emit(
@@ -493,11 +542,20 @@ class YamlCompiler:
         """Evaluate a Jinja2 condition against the current blackboard state."""
         cond_str = condition.condition
         blackboard_data = state.get("blackboard", {})
+        if self.blackboard_store and state.get("run_id"):
+            blackboard_data = self.blackboard_store.read_all(state["run_id"])
         loop_counters = state.get("loop_counters", {})
+        results = {
+            item["task_id"]: item
+            for item in state.get("results", [])
+            if isinstance(item, dict) and item.get("task_id")
+        }
 
         try:
             result = _eval_env.from_string("{{" + cond_str + "}}").render(
                 blackboard=blackboard_data,
+                input=state.get("inputs", {}),
+                results=results,
                 counter=loop_counters.get(condition.id if isinstance(condition, LoopBlock) else "", 0),
             )
             return result.strip().lower() in ("true", "1", "yes")

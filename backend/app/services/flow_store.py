@@ -20,8 +20,12 @@ from app.storage.sqlite_store import SQLiteStore
 class FlowStore:
     """Load and manage flow definitions from YAML files + DB cache."""
 
-    def __init__(self, flows_dir: Path, store: SQLiteStore | None = None) -> None:
+    def __init__(
+        self, flows_dir: Path, store: SQLiteStore | None = None,
+        fallback_dir: Path | None = None,
+    ) -> None:
         self.flows_dir = flows_dir
+        self.fallback_dir = fallback_dir
         self.store = store
         self._lock = threading.RLock()
         self._cache: dict[str, FlowDefinition] = {}
@@ -131,12 +135,19 @@ class FlowStore:
 
     def _refresh(self) -> None:
         """Scan flows_dir for .yaml files and load new/changed ones into cache."""
-        if not self.flows_dir.is_dir():
+        directories = [
+            directory for directory in (self.fallback_dir, self.flows_dir)
+            if directory is not None and directory.is_dir()
+        ]
+        if not directories:
             return
 
         loaded = set()
-        for yaml_file in sorted(self.flows_dir.glob("*.yaml")):
-            name = yaml_file.stem
+        yaml_files: dict[str, Path] = {}
+        for directory in directories:
+            for yaml_file in sorted(directory.glob("*.yaml")):
+                yaml_files[yaml_file.stem] = yaml_file
+        for name, yaml_file in yaml_files.items():
             loaded.add(name)
             # Check if we need to reload
             if name in self._cache:

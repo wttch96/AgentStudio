@@ -1,0 +1,26 @@
+# 条件分支 + 并行汇流业务示例。通过 POST /api/flows/refund-review/runs
+# 传入 order_id、refund_amount、risk_level 和 reason。
+name: refund-review
+description: 电商退款审核：受理后并行核查退款政策与履约状态，再按金额和风险自动分流
+version: "1.1"
+keywords: [退款审核, 售后, refund, 风控]
+nodes:
+  - {id: intake, agent: api-designer, title: 受理退款申请, objective: "整理订单 {{ input.order_id }}、金额 {{ input.refund_amount }}、风险 {{ input.risk_level }} 和原因 {{ input.reason }}，不修改业务数据。", write_scope: [], depends_on: []}
+  - {id: policy_check, agent: code-reviewer, title: 核查退款政策, objective: "根据 {{ intake.output.summary }} 核查政策、时限和材料。", write_scope: [], depends_on: [intake]}
+  - {id: fulfillment_check, agent: api-designer, title: 核查订单履约, objective: "根据 {{ intake.output.summary }} 核查支付、发货、签收和历史退款。", write_scope: [], depends_on: [intake]}
+  - {id: auto_approve, agent: doc-diff, title: 生成自动退款决定, objective: "结合 {{ policy_check.output.summary }} 与 {{ fulfillment_check.output.summary }} 生成小额低风险退款决定，不调用支付接口。", write_scope: [], depends_on: [policy_check, fulfillment_check]}
+  - {id: manual_review, agent: code-reviewer, title: 生成人工复核工单, objective: "结合 {{ policy_check.output.summary }} 与 {{ fulfillment_check.output.summary }} 生成人工复核清单和风险建议。", write_scope: [], depends_on: [policy_check, fulfillment_check]}
+parallels:
+  - {id: parallel_investigation, items: [policy_check, fulfillment_check], max_concurrency: 2}
+conditions:
+  - id: refund_route
+    condition: 'input.refund_amount | float <= 500 and input.risk_level | default("low") == "low"'
+    then_branch: auto_approve
+    else_branch: manual_review
+steps: [intake, parallel_investigation, refund_route]
+synthesize:
+  template: |
+    ## 退款审核结果
+    {% for id, result in results.items() %}
+    - {{ id }}：{{ result.status }} — {{ result.summary }}
+    {% endfor %}

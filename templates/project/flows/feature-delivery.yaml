@@ -1,0 +1,20 @@
+name: feature-delivery
+description: 探索、契约、前后端并行实现、审查与有限返工
+version: "1.1"
+keywords: [功能开发, 完整实现, feature, fullstack]
+nodes:
+  - {id: inspect, agent: api-designer, title: 探索并冻结契约, objective: "分析 {{ input.prompt }} 并冻结公共契约。", write_scope: [], depends_on: []}
+  - {id: frontend, agent: vue-frontend, title: 实现前端, objective: "依据 {{ inspect.output.summary }} 实现前端。", write_scope: [frontend/], depends_on: [inspect]}
+  - {id: backend, agent: flask-backend, title: 实现后端, objective: "依据 {{ inspect.output.summary }} 实现后端。", write_scope: [backend/], depends_on: [inspect]}
+  - {id: review, agent: code-reviewer, title: 集成验收, objective: "审查前后端并写入 review_passed。", write_scope: [], depends_on: [frontend, backend]}
+  - {id: fix, agent: flask-backend, title: 修正未通过项, objective: "只修正审查失败项。", write_scope: [backend/, frontend/], depends_on: [review]}
+  - {id: publish, agent: doc-diff, title: 生成交付报告, objective: "汇总产物、验证和风险。", write_scope: [], depends_on: [review]}
+conditions:
+  - {id: quality-gate, condition: "blackboard.review_passed == true", then_branch: publish, else_branch: repair-loop}
+parallels:
+  - {id: implementation, items: [frontend, backend], max_concurrency: 2}
+loops:
+  - {id: repair-loop, condition: "blackboard.review_passed != true", body: fix, max_iterations: 2}
+steps: [inspect, implementation, review, quality-gate]
+synthesize:
+  template: "已执行 {{ results | length }} 个节点。"

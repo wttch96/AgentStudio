@@ -56,7 +56,7 @@
 .g-3 { margin-left: -0.375rem; margin-right: -0.375rem; }
 
 /* ===== Typography ===== */
-.small { font-size: 0.8125rem; }
+.small { font-size: var(--ui-font-sm); }
 .fw-semibold { font-weight: 600; }
 .fw-medium { font-weight: 500; }
 .text-start { text-align: left; }
@@ -91,11 +91,11 @@
 .flex-1 { flex: 1; }
 
 /* ===== Form helpers ===== */
-.form-label { display: block; margin-bottom: 0.25rem; font-size: 0.8125rem; color: var(--el-text-color-regular); }
-.form-text { margin-top: 0.25rem; font-size: 0.75rem; color: var(--el-text-color-secondary); }
+.form-label { display: block; margin-bottom: 0.25rem; font-size: var(--ui-font-sm); color: var(--el-text-color-regular); }
+.form-text { margin-top: 0.25rem; font-size: var(--ui-font-sm); color: var(--el-text-color-secondary); }
 .form-check { display: flex; align-items: center; gap: 0.5rem; }
 .form-check-input { margin: 0; }
-.form-check-label { font-size: 0.8125rem; }
+.form-check-label { font-size: var(--ui-font-sm); }
 
 /* ===== Shadow ===== */
 .shadow { box-shadow: var(--el-box-shadow); }
@@ -107,4 +107,4 @@
 .bg-primary { background-color: var(--el-color-primary); color: #fff; }
 
 /* ===== Special ===== */
-kbd { border: 0; border-radius: 4px; padding: 2px 4px; background: var(--el-fill-color); color: var(--el-text-color-secondary); font: .5rem ui-monospace, "SFMono-Regular", monospace; }
+kbd { border: 0; border-radius: 4px; padding: 2px 4px; background: var(--el-fill-color); color: var(--el-text-color-secondary); font: var(--ui-font-xs) ui-monospace, "SFMono-Regular", monospace; }

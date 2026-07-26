@@ -48,6 +48,9 @@ class AgentTask(BaseModel):
     agent: str
     depends_on: list[str] = Field(default_factory=list)
     write_scope: list[str] = Field(default_factory=list)
+    context: dict[str, Any] = Field(default_factory=dict)
+    inputs: list[dict[str, Any]] = Field(default_factory=list)
+    constraints: list[str] = Field(default_factory=list)
 
     # ── 增强字段 ──
     acceptance_criteria: list[str] = Field(
@@ -81,20 +84,41 @@ class AgentTask(BaseModel):
             agent=self.agent,
             depends_on=self.depends_on,
             write_scope=self.write_scope,
+            context=self.context,
+            inputs=self.inputs,
+            constraints=self.constraints,
+            expected_outputs=self.expected_outputs,
+            acceptance_criteria=self.acceptance_criteria,
+            allowed_tools=self.allowed_tools,
+            forbidden_actions=self.forbidden_actions,
+            priority=self.priority,
+            max_iterations=self.max_iterations,
+            status=self.status,
         )
 
     @classmethod
     def from_dag_task(cls, task: DagTask, **kwargs: Any) -> "AgentTask":
         """从 DagTask 升级，可选覆盖增强字段。"""
-        return cls(
+        data = dict(
             id=task.id,
             title=task.title,
             objective=task.objective,
             agent=task.agent,
             depends_on=task.depends_on,
             write_scope=task.write_scope,
-            **kwargs,
+            context=task.context,
+            inputs=task.inputs,
+            constraints=task.constraints,
+            expected_outputs=task.expected_outputs,
+            acceptance_criteria=task.acceptance_criteria,
+            allowed_tools=task.allowed_tools,
+            forbidden_actions=task.forbidden_actions,
+            priority=task.priority,
+            max_iterations=task.max_iterations,
+            status=task.status,
         )
+        data.update(kwargs)
+        return cls(**data)
 
 
 # ── 执行计划 ──────────────────────────────────────────────────────────
@@ -255,6 +279,15 @@ class EnhancedAgentResult(BaseModel):
             status=mapped,  # type: ignore[arg-type]
             summary=self.summary[:6000],
             changed_files=self.changes,
+            artifacts=[a.model_dump() for a in self.artifacts],
+            decisions=[d.model_dump() for d in self.decisions],
+            assumptions=self.assumptions,
+            risks=self.risks,
+            dependencies_discovered=self.dependencies_discovered,
+            verification_performed=self.verification_performed,
+            verification_not_performed=self.verification_not_performed,
+            verification_result=self.verification_result,
+            next_actions=self.next_actions,
             provides=[a.path_or_id for a in self.artifacts if a.type == "blackboard_key"],
             error=self.error,
             started_at=self.started_at,
@@ -276,6 +309,15 @@ class EnhancedAgentResult(BaseModel):
             status=status_map.get(result.status, "failed"),  # type: ignore[arg-type]
             summary=result.summary,
             changes=result.changed_files,
+            artifacts=[Artifact.model_validate(a) for a in result.artifacts],
+            decisions=[Decision.model_validate(d) for d in result.decisions],
+            assumptions=result.assumptions,
+            risks=result.risks,
+            dependencies_discovered=result.dependencies_discovered,
+            verification_performed=result.verification_performed,
+            verification_not_performed=result.verification_not_performed,
+            verification_result=result.verification_result,
+            next_actions=result.next_actions,
             error=result.error,
             started_at=result.started_at,
             duration_ms=result.duration_ms,

@@ -1,4 +1,4 @@
-"""持久化记忆系统配置。文件为 .agent-studio/memory.yaml。"""
+"""持久化记忆系统配置。文件为 .workspace/<project>/memory.yaml。"""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ DEFAULT_MEMORY_CONFIG = MemoryConfiguration(
 
 
 class MemorySettings:
-    """持久化记忆配置，文件为 .agent-studio/memory.yaml。"""
+    """持久化记忆配置，文件为 .workspace/<project>/memory.yaml。"""
 
     def __init__(self, config_reader: ConfigReader | None = None) -> None:
         self.config_reader = config_reader
@@ -29,7 +29,7 @@ class MemorySettings:
     def current(self, project_id: str = "") -> MemoryConfiguration:
         with self._lock:
             if self.config_reader:
-                reader = self.config_reader.for_project(project_id) if project_id else self.config_reader
+                reader = self.config_reader.for_project(project_id) if project_id else self.config_reader.current()
                 data = reader.read_setting("memory")
                 if data:
                     return MemoryConfiguration.model_validate(data)
@@ -41,7 +41,7 @@ class MemorySettings:
     def update(self, configuration: MemoryConfiguration, project_id: str = "") -> MemoryConfiguration:
         with self._lock:
             if self.config_reader:
-                reader = self.config_reader.for_project(project_id) if project_id else self.config_reader
+                reader = self.config_reader.for_project(project_id) if project_id else self.config_reader.current()
                 reader._ensure_dirs()
                 reader.write_setting("memory", configuration.model_dump())
         return configuration.model_copy()

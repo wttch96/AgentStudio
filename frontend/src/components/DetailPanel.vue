@@ -16,7 +16,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   close: []
   interruptNode: [nodeId: string]
-  injectGuidance: [nodeId: string, instruction: string]
 }>()
 
 type TabId = 'overview' | 'io' | 'tools' | 'steps' | 'errors'
@@ -68,51 +67,38 @@ const hasError = computed(() => props.selectedNode?.hasError ?? false)
         </div>
         <div class="detail-header-actions">
           <NodeActionBar
-            v-if="selectedNode.status === 'running' && selectedNode.interruptible"
+            v-if="['pending', 'running'].includes(selectedNode.status) && selectedNode.interruptible"
             :node-id="selectedNode.id"
             :node-name="selectedNode.name"
             @interrupt="(id) => emit('interruptNode', id)"
-            @inject="(id, instruction) => emit('injectGuidance', id, instruction)"
           />
-          <button type="button" class="detail-close-btn" @click="emit('close')" title="关闭">×</button>
+          <ElButton text circle class="detail-close-btn" title="关闭" @click="emit('close')">×</ElButton>
         </div>
       </div>
 
-      <!-- Tab 导航 -->
-      <nav class="detail-tabs">
-        <button
+      <ElTabs v-model="activeTab" class="detail-tabs">
+        <ElTabPane
           v-for="tab in tabs"
           :key="tab.id"
-          type="button"
-          class="detail-tab"
-          :class="{
-            active: activeTab === tab.id,
-            disabled: (tab.id === 'tools' && !hasTools)
-              || (tab.id === 'steps' && !hasSteps)
-              || (tab.id === 'errors' && !hasError),
-          }"
-          @click="activeTab = tab.id"
+          :name="tab.id"
+          :disabled="(tab.id === 'tools' && !hasTools)
+            || (tab.id === 'steps' && !hasSteps)
+            || (tab.id === 'errors' && !hasError)"
         >
-          {{ tab.label }}
-          <span
-            v-if="tab.id === 'tools' && hasTools"
-            class="tab-badge"
-          >{{ selectedNode.toolCallCount }}</span>
-          <span
-            v-if="tab.id === 'errors' && hasError"
-            class="tab-badge error"
-          >!</span>
-        </button>
-      </nav>
-
-      <!-- Tab 内容 -->
-      <div class="detail-content">
-        <NodeOverviewTab v-if="activeTab === 'overview'" :node="selectedNode" />
-        <NodeInputOutputTab v-if="activeTab === 'io'" :node="selectedNode" />
-        <ToolCallsTimeline v-if="activeTab === 'tools'" :tool-call-groups="selectedNode.toolCallGroups" />
-        <IntermediateStepsTimeline v-if="activeTab === 'steps'" :steps="selectedNode.intermediateSteps" />
-        <NodeErrorView v-if="activeTab === 'errors'" :error="selectedNode.error" />
-      </div>
+          <template #label>
+            {{ tab.label }}
+            <span v-if="tab.id === 'tools' && hasTools" class="tab-badge">{{ selectedNode.toolCallCount }}</span>
+            <span v-if="tab.id === 'errors' && hasError" class="tab-badge error">!</span>
+          </template>
+          <div class="detail-content">
+            <NodeOverviewTab v-if="tab.id === 'overview'" :node="selectedNode" />
+            <NodeInputOutputTab v-else-if="tab.id === 'io'" :node="selectedNode" />
+            <ToolCallsTimeline v-else-if="tab.id === 'tools'" :tool-call-groups="selectedNode.toolCallGroups" />
+            <IntermediateStepsTimeline v-else-if="tab.id === 'steps'" :steps="selectedNode.intermediateSteps" />
+            <NodeErrorView v-else-if="tab.id === 'errors'" :error="selectedNode.error" />
+          </div>
+        </ElTabPane>
+      </ElTabs>
     </template>
   </aside>
 </template>
@@ -152,7 +138,7 @@ const hasError = computed(() => props.selectedNode?.hasError ?? false)
 }
 
 .detail-empty-state p {
-  font-size: 0.9375rem;
+  font-size: var(--ui-font-md);
   line-height: 1.5;
 }
 
@@ -197,7 +183,7 @@ const hasError = computed(() => props.selectedNode?.hasError ?? false)
 }
 
 .detail-header-text strong {
-  font-size: 1rem;
+  font-size: var(--ui-font-lg);
   font-weight: 650;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -205,7 +191,7 @@ const hasError = computed(() => props.selectedNode?.hasError ?? false)
 }
 
 .detail-header-text span {
-  font-size: 0.875rem;
+  font-size: var(--ui-font-base);
   color: var(--secondary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -220,16 +206,11 @@ const hasError = computed(() => props.selectedNode?.hasError ?? false)
 }
 
 .detail-close-btn {
-  display: grid;
-  place-items: center;
   width: 24px;
   height: 24px;
-  border: 0;
-  border-radius: 6px;
   background: rgba(118, 118, 128, 0.12);
   color: var(--secondary);
-  font-size: 0.875rem;
-  cursor: pointer;
+  font-size: var(--ui-font-md);
 }
 
 .detail-close-btn:hover {
@@ -239,47 +220,36 @@ const hasError = computed(() => props.selectedNode?.hasError ?? false)
 
 /* Tab 导航 */
 .detail-tabs {
-  display: flex;
-  gap: 0;
-  flex-shrink: 0;
-  padding: 4px;
-  border-bottom: 1px solid var(--separator-soft);
+  flex: 1;
+  min-height: 0;
   background: rgba(0, 0, 0, 0.08);
 }
 
-.detail-tab {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  padding: 4px 6px;
-  border: 0;
-  border-radius: 6px;
+.detail-tabs :deep(.el-tabs__header) {
+  flex: none;
+  margin: 0;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--separator-soft);
+}
+.detail-tabs :deep(.el-tabs__nav-wrap::after) {
   background: transparent;
-  color: var(--tertiary);
-  font-size: 0.9375rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.15s;
 }
-
-.detail-tab:hover {
-  color: var(--secondary);
+.detail-tabs :deep(.el-tabs__item) {
+  height: 36px;
+  padding: 0 10px;
+  font-size: var(--ui-font-sm);
 }
-
-.detail-tab.active {
-  background: rgba(10, 132, 255, 0.12);
-  color: #64d2ff;
+.detail-tabs :deep(.el-tabs__content) {
+  height: calc(100% - 37px);
+  min-height: 0;
+  overflow: hidden;
 }
-
-.detail-tab.disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
+.detail-tabs :deep(.el-tab-pane) {
+  height: 100%;
 }
 
 .tab-badge {
-  font-size: 0.8125rem;
+  font-size: var(--ui-font-xs);
   padding: 1px 4px;
   border-radius: 999px;
   background: rgba(10, 132, 255, 0.15);

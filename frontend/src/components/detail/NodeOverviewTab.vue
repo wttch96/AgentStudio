@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { ExecutionNode } from '../types'
+import type { ExecutionNode } from '../../types'
 
 const props = defineProps<{
   node: ExecutionNode
@@ -17,6 +17,7 @@ const statusLabel: Record<string, string> = {
 }
 
 const typeLabel: Record<string, string> = {
+  conversation: '对话轮次',
   orchestrator: '主脑编排',
   agent: '执行 Agent',
 }
@@ -45,6 +46,11 @@ const formattedFinishedAt = computed(() => {
   if (!props.node.finishedAt) return props.node.status === 'running' ? '运行中…' : '—'
   return new Date(props.node.finishedAt).toLocaleTimeString()
 })
+
+function formatTokens(value: number) {
+  if (value < 1000) return String(value)
+  return `${(value / 1000).toFixed(value < 10_000 ? 1 : 0)}k`
+}
 </script>
 
 <template>
@@ -98,6 +104,28 @@ const formattedFinishedAt = computed(() => {
 
     <!-- 状态信息 -->
     <div class="overview-section">
+      <h3 class="section-title">
+        Token I/O
+        <span v-if="node.tokenUsage.estimated" class="estimate-badge">估算</span>
+      </h3>
+      <div class="overview-metrics">
+        <div class="metric token-input">
+          <span class="metric-value">{{ formatTokens(node.tokenUsage.input) }}</span>
+          <span class="metric-label">输入 Token</span>
+        </div>
+        <div class="metric token-output">
+          <span class="metric-value">{{ formatTokens(node.tokenUsage.output) }}</span>
+          <span class="metric-label">输出 Token</span>
+        </div>
+        <div class="metric">
+          <span class="metric-value">{{ formatTokens(node.tokenUsage.input + node.tokenUsage.output) }}</span>
+          <span class="metric-label">合计</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="overview-section">
+      <h3 class="section-title">节点统计</h3>
       <div class="overview-metrics">
         <div class="metric">
           <span class="metric-value">{{ node.toolCallCount }}</span>
@@ -131,12 +159,27 @@ const formattedFinishedAt = computed(() => {
 
 .section-title {
   margin: 0;
-  font-size: 0.9375rem;
+  font-size: var(--ui-font-md);
   font-weight: 650;
   color: var(--secondary);
   text-transform: uppercase;
   letter-spacing: 0.03em;
 }
+
+.estimate-badge {
+  margin-left: 5px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: rgba(255, 159, 10, 0.14);
+  color: var(--orange);
+  font-size: var(--ui-font-xs);
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.token-input .metric-value { color: #64d2ff; }
+.token-output .metric-value { color: var(--green); }
 
 .overview-row {
   display: flex;
@@ -147,25 +190,25 @@ const formattedFinishedAt = computed(() => {
 }
 
 .overview-label {
-  font-size: 0.9375rem;
+  font-size: var(--ui-font-md);
   color: var(--tertiary);
   flex-shrink: 0;
 }
 
 .overview-value {
-  font-size: 0.9375rem;
+  font-size: var(--ui-font-md);
   font-weight: 500;
   text-align: right;
 }
 
 .overview-value.mono {
   font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
-  font-size: 0.875rem;
+  font-size: var(--ui-font-base);
 }
 
 .overview-value.time {
   color: var(--tertiary);
-  font-size: 0.875rem;
+  font-size: var(--ui-font-base);
 }
 
 .type-badge {
@@ -173,7 +216,7 @@ const formattedFinishedAt = computed(() => {
   border-radius: 4px;
   background: var(--blue-soft);
   color: var(--blue);
-  font-size: 0.875rem;
+  font-size: var(--ui-font-base);
 }
 
 /* 状态颜色 */
@@ -203,7 +246,7 @@ const formattedFinishedAt = computed(() => {
 .overview-objective,
 .overview-summary {
   margin: 0;
-  font-size: 0.9375rem;
+  font-size: var(--ui-font-md);
   line-height: 1.5;
   color: var(--secondary);
   white-space: pre-wrap;
@@ -228,13 +271,13 @@ const formattedFinishedAt = computed(() => {
 }
 
 .metric-value {
-  font-size: 0.875rem;
+  font-size: var(--ui-font-base);
   font-weight: 650;
   color: var(--label);
 }
 
 .metric-label {
-  font-size: 0.8125rem;
+  font-size: var(--ui-font-sm);
   color: var(--tertiary);
   text-transform: uppercase;
   letter-spacing: 0.02em;

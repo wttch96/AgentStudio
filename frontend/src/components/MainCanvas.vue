@@ -45,9 +45,9 @@ const runningCount = computed(() => props.nodes.filter((n) => n.status === 'runn
       <div class="status-bar-right">
         <span v-if="runningCount" class="status-bar-badge running">{{ runningCount }} 运行中</span>
         <span v-if="errorCount" class="status-bar-badge error">{{ errorCount }} 错误</span>
-        <button type="button" class="dag-trigger-btn" @click="emit('toggleDagModal')" title="全屏 DAG 视图">
+        <ElButton size="small" text class="dag-trigger-btn" @click="emit('toggleDagModal')" title="全屏 DAG 视图">
           <span aria-hidden="true">◇</span> DAG
-        </button>
+        </ElButton>
       </div>
     </div>
 
@@ -138,7 +138,7 @@ const runningCount = computed(() => props.nodes.filter((n) => n.status === 'runn
 }
 
 .status-bar-text {
-  font-size: 0.625rem;
+  font-size: var(--ui-font-xs);
   color: var(--secondary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -153,7 +153,7 @@ const runningCount = computed(() => props.nodes.filter((n) => n.status === 'runn
 }
 
 .status-bar-badge {
-  font-size: 0.5rem;
+  font-size: var(--ui-font-xs);
   padding: 2px 6px;
   border-radius: 999px;
   font-weight: 600;
@@ -178,7 +178,7 @@ const runningCount = computed(() => props.nodes.filter((n) => n.status === 'runn
   border-radius: 7px;
   background: rgba(10, 132, 255, 0.08);
   color: #64d2ff;
-  font-size: 0.625rem;
+  font-size: var(--ui-font-xs);
   font-weight: 550;
   cursor: pointer;
   transition: background 0.15s, border-color 0.15s;
@@ -211,7 +211,7 @@ const runningCount = computed(() => props.nodes.filter((n) => n.status === 'runn
 }
 
 .streaming-text {
-  font-size: 0.5625rem;
+  font-size: var(--ui-font-xs);
   color: var(--tertiary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -243,7 +243,7 @@ const runningCount = computed(() => props.nodes.filter((n) => n.status === 'runn
 }
 
 .canvas-empty p {
-  font-size: 0.6875rem;
+  font-size: var(--ui-font-xs);
   max-width: 280px;
   text-align: center;
   line-height: 1.5;

@@ -40,6 +40,16 @@ export interface AgentProfile {
   project_id?: string
   agent_type?: 'claude' | 'rag' | 'file-ops' | 'chat'
   model?: string
+  role?: string
+  capabilities?: string[]
+  limitations?: string[]
+  preferred_tasks?: string[]
+  forbidden_tasks?: string[]
+  input_contract?: Record<string, string>
+  output_contract?: Record<string, string>
+  dependencies_info?: string[]
+  priority?: number
+  max_iterations?: number
 }
 
 export interface AgentDetail extends AgentProfile {
@@ -93,6 +103,10 @@ export interface PlanTask {
   agent: string
   depends_on: string[]
   write_scope: string[]
+  agent_type?: string
+  status?: TodoItem['status']
+  expected_outputs?: string[]
+  acceptance_criteria?: string[]
 }
 
 export interface AgentResult {
@@ -113,8 +127,8 @@ export interface AgentResult {
 /** 节点状态：PENDING → RUNNING → SUCCEEDED/FAILED/CANCELLED/INTERRUPTED/TIMEOUT */
 export type NodeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timeout' | 'interrupted'
 
-/** 节点类型：ORCHESTRATOR=主脑编排, AGENT=执行Agent */
-export type NodeType = 'orchestrator' | 'agent'
+/** 节点类型：CONVERSATION=固定轮次, ORCHESTRATOR=主脑编排, AGENT=执行Agent */
+export type NodeType = 'conversation' | 'orchestrator' | 'agent'
 
 /** 工具调用状态 */
 export type ToolCallStatus = 'pending' | 'running' | 'completed' | 'failed'
@@ -196,6 +210,11 @@ export interface ExecutionNode {
   dependsOn: string[]             // 前置节点 ID 列表
   interruptible: boolean          // 是否允许中断
   agentType?: string              // Agent 类型 (rag, claude, deepseek, file_agent)
+  tokenUsage: {
+    input: number
+    output: number
+    estimated: boolean
+  }
 }
 
 /** 节点依赖边 (Canvas 渲染用) */
@@ -220,7 +239,7 @@ export interface PendingInterrupt {
   runId: string
   targetNodeId: string | null
   targetAgent: string | null
-  action: 'pause' | 'inject' | 'abort'
+  action: 'pause' | 'inject' | 'abort' | 'replan'
   instruction: string
   createdAt: string
   status: 'pending' | 'sent' | 'applied' | 'rejected'
@@ -389,8 +408,8 @@ export interface Project {
   name: string
   root_dir: string
   description: string
-  created_at: string
-  updated_at: string
+  created_at?: string
+  updated_at?: string
 }
 
 export interface ProjectAgent {
@@ -399,6 +418,7 @@ export interface ProjectAgent {
   name: string
   display_name: string
   description: string
+  role: string
   template_id: string | null
   agent_type: 'brain' | 'rag' | 'claude' | 'file-ops' | 'chat'
   sub_dir: string
@@ -407,6 +427,15 @@ export interface ProjectAgent {
   skills: string[]
   is_required: boolean
   sort_order: number
+  capabilities: string[]
+  limitations: string[]
+  preferred_tasks: string[]
+  forbidden_tasks: string[]
+  input_contract: Record<string, string>
+  output_contract: Record<string, string>
+  dependencies_info: string[]
+  priority: number
+  max_iterations: number
 }
 
 export interface AgentTemplate {
@@ -457,6 +486,10 @@ export interface FlowDefinition {
   nodes: FlowNode[]
   synthesize?: { template: string }
   node_count?: number  // computed, from API
+  conditions?: ConditionBlock[]
+  loops?: LoopBlock[]
+  parallels?: ParallelBlock[]
+  steps?: string[]
 }
 
 export interface FlowTrace {
@@ -492,11 +525,21 @@ export interface BlackboardState {
 
 export interface TodoItem {
   id: string
+  title: string
   content: string
+  objective: string
   assigned_to: string | null
-  status: 'pending' | 'in_progress' | 'completed' | 'blocked'
+  status: 'backlog' | 'ready' | 'pending' | 'in_progress' | 'review' | 'completed' | 'failed' | 'cancelled' | 'blocked'
   depends_on: string[]
+  expected_outputs: string[]
+  acceptance_criteria: string[]
+  artifacts: Array<Record<string, unknown>>
+  decisions: Array<Record<string, unknown>>
+  blockers: Array<Record<string, unknown>>
+  risks: string[]
+  verification: Record<string, unknown>
   created_at: string
+  updated_at: string
   completed_at: string | null
 }
 

@@ -1,0 +1,3 @@
+# 运行时自动生成：
+# agents-manager.db — 运行、事件、RAG、记忆、看板
+# checkpoints.db    — LangGraph 状态快照

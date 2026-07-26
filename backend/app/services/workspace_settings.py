@@ -10,7 +10,7 @@ from app.services.config_reader import ConfigReader
 
 
 class WorkspaceSettings:
-    """工作空间根目录配置。文件为 .agent-studio/workspace.yaml。"""
+    """工作空间根目录配置。文件为 .workspace/<project>/workspace.yaml。"""
 
     def __init__(
         self,
@@ -24,7 +24,7 @@ class WorkspaceSettings:
     def current(self, project_id: str = "") -> Path:
         with self._lock:
             if self.config_reader:
-                reader = self.config_reader.for_project(project_id) if project_id else self.config_reader
+                reader = self.config_reader.for_project(project_id) if project_id else self.config_reader.current()
                 data = reader.read_setting("workspace")
                 if data:
                     try:
@@ -37,7 +37,7 @@ class WorkspaceSettings:
         root = self._validate(value)
         with self._lock:
             if self.config_reader:
-                reader = self.config_reader.for_project(project_id) if project_id else self.config_reader
+                reader = self.config_reader.for_project(project_id) if project_id else self.config_reader.current()
                 reader._ensure_dirs()
                 reader.write_setting("workspace", {"path": str(root)})
         return root

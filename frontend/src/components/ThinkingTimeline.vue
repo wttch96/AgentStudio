@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, onUpdated, ref } from 'vue'
 import type { ConversationTurn, MemoryCompactionRecord, PlanTask, RunEvent } from '../types'
 
 const props = defineProps<{
@@ -14,18 +14,87 @@ const collapsedWaveKeys = ref<Set<string>>(new Set())
 const collapsedTaskIds = ref<Set<string>>(new Set())
 const collapsedConvIds = ref<Set<string>>(new Set())
 let clock: number | undefined
+let connectorResizeObserver: ResizeObserver | undefined
+
+interface ConnectorLayout {
+  width: number
+  railXs: number[]
+}
+
+const laneGroupRefs = new Map<number, HTMLElement>()
+const connectorLayouts = ref<Record<number, ConnectorLayout>>({})
+
+function measureConnectorLayouts() {
+  const next: Record<number, ConnectorLayout> = {}
+  for (const [level, group] of laneGroupRefs) {
+    if (!group.offsetParent) continue
+    const lanes = [...group.querySelectorAll<HTMLElement>(':scope > .agent-lane')]
+    const lastLane = lanes.at(-1)
+    next[level] = {
+      width: Math.max(
+        group.clientWidth,
+        lastLane ? lastLane.offsetLeft + lastLane.offsetWidth : 0,
+      ),
+      railXs: lanes.map(lane => lane.offsetLeft + 28),
+    }
+  }
+  if (JSON.stringify(next) !== JSON.stringify(connectorLayouts.value)) {
+    connectorLayouts.value = next
+  }
+}
+
+function setLaneGroupRef(level: number, element: unknown) {
+  const previous = laneGroupRefs.get(level)
+  if (previous) connectorResizeObserver?.unobserve(previous)
+  if (!(element instanceof HTMLElement)) {
+    laneGroupRefs.delete(level)
+    return
+  }
+  laneGroupRefs.set(level, element)
+  connectorResizeObserver?.observe(element)
+  void nextTick(measureConnectorLayouts)
+}
+
+function connectorRailX(level: number, index: number) {
+  return connectorLayouts.value[level]?.railXs[index] ?? 28
+}
+
+function splitConnectorPath(level: number, index: number) {
+  const x = connectorRailX(level, index)
+  return `M 0 0 V 6 Q 0 14 8 14 H ${x - 8} Q ${x} 14 ${x} 22 V 36`
+}
+
+function mergeConnectorPath(level: number, index: number) {
+  const x = connectorRailX(level, index)
+  return `M ${x} 0 V 6 Q ${x} 14 ${x - 8} 14 H 8 Q 0 14 0 22 V 28`
+}
 
 // ==================== Clock ====================
 onMounted(() => {
   clock = window.setInterval(() => { now.value = Date.now() }, 1000)
+  connectorResizeObserver = new ResizeObserver(measureConnectorLayouts)
+  laneGroupRefs.forEach(group => connectorResizeObserver?.observe(group))
+  void nextTick(measureConnectorLayouts)
 })
-onBeforeUnmount(() => window.clearInterval(clock))
+onUpdated(measureConnectorLayouts)
+onBeforeUnmount(() => {
+  window.clearInterval(clock)
+  connectorResizeObserver?.disconnect()
+})
 
 // ==================== Event filtering ====================
 const agentEventTypes = new Set([
   'agent.started', 'agent.message', 'tool.started', 'skill.loaded',
-  'agent.completed', 'agent.failed',
+  'agent.retrying', 'agent.completed', 'agent.failed',
 ])
+
+const timelineEvents = computed(() => {
+  const latestPlan = [...props.events]
+    .reverse()
+    .find(event => event.type === 'plan.created')
+  const runId = latestPlan?.run_id || props.events.at(-1)?.run_id
+  return runId ? props.events.filter(event => event.run_id === runId) : props.events
+})
 
 // ==================== Start events (conversation + plan) ====================
 const conversationEntries = computed(() => {
@@ -38,31 +107,31 @@ const conversationEntries = computed(() => {
 })
 
 const startEvents = computed(() =>
-  props.events.filter((event) =>
+  timelineEvents.value.filter((event) =>
     ['run.started', 'workspace.discovery_started', 'planner.started', 'planner.bypassed'].includes(event.type),
   ),
 )
 
 const planEvents = computed(() =>
-  props.events.filter((event) => event.type === 'plan.created'),
+  timelineEvents.value.filter((event) => event.type === 'plan.created'),
 )
 
 const decisionEvents = computed(() =>
-  props.events.filter((event) =>
+  timelineEvents.value.filter((event) =>
     ['brain.contract_created'].includes(event.type),
   ),
 )
 
 const finishEvents = computed(() =>
-  props.events.filter((event) =>
+  timelineEvents.value.filter((event) =>
     ['brain.synthesizing', 'run.cancel_requested', 'run.completed', 'run.cancelled', 'run.failed', 'run.summary'].includes(event.type),
   ),
 )
 
 const planningActive = computed(() => {
-  const started = [...props.events].reverse().find((event) => event.type === 'planner.started')
+  const started = [...timelineEvents.value].reverse().find((event) => event.type === 'planner.started')
   if (!started) return false
-  return !props.events.some(
+  return !timelineEvents.value.some(
     (event) =>
       event.sequence > started.sequence
       && ['plan.created', 'run.failed', 'run.cancelled'].includes(event.type),
@@ -105,7 +174,7 @@ const waves = computed(() => {
 
 // ==================== Helpers ====================
 function taskEvents(taskId: string) {
-  return props.events.filter(
+  return timelineEvents.value.filter(
     (event) => event.task_id === taskId && agentEventTypes.has(event.type),
   )
 }
@@ -265,6 +334,10 @@ function detail(event: RunEvent) {
   if (event.type === 'planner.bypassed') return '已跳过 DeepSeek 规划'
   if (event.type === 'workspace.discovery_started') return '专业 Agent 将搜索与目标相关的项目'
   if (event.type === 'brain.contract_created') return '前端、后端实施节点将共享同一份接口定义'
+  if (event.type === 'agent.retrying') {
+    const attempt = Number(payload.attempt || 1)
+    return `第 ${attempt} 次恢复 · 从原会话继续，不会重跑节点`
+  }
   if (['run.completed', 'run.cancelled'].includes(event.type)) return ''
   if (typeof payload.text === 'string') return payload.text
   if (typeof payload.summary === 'string') return payload.summary
@@ -277,6 +350,7 @@ function detail(event: RunEvent) {
 }
 
 function icon(event: RunEvent) {
+  if (event.type === 'agent.retrying') return '↻'
   if (event.type.includes('tool')) return '⌘'
   if (event.type.includes('skill')) return '◆'
   if (event.type.includes('failed')) return '!'
@@ -287,6 +361,7 @@ function icon(event: RunEvent) {
 }
 
 function itemTitle(item: TimelineItem) {
+  if (item.event.type === 'agent.retrying') return '连接中断，正在恢复会话'
   if (item.event.type === 'tool.started') {
     const tool = typeof item.event.payload.tool === 'string' ? item.event.payload.tool : '工具'
     const base = item.events.length > 1 ? `调用 ${tool} ×${item.events.length}` : `调用 ${tool}`
@@ -314,7 +389,16 @@ function itemSequence(item: TimelineItem) {
 
 function failureReason(event: RunEvent) {
   const error = event.payload.error
-  if (typeof error === 'string' && error.trim()) return error
+  if (typeof error === 'string' && error.trim()) {
+    if (error.includes('Claude Code returned an error result: success') && event.task_id) {
+      const apiErrorEvent = [...taskEvents(event.task_id)].reverse().find(
+        candidate => candidate.type === 'agent.message'
+          && String(candidate.payload.text || '').trim().toLowerCase().startsWith('api error:'),
+      )
+      if (apiErrorEvent) return String(apiErrorEvent.payload.text)
+    }
+    return error
+  }
   const summary = event.payload.summary
   if (typeof summary === 'string' && summary.trim()) return summary
   return '执行器没有返回进一步的错误信息。'
@@ -324,6 +408,12 @@ function failureCategory(event: RunEvent) {
   const reason = failureReason(event).toLowerCase()
   if (reason.includes('max_turn') || reason.includes('最大交互轮次')) return '交互轮次耗尽'
   if (reason.includes('timeout') || reason.includes('超时')) return '执行超时'
+  if (
+    reason.includes('connection closed')
+    || reason.includes('mid-response')
+    || reason.includes('请求中断')
+    || reason.includes('upstream')
+  ) return '模型连接中断'
   if (reason.includes('permission') || reason.includes('权限')) return '工具权限失败'
   if (reason.includes('auth') || reason.includes('鉴权')) return '模型鉴权失败'
   return 'Agent 执行错误'
@@ -371,14 +461,15 @@ function convLabel(isUser: boolean) {
           </div>
           <div class="conv-actions">
             <span class="conv-seq">{{ new Date(turn.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) }}</span>
-            <button
-              type="button"
+            <ElButton
+              text
+              circle
               class="conv-toggle-btn"
               @click="collapsedConvIds.has(turn.id) ? collapsedConvIds.delete(turn.id) : collapsedConvIds.add(turn.id); collapsedConvIds = new Set(collapsedConvIds)"
               :title="collapsedConvIds.has(turn.id) ? '展开' : '折叠'"
             >
               {{ collapsedConvIds.has(turn.id) ? '⌄' : '⌃' }}
-            </button>
+            </ElButton>
           </div>
         </article>
       </div>
@@ -433,12 +524,17 @@ function convLabel(isUser: boolean) {
     </div>
 
     <!-- ============ Phase 4: 执行波浪 + 记忆压缩 ============ -->
-    <div v-for="wave in waves" :key="wave.level" class="parallel-wave">
+    <div
+      v-for="wave in waves"
+      :key="wave.level"
+      class="parallel-wave"
+      :class="wave.tasks.length > 1 ? 'is-concurrent' : 'is-serial'"
+    >
       <!-- Wave start -->
       <div class="flow-junction split-junction">
         <span class="junction-symbol" aria-hidden="true">⑂</span>
         <div class="junction-copy">
-          <strong>LangGraph 第 {{ wave.level + 1 }} 轮分流</strong>
+          <strong>LangGraph 第 {{ wave.level + 1 }} 轮{{ wave.tasks.length > 1 ? '并发分流' : '执行' }}</strong>
           <small>
             {{ wave.tasks.length }} 个节点{{ wave.tasks.length > 1 ? '并行执行' : '开始执行' }}
             <template v-if="waveStartTime(wave.tasks)"> · {{ waveStartTime(wave.tasks) }}</template>
@@ -458,7 +554,34 @@ function convLabel(isUser: boolean) {
       <div
         v-show="!isWaveCollapsed(wave.tasks)"
         class="agent-lanes"
+        :ref="element => setLaneGroupRef(wave.level, element)"
       >
+        <svg
+          v-if="wave.tasks.length > 1 && connectorLayouts[wave.level]"
+          class="parallel-connectors split-connectors"
+          :width="connectorLayouts[wave.level].width"
+          height="36"
+          aria-hidden="true"
+        >
+          <path
+            v-for="(_, index) in wave.tasks"
+            :key="`split-${index}`"
+            :d="splitConnectorPath(wave.level, index)"
+          />
+        </svg>
+        <svg
+          v-if="wave.tasks.length > 1 && connectorLayouts[wave.level]"
+          class="parallel-connectors merge-connectors"
+          :width="connectorLayouts[wave.level].width"
+          height="28"
+          aria-hidden="true"
+        >
+          <path
+            v-for="(_, index) in wave.tasks"
+            :key="`merge-${index}`"
+            :d="mergeConnectorPath(wave.level, index)"
+          />
+        </svg>
         <article
           v-for="task in wave.tasks"
           :key="task.id"
@@ -474,14 +597,15 @@ function convLabel(isUser: boolean) {
             </div>
             <div class="lane-actions">
               <span class="lane-status">{{ taskStatus(task.id) }}</span>
-              <button
+              <ElButton
+                text
+                circle
                 class="lane-collapse-button"
-                type="button"
                 :aria-expanded="!isLaneCollapsed(task.id)"
                 @click="toggleLane(task.id)"
               >
                 {{ isLaneCollapsed(task.id) ? '⌄' : '⌃' }}
-              </button>
+              </ElButton>
             </div>
           </header>
 
@@ -525,15 +649,16 @@ function convLabel(isUser: boolean) {
                   </div>
                   <pre>{{ failureReason(item.event) }}</pre>
                 </div>
-                <details v-if="item.event.type === 'tool.started'" class="tool-call-details">
-                  <summary>查看 {{ item.events.length }} 次调用参数</summary>
+                <ElCollapse v-if="item.event.type === 'tool.started'" class="tool-call-details">
+                  <ElCollapseItem :title="`查看 ${item.events.length} 次调用参数`" :name="item.event.sequence">
                   <div class="tool-call-list">
                     <section v-for="(call, index) in item.events" :key="call.sequence">
                       <span>第 {{ index + 1 }} 次 · #{{ call.sequence }}</span>
                       <pre>{{ JSON.stringify(call.payload.input ?? {}, null, 2).slice(0, 400) }}{{ JSON.stringify(call.payload.input ?? {}).length > 400 ? '\n…(截断)' : '' }}</pre>
                     </section>
                   </div>
-                </details>
+                  </ElCollapseItem>
+                </ElCollapse>
               </div>
             </article>
             <div v-if="taskEvents(task.id).length === 0" class="lane-waiting">
@@ -547,7 +672,7 @@ function convLabel(isUser: boolean) {
       <div class="flow-junction merge-junction" :class="waveStatus(wave.tasks)">
         <span class="junction-symbol" aria-hidden="true">⌄</span>
         <div>
-          <strong>并行结果汇流</strong>
+          <strong>{{ wave.tasks.length > 1 ? '并发结果汇流' : '节点执行结束' }}</strong>
           <small>{{ waveSummary(wave.tasks) }}</small>
         </div>
       </div>
@@ -614,7 +739,7 @@ function convLabel(isUser: boolean) {
     </div>
 
     <!-- Memory extraction -->
-    <div v-if="events.some(e => e.type === 'memory.extracted')" class="memory-extraction-entry">
+    <div v-if="timelineEvents.some(e => e.type === 'memory.extracted')" class="memory-extraction-entry">
       <span class="memory-extract-icon" aria-hidden="true">&#x1F4BE;</span>
       <div>
         <strong>长期记忆已保存</strong>
@@ -626,15 +751,32 @@ function convLabel(isUser: boolean) {
 
 <style scoped>
 .thinking-timeline {
+  position: relative;
   margin-bottom: 1rem;
+  padding: 0 12px 12px 0;
+}
+
+.thinking-timeline::before {
+  position: absolute;
+  z-index: 0;
+  top: 34px;
+  bottom: 20px;
+  left: 34px;
+  width: 2px;
+  border-radius: 2px;
+  background: rgba(100, 210, 255, .48);
+  content: "";
+  pointer-events: none;
 }
 
 .section-title {
+  position: relative;
+  z-index: 1;
   display: flex;
   justify-content: space-between;
   margin-bottom: 0.5rem;
   color: var(--secondary);
-  font-size: 0.625rem;
+  font-size: var(--ui-font-xs);
 }
 
 /* Phase divider */
@@ -643,18 +785,20 @@ function convLabel(isUser: boolean) {
 }
 
 .phase-divider {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.5rem 0 0.35rem 0;
+  padding: 0.5rem 0 0.35rem 8px;
 }
 
 .phase-mark {
-  font-size: 1rem;
+  font-size: var(--ui-font-lg);
 }
 
 .phase-label {
-  font-size: 0.7rem;
+  font-size: var(--ui-font-xs);
   font-weight: 650;
   color: var(--label);
 }
@@ -678,7 +822,7 @@ function convLabel(isUser: boolean) {
 
 .conv-seq {
   color: var(--tertiary);
-  font-size: 0.55rem;
+  font-size: var(--ui-font-xs);
 }
 
 .conv-toggle-btn {
@@ -691,7 +835,7 @@ function convLabel(isUser: boolean) {
   background: rgba(118, 118, 128, 0.15);
   color: var(--secondary);
   cursor: pointer;
-  font-size: 0.6rem;
+  font-size: var(--ui-font-xs);
   line-height: 1;
 }
 
@@ -709,21 +853,23 @@ function convLabel(isUser: boolean) {
 }
 
 .conv-resp-label {
-  font-size: 0.55rem;
+  font-size: var(--ui-font-xs);
   color: var(--green);
   font-weight: 600;
 }
 
 .conv-response-preview p {
   margin: 0.2rem 0 0;
-  font-size: 0.65rem;
+  font-size: var(--ui-font-xs);
   color: var(--secondary);
   line-height: 1.4;
 }
 
 /* Task params in lane */
 .task-params {
-  padding: 0.4rem 0.75rem;
+  position: relative;
+  z-index: 1;
+  padding: 0.4rem 0.75rem 0.4rem 44px;
   background: rgba(0, 0, 0, 0.15);
   border-bottom: 1px solid var(--separator-soft);
 }
@@ -732,7 +878,7 @@ function convLabel(isUser: boolean) {
   display: flex;
   gap: 0.4rem;
   margin-bottom: 0.2rem;
-  font-size: 0.55rem;
+  font-size: var(--ui-font-xs);
   line-height: 1.4;
 }
 
@@ -764,20 +910,20 @@ function convLabel(isUser: boolean) {
 }
 
 .memory-dot {
-  font-size: 0.9rem;
+  font-size: var(--ui-font-md);
   flex-shrink: 0;
   margin-top: 1px;
 }
 
 .memory-compaction-entry strong {
-  font-size: 0.65rem;
+  font-size: var(--ui-font-xs);
   font-weight: 600;
   color: var(--label);
   display: block;
 }
 
 .memory-compaction-entry small {
-  font-size: 0.55rem;
+  font-size: var(--ui-font-xs);
   color: var(--secondary);
   display: block;
   margin-top: 0.15rem;
@@ -796,19 +942,19 @@ function convLabel(isUser: boolean) {
 }
 
 .memory-extract-icon {
-  font-size: 0.9rem;
+  font-size: var(--ui-font-md);
   flex-shrink: 0;
 }
 
 .memory-extraction-entry strong {
-  font-size: 0.65rem;
+  font-size: var(--ui-font-xs);
   font-weight: 600;
   color: var(--label);
   display: block;
 }
 
 .memory-extraction-entry small {
-  font-size: 0.55rem;
+  font-size: var(--ui-font-xs);
   color: var(--secondary);
   display: block;
   margin-top: 0.15rem;
@@ -821,7 +967,7 @@ function convLabel(isUser: boolean) {
 }
 
 .result-stats {
-  font-size: 0.6rem;
+  font-size: var(--ui-font-xs);
   color: var(--green);
   margin-top: 0.25rem;
 }
@@ -842,13 +988,7 @@ function convLabel(isUser: boolean) {
 .thinking-timeline .flow-start::before,
 .thinking-timeline .flow-decision::before,
 .thinking-timeline .flow-finish::before {
-  position: absolute;
-  top: 15px;
-  bottom: -20px;
-  left: 15px;
-  width: 1px;
-  background: var(--separator-soft);
-  content: "";
+  content: none;
 }
 
 .thinking-timeline .flow-finish::before {
@@ -861,39 +1001,47 @@ function convLabel(isUser: boolean) {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
   min-height: 44px;
-  padding: 8px 0 14px;
+  padding: 8px 0 14px 16px;
+}
+
+.thinking-timeline .orchestrator-event::before {
+  content: none;
+}
+
+.thinking-timeline .orchestrator-event::after {
+  content: none;
 }
 
 .thinking-timeline .flow-event-icon {
   position: absolute;
-  top: 5px;
-  left: -40px;
+  top: 7px;
+  left: -17px;
   display: grid;
   place-items: center;
-  width: 31px;
-  height: 31px;
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
   background: var(--blue-soft);
   color: #64d2ff;
-  font-size: 0.6875rem;
+  font-size: var(--ui-font-xs);
   font-weight: 650;
-  box-shadow: 0 0 0 1px rgba(10,132,255,.25);
+  box-shadow: 0 0 0 1px rgba(10,132,255,.3), 0 0 0 3px var(--background, #000);
 }
 
 .thinking-timeline .orchestrator-event strong {
-  font-size: 0.6875rem;
+  font-size: var(--ui-font-xs);
   font-weight: 600;
 }
 
 .thinking-timeline .orchestrator-event > span {
   color: var(--tertiary);
-  font-size: 0.5625rem;
+  font-size: var(--ui-font-xs);
 }
 
 .thinking-timeline .orchestrator-event p {
   margin: 5px 0 0;
   color: var(--secondary);
-  font-size: 0.625rem;
+  font-size: var(--ui-font-xs);
   line-height: 1.55;
   white-space: pre-wrap;
 }
@@ -949,31 +1097,34 @@ function convLabel(isUser: boolean) {
   width: max-content;
   max-width: calc(100% - 40px);
   min-height: 42px;
-  margin-left: 40px;
+  margin-left: 52px;
   align-items: center;
   gap: 10px;
 }
 
 .thinking-timeline .flow-junction::before {
-  position: absolute;
-  top: -18px;
-  bottom: 50%;
-  left: -25px;
-  width: 1px;
-  background: var(--separator-soft);
-  content: "";
+  content: none;
+}
+
+.thinking-timeline .flow-junction::after {
+  content: none;
 }
 
 .thinking-timeline .junction-symbol {
+  position: relative;
+  z-index: 1;
+  margin-left: -29px;
+  box-shadow:
+    inset 0 0 0 1px rgba(191,90,242,.30),
+    0 0 0 3px var(--background, #000);
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 9px;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
   background: rgba(191,90,242,.14);
   color: #da8fff;
-  font-size: 0.875rem;
-  box-shadow: inset 0 0 0 1px rgba(191,90,242,.22);
+  font-size: var(--ui-font-xs);
 }
 
 .thinking-timeline .flow-junction .junction-copy {
@@ -984,13 +1135,13 @@ function convLabel(isUser: boolean) {
 }
 
 .thinking-timeline .flow-junction strong {
-  font-size: 0.625rem;
+  font-size: var(--ui-font-xs);
   font-weight: 620;
 }
 
 .thinking-timeline .flow-junction small {
   color: var(--tertiary);
-  font-size: 0.5rem;
+  font-size: var(--ui-font-xs);
 }
 
 .thinking-timeline .agent-lanes {
@@ -1001,22 +1152,55 @@ function convLabel(isUser: boolean) {
   align-items: start;
   gap: 10px;
   overflow-x: auto;
-  padding: 21px 0 18px;
+  margin-left: 14px;
+  padding: 24px 0 20px 48px;
   scrollbar-width: thin;
 }
 
-.thinking-timeline .agent-lanes::before {
+.thinking-timeline .is-serial .agent-lanes {
+  grid-auto-flow: row;
+  grid-template-columns: minmax(0, 1fr);
+  margin-left: 8px;
+  padding: 4px 0 12px;
+  overflow: visible;
+}
+
+.thinking-timeline .is-concurrent .agent-lanes {
+  align-items: stretch;
+  margin-left: 35px;
+  padding: 36px 0 28px 18px;
+}
+
+.thinking-timeline .parallel-connectors {
   position: absolute;
+  left: 0;
+  z-index: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.thinking-timeline .split-connectors {
   top: 0;
-  right: max(110px, calc(50% / 3));
-  left: max(110px, calc(50% / 3));
-  height: 1px;
-  background: var(--separator);
-  content: "";
+  height: 36px;
+}
+
+.thinking-timeline .merge-connectors {
+  bottom: 0;
+  height: 28px;
+}
+
+.thinking-timeline .parallel-connectors path {
+  fill: none;
+  stroke: rgba(100, 210, 255, .5);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
 }
 
 .thinking-timeline .agent-lane {
   position: relative;
+  z-index: 1;
   min-width: 220px;
   overflow: hidden;
   border: 1px solid var(--separator-soft);
@@ -1025,14 +1209,25 @@ function convLabel(isUser: boolean) {
   box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
 }
 
+.thinking-timeline .is-concurrent .agent-lane {
+  height: 100%;
+}
+
 .thinking-timeline .agent-lane::before {
+  content: none;
+}
+
+.thinking-timeline .agent-lane::after {
   position: absolute;
-  top: -22px;
-  left: 50%;
-  width: 1px;
-  height: 22px;
-  background: var(--separator);
+  z-index: 4;
+  top: 26px;
+  bottom: 0;
+  left: 27px;
+  width: 2px;
+  border-radius: 2px;
+  background: rgba(100, 210, 255, .30);
   content: "";
+  pointer-events: none;
 }
 
 .thinking-timeline .agent-lane.running {
@@ -1049,6 +1244,8 @@ function convLabel(isUser: boolean) {
 }
 
 .thinking-timeline .lane-header {
+  position: relative;
+  z-index: 3;
   display: grid;
   grid-template-columns: 32px minmax(0, 1fr) auto;
   align-items: center;
@@ -1059,6 +1256,8 @@ function convLabel(isUser: boolean) {
 }
 
 .thinking-timeline .lane-avatar {
+  position: relative;
+  z-index: 5;
   display: grid;
   place-items: center;
   width: 30px;
@@ -1066,7 +1265,7 @@ function convLabel(isUser: boolean) {
   border-radius: 9px;
   background: linear-gradient(145deg,#48484a,#2c2c2e);
   color: var(--label);
-  font-size: 0.625rem;
+  font-size: var(--ui-font-xs);
   font-weight: 650;
 }
 
@@ -1083,7 +1282,7 @@ function convLabel(isUser: boolean) {
 
 .thinking-timeline .lane-header strong {
   overflow: hidden;
-  font-size: 0.5625rem;
+  font-size: var(--ui-font-xs);
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1092,7 +1291,7 @@ function convLabel(isUser: boolean) {
 .thinking-timeline .lane-header small {
   overflow: hidden;
   color: var(--secondary);
-  font-size: 0.5rem;
+  font-size: var(--ui-font-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1113,7 +1312,7 @@ function convLabel(isUser: boolean) {
   padding: 3px 5px;
   background: rgba(118,118,128,.18);
   color: var(--tertiary);
-  font-size: 0.4375rem;
+  font-size: var(--ui-font-xs);
   text-transform: uppercase;
 }
 
@@ -1127,7 +1326,7 @@ function convLabel(isUser: boolean) {
   background: rgba(118,118,128,.15);
   color: var(--secondary);
   cursor: pointer;
-  font-size: 0.625rem;
+  font-size: var(--ui-font-xs);
   line-height: 1;
 }
 
@@ -1156,23 +1355,18 @@ function convLabel(isUser: boolean) {
   min-height: 90px;
   max-height: 420px;
   overflow-y: auto;
-  padding: 12px;
+  padding: 12px 12px 12px 17px;
 }
 
 .thinking-timeline .lane-events::before {
-  position: absolute;
-  top: 17px;
-  bottom: 17px;
-  left: 23px;
-  width: 1px;
-  background: var(--separator-soft);
-  content: "";
+  content: none;
 }
 
 .thinking-timeline .lane-event {
   position: relative;
   display: grid;
-  grid-template-columns: 23px minmax(0, 1fr);
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: start;
   gap: 8px;
   padding-bottom: 13px;
 }
@@ -1182,16 +1376,16 @@ function convLabel(isUser: boolean) {
 }
 
 .thinking-timeline .lane-event-marker {
-  z-index: 1;
+  z-index: 5;
   display: grid;
   place-items: center;
   width: 21px;
   height: 21px;
-  border-radius: 7px;
-  background: var(--surface-raised);
+  border-radius: 50%;
+  background: var(--surface-raised, #242426);
   color: var(--secondary);
-  font-size: 0.5rem;
-  box-shadow: 0 0 0 1px var(--separator-soft);
+  font-size: var(--ui-font-xs);
+  box-shadow: 0 0 0 2px var(--surface-raised, #242426), 0 0 0 3px rgba(100, 210, 255, .22);
 }
 
 .thinking-timeline .lane-event-marker.agent-completed {
@@ -1216,13 +1410,13 @@ function convLabel(isUser: boolean) {
 }
 
 .thinking-timeline .lane-event-body strong {
-  font-size: 0.5rem;
+  font-size: var(--ui-font-xs);
   font-weight: 600;
 }
 
 .thinking-timeline .lane-event-body span {
   color: var(--tertiary);
-  font-size: 0.4375rem;
+  font-size: var(--ui-font-xs);
 }
 
 .thinking-timeline .lane-event-body p {
@@ -1230,7 +1424,7 @@ function convLabel(isUser: boolean) {
   overflow: hidden;
   margin: 4px 0 0;
   color: var(--secondary);
-  font-size: 0.5625rem;
+  font-size: var(--ui-font-xs);
   line-height: 1.5;
   white-space: pre-wrap;
   -webkit-box-orient: vertical;
@@ -1240,7 +1434,7 @@ function convLabel(isUser: boolean) {
 .thinking-timeline .lane-event-body details {
   margin-top: 5px;
   color: var(--secondary);
-  font-size: 0.5rem;
+  font-size: var(--ui-font-xs);
 }
 
 .thinking-timeline .lane-event-body summary {
@@ -1256,7 +1450,7 @@ function convLabel(isUser: boolean) {
   border-radius: 8px;
   background: #111113;
   color: rgba(235,235,245,.76);
-  font: 0.5rem/1.55 ui-monospace,"SFMono-Regular",Menlo,monospace;
+  font: var(--ui-font-xs)/1.55 ui-monospace,"SFMono-Regular",Menlo,monospace;
   white-space: pre-wrap;
 }
 
@@ -1303,7 +1497,7 @@ function convLabel(isUser: boolean) {
 }
 
 .thinking-timeline .tool-call-list span {
-  font-size: 0.45rem;
+  font-size: var(--ui-font-xs);
   color: var(--tertiary);
 }
 
@@ -1313,7 +1507,7 @@ function convLabel(isUser: boolean) {
   gap: 0.5rem;
   padding: 1rem;
   color: var(--tertiary);
-  font-size: 0.55rem;
+  font-size: var(--ui-font-xs);
 }
 
 .thinking-timeline .lane-waiting span {

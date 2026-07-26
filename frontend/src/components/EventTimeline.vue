@@ -407,16 +407,17 @@ function itemSequence(item: TimelineItem) {
             </div>
             <div class="lane-actions">
               <span class="lane-status">{{ taskStatus(task.id) }}</span>
-              <button
+              <ElButton
+                text
+                circle
                 class="lane-collapse-button"
-                type="button"
                 :aria-expanded="!isLaneCollapsed(task.id)"
                 :aria-controls="`lane-events-${task.id}`"
                 :title="isLaneCollapsed(task.id) ? '展开泳道' : '折叠泳道'"
                 @click="toggleLane(task.id)"
               >
                 {{ isLaneCollapsed(task.id) ? '⌄' : '⌃' }}
-              </button>
+              </ElButton>
             </div>
           </header>
 
@@ -446,15 +447,16 @@ function itemSequence(item: TimelineItem) {
                   </div>
                   <pre>{{ failureReason(item.event) }}</pre>
                 </div>
-                <details v-if="item.event.type === 'tool.started'" class="tool-call-details">
-                  <summary>查看 {{ item.events.length }} 次调用参数</summary>
+                <ElCollapse v-if="item.event.type === 'tool.started'" class="tool-call-details">
+                  <ElCollapseItem :title="`查看 ${item.events.length} 次调用参数`" :name="item.event.sequence">
                   <div class="tool-call-list">
                     <section v-for="(call, index) in item.events" :key="call.sequence">
                       <span>第 {{ index + 1 }} 次 · #{{ call.sequence }}</span>
                       <pre>{{ JSON.stringify(call.payload.input ?? {}, null, 2).slice(0, 400) }}{{ JSON.stringify(call.payload.input ?? {}).length > 400 ? '\n…(截断)' : '' }}</pre>
                     </section>
                   </div>
-                </details>
+                  </ElCollapseItem>
+                </ElCollapse>
               </div>
             </article>
             <div v-if="taskEvents(task.id).length === 0" class="lane-waiting">

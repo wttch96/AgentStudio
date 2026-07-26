@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import uuid
+import re
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from app.storage.sqlite_store import SQLiteStore
+from app.domain.models import ProjectAgent
 
 
 # 内置 Agent 模板
@@ -181,19 +184,75 @@ class ProjectManager:
 
     # ── 项目 CRUD (file-backed) ──
 
-    def create_project(self, name: str, root_dir: str, description: str = "") -> dict:
+    def create_project(
+        self,
+        name: str,
+        root_dir: str,
+        description: str = "",
+        project_name: str | None = None,
+    ) -> dict:
         root = Path(root_dir).resolve()
         if not root.is_dir():
             raise ValueError(f"目录不存在: {root}")
-        # 生成项目 ID，创建 .workspace/<id>/ 目录
-        project_id = uuid.uuid4().hex
+        project_id = project_name or self._slugify_project_name(name)
+        project_id = self.config_reader.validate_project_id(project_id)
+        project_dir = self.config_reader.workspace_root / ".workspace" / project_id
+        if (project_dir / "project.yaml").exists():
+            raise ValueError(f"项目标识已存在: {project_id}")
         data = {"id": project_id, "name": name, "description": description, "root_dir": str(root)}
         if self.config_reader:
             project_cfg = self.config_reader.for_project(project_id)
             project_cfg.save_project(data)
-            # 确保项目目录结构存在
             project_cfg._ensure_dirs()
+            project_cfg.write_setting("workspace", {"path": str(root)})
+            project_cfg.write_setting("scheduler", {
+                "max_concurrent_agents": 3,
+                "recursion_limit": 100,
+                "agent_max_turns": 12,
+                "agent_timeout_seconds": 900,
+            })
+            project_cfg.write_setting("memory", {
+                "compress_trigger_tokens": 8000,
+                "compress_keep_recent": 20,
+                "summarizer_model": "deepseek-v4-pro",
+                "max_conversation_turns": 100,
+                "session_archive_after_hours": 24,
+                "importance_decay_rate": 0.95,
+            })
+            project_template = self.config_reader.workspace_root / "templates" / "project"
+            brain_template = project_template / "brain.yaml"
+            if brain_template.is_file():
+                import yaml
+                project_cfg.write_setting(
+                    "brain",
+                    yaml.safe_load(brain_template.read_text(encoding="utf-8")) or {},
+                )
+            for kind, destination in (
+                ("agents", project_cfg.agents_dir),
+                ("skills", project_cfg.skills_dir),
+                ("flows", project_cfg.flows_dir),
+            ):
+                source_dir = project_template / kind
+                if source_dir.is_dir():
+                    for source in source_dir.glob("*.yaml"):
+                        target = destination / source.name
+                        if not target.exists():
+                            shutil.copy2(source, target)
+            (project_dir / "db").mkdir(parents=True, exist_ok=True)
+            flow_templates = self.config_reader.workspace_root / "templates" / "flows"
+            if flow_templates.is_dir():
+                for source in flow_templates.glob("*.yaml"):
+                    target = project_cfg.flows_dir / source.name
+                    if not target.exists():
+                        shutil.copy2(source, target)
         return data
+
+    @staticmethod
+    def _slugify_project_name(name: str) -> str:
+        slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+        if slug and slug[0].isalpha():
+            return slug[:64]
+        return f"project-{uuid.uuid4().hex[:8]}"
 
     def delete_project(self, project_id: str) -> bool:
         if self.config_reader:
@@ -220,7 +279,17 @@ class ProjectManager:
                   custom_prompt: str = "", display_name: str = "",
                   name: str = "", agent_type: str = "",
                   tools: list | None = None, skills: list | None = None,
-                  description: str = "", model: str = "") -> dict | None:
+                  description: str = "", model: str = "",
+                  role: str = "implementation_agent",
+                  capabilities: list | None = None,
+                  limitations: list | None = None,
+                  preferred_tasks: list | None = None,
+                  forbidden_tasks: list | None = None,
+                  input_contract: dict | None = None,
+                  output_contract: dict | None = None,
+                  dependencies_info: list | None = None,
+                  priority: int = 0,
+                  max_iterations: int = 3) -> dict | None:
         """创建 Agent YAML 文件。可从模板创建，也可手动创建。"""
         if not self.config_reader:
             return None
@@ -245,6 +314,7 @@ class ProjectManager:
                 "name": agent_name,
                 "display_name": display_name or tmpl.get("display_name", agent_name),
                 "description": tmpl.get("description", ""),
+                "role": tmpl.get("role", "implementation_agent"),
                 "agent_type": tmpl.get("agent_type", "claude"),
                 "sub_dir": sub_dir or tmpl.get("sub_dir", ""),
                 "system_prompt": custom_prompt or tmpl.get("system_prompt", ""),
@@ -252,6 +322,15 @@ class ProjectManager:
                 "skills": skills if skills is not None else tmpl.get("skills", []),
                 "sort_order": 0,
                 "model": model or tmpl.get("model", ""),
+                "capabilities": tmpl.get("capabilities", []),
+                "limitations": tmpl.get("limitations", []),
+                "preferred_tasks": tmpl.get("preferred_tasks", []),
+                "forbidden_tasks": tmpl.get("forbidden_tasks", []),
+                "input_contract": tmpl.get("input_contract", {}),
+                "output_contract": tmpl.get("output_contract", {}),
+                "dependencies_info": tmpl.get("dependencies_info", []),
+                "priority": tmpl.get("priority", 0),
+                "max_iterations": tmpl.get("max_iterations", 3),
             }
         else:
             # 手动创建（无模板）
@@ -263,14 +342,31 @@ class ProjectManager:
                 "name": name,
                 "display_name": display_name or name,
                 "description": description or "",
+                "role": role,
                 "agent_type": agent_type,
                 "sub_dir": sub_dir or "",
-                "system_prompt": custom_prompt or "",
+                "system_prompt": custom_prompt or (
+                    f"你是 {display_name or name}，请严格按任务边界执行，并报告产物、风险和验证结果。"
+                ),
                 "tools": tools or [],
                 "skills": skills or [],
                 "sort_order": 0,
                 "model": model or "",
+                "capabilities": capabilities or [],
+                "limitations": limitations or [],
+                "preferred_tasks": preferred_tasks or [],
+                "forbidden_tasks": forbidden_tasks or [],
+                "input_contract": input_contract or {},
+                "output_contract": output_contract or {},
+                "dependencies_info": dependencies_info or [],
+                "priority": priority,
+                "max_iterations": max_iterations,
             }
+        validated = ProjectAgent(project_id=project_id, **data)
+        data = validated.model_dump(
+            exclude={"id", "project_id", "template_id"},
+            exclude_none=True,
+        )
         project_cfg.save_agent(data["name"], data)
         return data
 
@@ -282,11 +378,21 @@ class ProjectManager:
             existing = project_cfg.get_agent(agent_id)
         except Exception:
             return None
-        allowed = {"display_name", "description", "system_prompt", "tools",
-                   "skills", "sub_dir", "sort_order", "model"}
+        allowed = {
+            "display_name", "description", "role", "system_prompt", "tools",
+            "skills", "sub_dir", "sort_order", "model", "capabilities",
+            "limitations", "preferred_tasks", "forbidden_tasks",
+            "input_contract", "output_contract", "dependencies_info",
+            "priority", "max_iterations",
+        }
         for k, v in updates.items():
             if k in allowed and v is not None:
                 existing[k] = v
+        validated = ProjectAgent(project_id=project_id, **existing)
+        existing = validated.model_dump(
+            exclude={"id", "project_id", "template_id"},
+            exclude_none=True,
+        )
         project_cfg.save_agent(agent_id, existing)
         return existing
 

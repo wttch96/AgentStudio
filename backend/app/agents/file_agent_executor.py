@@ -94,8 +94,12 @@ class FileAgentExecutor:
             f"- {r.task_id}: {r.summary}" for r in dependency_results
         ) or "无前置任务"
 
+        from app.prompts.builder import PromptBuilder
         system_prompt = (
-            f"{profile.prompt}\n\n"
+            PromptBuilder().add_common_protocol()
+            .add_role_prompt("file-ops", profile)
+            .add_system_prompt(profile).build_system()
+            + "\n\n"
             f"工作空间根目录：{workspace_root}\n"
             "你是纯文件操作 Agent，负责文件的复制、移动、删除、读取、写入、列表和搜索。\n"
             "所有操作限制在工作空间内。使用工具时传入相对于工作空间的路径。\n"

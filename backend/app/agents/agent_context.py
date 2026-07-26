@@ -72,6 +72,10 @@ class AgentExecutionContext:
             f"  标题: {self.task.title}\n"
             f"  目标: {self.task.objective}\n"
             f"  写入范围: {self.task.write_scope or '只读'}\n"
+            f"  预期产物: {self.task.expected_outputs or '未单独声明'}\n"
+            f"  验收标准: {self.task.acceptance_criteria or '完成目标并提供验证证据'}\n"
+            f"  约束: {self.task.constraints or '无额外约束'}\n"
+            f"  禁止操作: {self.task.forbidden_actions or '遵循系统安全规则'}\n"
             f"  最大迭代次数: {self.max_iterations}\n"
             f"</current_task>"
         )
@@ -171,12 +175,15 @@ class AgentExecutionContext:
         # 输出要求
         output_xml = (
             "<output_schema>\n"
-            "  请尽可能以结构化方式返回结果。至少包含:\n"
+            "  最终回复必须以一个可解析 JSON 对象结束，至少包含:\n"
             "  - status: 执行状态\n"
             "  - summary: 执行摘要\n"
+            "  - artifacts: 真实产物路径或黑板键\n"
             "  - changes: 修改的文件列表\n"
             "  - decisions: 做出的关键决策及其理由\n"
-            "  - 如果发现阻塞、风险或需要协助，明确说明\n"
+            "  - assumptions / risks / dependencies\n"
+            "  - verification: performed、not_performed、result\n"
+            "  - next_actions: 可执行的下一步\n"
             "</output_schema>"
         )
         sections.append(output_xml)
@@ -189,6 +196,14 @@ class AgentExecutionContext:
         注入看板快照、协调契约和引导上下文作为虚拟 AgentResult。
         """
         results: list[AgentResult] = list(self.upstream_results)
+        results.append(
+            AgentResult(
+                task_id="agent-execution-context",
+                agent="system",
+                status="completed",
+                summary=self.to_prompt_xml(),
+            )
+        )
 
         if self.coordination_contract:
             results.append(
@@ -345,4 +360,6 @@ class AgentContextBuilder:
             coordination_contract=coordination_contract,
             guidance=state.get("guidance", ""),
             max_iterations=getattr(agent_profile, "max_iterations", 3) if agent_profile else 3,
+            allowed_tools=task.allowed_tools,
+            forbidden_actions=task.forbidden_actions,
         )

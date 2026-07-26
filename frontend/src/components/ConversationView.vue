@@ -185,9 +185,9 @@ function toolKey(item: TimelineItem): string {
           <span class="conv-type">{{ typeLabel(item.type) }}</span>
           <span v-if="item.agentId" class="conv-agent">{{ item.agentId }}</span>
           <span v-if="item.taskId" class="conv-task">{{ item.taskId }}</span>
-          <button type="button" class="conv-toggle" :class="{ open: !collapsedMsgs.has(idx) }">
+          <ElButton text circle class="conv-toggle" :class="{ open: !collapsedMsgs.has(idx) }">
             {{ collapsedMsgs.has(idx) ? '&#x25B6;' : '&#x25BC;' }}
-          </button>
+          </ElButton>
         </div>
 
         <!-- Content body -->
@@ -207,9 +207,9 @@ function toolKey(item: TimelineItem): string {
             <div class="conv-tool-header" @click="toggleTool(toolKey(item))">
               <span>{{ item.type === 'skill.loaded' ? 'Skill: ' : 'Tool: ' }}</span>
               <code>{{ item.type === 'skill.loaded' ? item.payload.skill : item.payload.tool }}</code>
-              <button type="button" class="conv-toggle small">
+              <ElButton text circle size="small" class="conv-toggle small">
                 {{ collapsedTools.has(toolKey(item)) ? '&#x25B6;' : '&#x25BC;' }}
-              </button>
+              </ElButton>
             </div>
             <pre
               v-if="!collapsedTools.has(toolKey(item))"
@@ -270,7 +270,7 @@ function toolKey(item: TimelineItem): string {
   padding: 0.35rem 0.6rem;
   cursor: pointer;
   user-select: none;
-  font-size: 0.82rem;
+  font-size: var(--ui-font-sm);
   background: var(--bg-secondary, #f8fafc);
 }
 
@@ -281,20 +281,20 @@ function toolKey(item: TimelineItem): string {
 .conv-time {
   font-family: monospace;
   color: var(--text-secondary, #64748b);
-  font-size: 0.75rem;
+  font-size: var(--ui-font-sm);
   min-width: 70px;
 }
 
-.conv-icon { font-size: 0.7rem; }
+.conv-icon { font-size: var(--ui-font-xs); }
 .conv-type { font-weight: 600; }
 .conv-agent {
-  font-size: 0.7rem;
+  font-size: var(--ui-font-xs);
   background: var(--bg-tertiary, #e2e8f0);
   padding: 0 0.35rem;
   border-radius: 3px;
 }
 .conv-task {
-  font-size: 0.7rem;
+  font-size: var(--ui-font-xs);
   color: var(--text-secondary);
   max-width: 160px;
   overflow: hidden;
@@ -306,11 +306,11 @@ function toolKey(item: TimelineItem): string {
   background: none;
   border: none;
   cursor: pointer;
-  font-size: 0.65rem;
+  font-size: var(--ui-font-xs);
   color: var(--text-secondary);
   padding: 0;
 }
-.conv-toggle.small { font-size: 0.55rem; }
+.conv-toggle.small { font-size: var(--ui-font-xs); }
 
 .conv-item-body {
   padding: 0.5rem 0.75rem;
@@ -331,13 +331,13 @@ function toolKey(item: TimelineItem): string {
 
 /* Markdown content */
 .conv-markdown {
-  font-size: 0.88rem;
+  font-size: var(--ui-font-base);
   line-height: 1.6;
   color: var(--text-primary, #1e293b);
 }
 
 .conv-markdown :deep(h1), .conv-markdown :deep(h2), .conv-markdown :deep(h3) {
-  font-size: 1rem;
+  font-size: var(--ui-font-lg);
   margin: 0.5rem 0 0.25rem;
   font-weight: 600;
 }
@@ -350,7 +350,7 @@ function toolKey(item: TimelineItem): string {
   padding: 0.6rem 0.8rem;
   border-radius: 6px;
   overflow-x: auto;
-  font-size: 0.8rem;
+  font-size: var(--ui-font-sm);
   line-height: 1.45;
   margin: 0.4rem 0;
 }
@@ -359,7 +359,7 @@ function toolKey(item: TimelineItem): string {
   background: var(--bg-secondary, #f1f5f9);
   padding: 0.1rem 0.3rem;
   border-radius: 3px;
-  font-size: 0.82rem;
+  font-size: var(--ui-font-sm);
 }
 
 .conv-markdown :deep(pre code) {
@@ -381,7 +381,7 @@ function toolKey(item: TimelineItem): string {
 
 .conv-markdown :deep(table) {
   border-collapse: collapse;
-  font-size: 0.82rem;
+  font-size: var(--ui-font-sm);
 }
 
 .conv-markdown :deep(th), .conv-markdown :deep(td) {
@@ -400,12 +400,12 @@ function toolKey(item: TimelineItem): string {
   align-items: center;
   gap: 0.35rem;
   cursor: pointer;
-  font-size: 0.82rem;
+  font-size: var(--ui-font-sm);
   color: var(--text-secondary);
 }
 
 .conv-tool-header code {
-  font-size: 0.8rem;
+  font-size: var(--ui-font-sm);
   background: #fef3c7;
   padding: 0.1rem 0.4rem;
   border-radius: 3px;
@@ -414,7 +414,7 @@ function toolKey(item: TimelineItem): string {
 
 .conv-tool-input {
   margin-top: 0.35rem;
-  font-size: 0.75rem;
+  font-size: var(--ui-font-sm);
   background: var(--bg-secondary, #f8fafc);
   padding: 0.4rem 0.6rem;
   border-radius: 4px;
@@ -424,7 +424,7 @@ function toolKey(item: TimelineItem): string {
 }
 
 .conv-payload {
-  font-size: 0.78rem;
+  font-size: var(--ui-font-sm);
   color: var(--text-secondary);
   white-space: pre-wrap;
   word-break: break-word;
@@ -447,7 +447,7 @@ function toolKey(item: TimelineItem): string {
   padding: 0.5rem 0.75rem;
   background: #f0fdf4;
   font-weight: 600;
-  font-size: 0.9rem;
+  font-size: var(--ui-font-md);
 }
 
 .conv-final .conv-markdown {

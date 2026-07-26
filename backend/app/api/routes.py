@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import time
+import uuid
 from collections.abc import Iterator
+from datetime import datetime, timezone
 
 from flask import Blueprint, Response, current_app, jsonify, request, stream_with_context
 from pydantic import ValidationError
@@ -60,6 +62,29 @@ def status():
     )
 
 
+@api.get("/deepseek/usage")
+def deepseek_usage():
+    """本地用量兼容端点。
+
+    当前版本不从供应商账单反推用量；没有可归因记录时明确返回零值。
+    """
+    empty = {
+        "input_tokens": 0,
+        "cache_hit_tokens": 0,
+        "cache_miss_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "estimated_cost_usd": "0.00000000",
+    }
+    return jsonify({
+        "local": True,
+        "estimated": True,
+        "today": dict(empty),
+        "month": dict(empty),
+        "total": dict(empty),
+    })
+
+
 @api.get("/agents")
 def agents():
     project_id = request.args.get("project_id", "")
@@ -81,6 +106,7 @@ def get_agent(name: str):
             "name": profile.name,
             "display_name": profile.display_name,
             "description": profile.description,
+            "role": profile.role,
             "prompt": profile.prompt,
             "tools": list(profile.tools),
             "skills": list(profile.skills),
@@ -88,6 +114,15 @@ def get_agent(name: str):
             "sub_dir": profile.sub_dir,
             "is_required": profile.is_required,
             "agent_type": profile.agent_type,
+            "capabilities": list(profile.capabilities),
+            "limitations": list(profile.limitations),
+            "preferred_tasks": list(profile.preferred_tasks),
+            "forbidden_tasks": list(profile.forbidden_tasks),
+            "input_contract": profile.input_contract,
+            "output_contract": profile.output_contract,
+            "dependencies_info": list(profile.dependencies_info),
+            "priority": profile.priority,
+            "max_iterations": profile.max_iterations,
         })
     except ValueError as error:
         return jsonify({"error": str(error)}), 404
@@ -554,6 +589,27 @@ def delete_flow(name: str):
         return jsonify({"error": f"流程 {name} 不存在"}), 404
 
 
+@api.post("/flows/<name>/runs")
+def execute_flow(name: str):
+    """Execute a project Flow without exposing a hidden slash command."""
+    try:
+        flow = services().flow_store.load(name)
+    except KeyError:
+        return jsonify({"error": f"流程 {name} 不存在"}), 404
+    data = request.get_json(silent=True) or {}
+    inputs = data.get("inputs", {})
+    if not isinstance(inputs, dict):
+        return jsonify({"error": "inputs 必须是对象"}), 400
+    objective = str(data.get("objective") or inputs.get("prompt") or flow.description)
+    run = services().runs.start(
+        objective,
+        project_id=data.get("project_id"),
+        flow_name=name,
+        flow_inputs=inputs,
+    )
+    return jsonify(run), 202
+
+
 @api.get("/runs/<run_id>/flow-traces")
 def get_flow_traces(run_id: str):
     """获取流程运行中每个节点的输入/输出跟踪。"""
@@ -620,6 +676,75 @@ def update_todo(run_id: str, todo_id: str):
         return jsonify({"error": f"更新 Todo 失败: {exc}"}), 500
 
 
+@api.get("/runs/<run_id>/todos/<todo_id>")
+def get_todo(run_id: str, todo_id: str):
+    todo = services().todo_store.get(run_id, todo_id)
+    if todo is None:
+        return jsonify({"error": "任务不存在"}), 404
+    return jsonify(todo.model_dump())
+
+
+@api.get("/runs/<run_id>/todos/<todo_id>/related")
+def get_related_todos(run_id: str, todo_id: str):
+    related = services().todo_store.related(run_id, todo_id)
+    return jsonify({
+        key: [item.model_dump() for item in items]
+        for key, items in related.items()
+    })
+
+
+@api.post("/runs/<run_id>/todos/<todo_id>/dependencies")
+def add_todo_dependency(run_id: str, todo_id: str):
+    data = request.get_json(silent=True) or {}
+    dependency_id = str(data.get("dependency_id", "")).strip()
+    if not dependency_id:
+        return jsonify({"error": "缺少 dependency_id"}), 400
+    todo = services().todo_store.add_dependency(run_id, todo_id, dependency_id)
+    if todo is None:
+        return jsonify({"error": "任务或依赖不存在"}), 404
+    return jsonify(todo.model_dump())
+
+
+@api.get("/runs/<run_id>/todos/ready")
+def get_ready_todos(run_id: str):
+    return jsonify({
+        "items": [item.model_dump() for item in services().todo_store.ready(run_id)]
+    })
+
+
+@api.get("/runs/<run_id>/agent-workload")
+def get_agent_workload(run_id: str):
+    return jsonify({"items": services().todo_store.workload(run_id)})
+
+
+@api.post("/runs/<run_id>/board/<kind>")
+def append_board_record(run_id: str, kind: str):
+    """Append a typed artifact, decision, blocker, risk or log record."""
+    if kind not in {"artifact", "decision", "blocker", "risk", "log"}:
+        return jsonify({"error": "不支持的看板记录类型"}), 400
+    data = request.get_json(silent=True) or {}
+    task_id = str(data.get("task_id", "run"))
+    key = f"{kind}:{task_id}:{uuid.uuid4().hex[:10]}"
+    entry = services().blackboard_store.write(
+        run_id, key, data, str(data.get("agent", "user"))
+    )
+    return jsonify(entry.model_dump()), 201
+
+
+@api.put("/runs/<run_id>/board/blockers/<path:key>/resolve")
+def resolve_board_blocker(run_id: str, key: str):
+    value = services().blackboard_store.read(run_id, key)
+    if value is None or not key.startswith("blocker:"):
+        return jsonify({"error": "阻塞记录不存在"}), 404
+    resolved = {
+        **(value if isinstance(value, dict) else {"description": value}),
+        "resolved": True,
+        "resolved_at": datetime.now(timezone.utc).isoformat(),
+    }
+    entry = services().blackboard_store.write(run_id, key, resolved, "user")
+    return jsonify(entry.model_dump())
+
+
 # ==================== Flow 校验 ====================
 
 @api.post("/flows/validate")
@@ -665,6 +790,11 @@ def send_interrupt(run_id: str):
             instruction=data.get("instruction", ""),
         )
         command_id = services().interrupt_router.send(command)
+
+        if command.target == InterruptTarget.TASK and command.action == InterruptAction.ABORT:
+            services().todo_store.update_status(
+                run_id, command.target_task or "", "cancelled", "user"
+            )
 
         # Flow-specific: handle per-node pause
         target_node = data.get("target_node")
@@ -819,7 +949,7 @@ def create_project():
         return jsonify({"error": "项目参数无效", "details": error.errors()}), 400
     try:
         project = services().project_manager.create_project(
-            payload.name, payload.root_dir, payload.description,
+            payload.name, payload.root_dir, payload.description, payload.project_name,
         )
         return jsonify(project), 201
     except ValueError as error:
@@ -828,21 +958,30 @@ def create_project():
 
 @api.put("/projects/current")
 def set_current_project():
-    """将当前选中项目 ID 写入 .workspace/currentProject.yml"""
+    """切换当前项目，并让后续请求使用该项目自己的数据库与配置。"""
     data = request.get_json(silent=True) or {}
     project_id = data.get("project_id", "")
     if not project_id:
         return jsonify({"error": "缺少 project_id"}), 400
     try:
-        services().config_reader.write_setting("currentProject", {"project_id": project_id})
+        current_services = services()
+        project_id = current_services.config_reader.validate_project_id(project_id)
+        if not current_services.project_manager.get_project(project_id):
+            return jsonify({"error": f"项目不存在: {project_id}"}), 404
+        current_services.config_reader.write_setting("currentProject", {"project_id": project_id})
+        # Settings.data_dir is derived from current-project.yaml. Rebuilding the
+        # container makes DB, knowledge, memory and run stores switch together.
+        current_app.extensions["services"] = ServiceContainer.build(current_services.settings)
         return jsonify({"ok": True, "project_id": project_id})
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
 
 @api.get("/projects/current")
 def get_current_project():
-    """读取 .workspace/currentProject.yml 中的当前项目 ID"""
+    """读取 .workspace/current-project.yaml 中的当前项目 ID。"""
     try:
         data = services().config_reader.read_setting("currentProject")
         return jsonify({"project_id": (data or {}).get("project_id", "")})
@@ -860,8 +999,13 @@ def get_project(project_id: str):
 
 @api.delete("/projects/<project_id>")
 def delete_project(project_id: str):
-    if not services().project_manager.delete_project(project_id):
+    current_services = services()
+    was_current = current_services.config_reader.current_project_id() == project_id
+    if not current_services.project_manager.delete_project(project_id):
         return jsonify({"error": "项目不存在"}), 404
+    if was_current:
+        current_services.config_reader.write_setting("currentProject", {"project_id": ""})
+        current_app.extensions["services"] = ServiceContainer.build(current_services.settings)
     return "", 204
 
 
@@ -890,6 +1034,16 @@ def add_project_agent(project_id: str):
             tools=data.get("tools"),
             skills=data.get("skills"),
             model=data.get("model"),
+            role=data.get("role", "implementation_agent"),
+            capabilities=data.get("capabilities"),
+            limitations=data.get("limitations"),
+            preferred_tasks=data.get("preferred_tasks"),
+            forbidden_tasks=data.get("forbidden_tasks"),
+            input_contract=data.get("input_contract"),
+            output_contract=data.get("output_contract"),
+            dependencies_info=data.get("dependencies_info"),
+            priority=data.get("priority", 0),
+            max_iterations=data.get("max_iterations", 3),
         )
         services().registry.invalidate(project_id)
         return jsonify(agent), 201
@@ -900,7 +1054,10 @@ def add_project_agent(project_id: str):
 @api.put("/projects/<project_id>/agents/<agent_id>")
 def update_project_agent(project_id: str, agent_id: str):
     payload = request.get_json(silent=True) or {}
-    result = services().project_manager.update_agent(project_id, agent_id, payload)
+    try:
+        result = services().project_manager.update_agent(project_id, agent_id, payload)
+    except (ValueError, ValidationError) as error:
+        return jsonify({"error": "Agent 配置无效", "details": str(error)}), 400
     if not result:
         return jsonify({"error": "Agent 不存在"}), 404
     services().executor.registry.invalidate(project_id)

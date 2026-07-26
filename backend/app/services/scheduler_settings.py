@@ -1,4 +1,4 @@
-"""持久化 LangGraph 调度参数。文件为 .agent-studio/scheduler.yaml。"""
+"""持久化 LangGraph 调度参数。文件为 .workspace/<project>/scheduler.yaml。"""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ class SchedulerSettings:
     def current(self, project_id: str = "") -> SchedulerConfiguration:
         with self._lock:
             if self.config_reader:
-                reader = self.config_reader.for_project(project_id) if project_id else self.config_reader
+                reader = self.config_reader.for_project(project_id) if project_id else self.config_reader.current()
                 data = reader.read_setting("scheduler")
                 if data:
                     return SchedulerConfiguration.model_validate(data)
@@ -31,7 +31,7 @@ class SchedulerSettings:
     def update(self, configuration: SchedulerConfiguration, project_id: str = "") -> SchedulerConfiguration:
         with self._lock:
             if self.config_reader:
-                reader = self.config_reader.for_project(project_id) if project_id else self.config_reader
+                reader = self.config_reader.for_project(project_id) if project_id else self.config_reader.current()
                 reader._ensure_dirs()
                 reader.write_setting("scheduler", configuration.model_dump())
         return configuration.model_copy()

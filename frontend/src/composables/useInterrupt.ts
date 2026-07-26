@@ -106,10 +106,7 @@ export function useInterrupt(activeRun: Ref<Run | null>) {
     const latest = state.pendingInterrupts.at(-1)
     if (!latest) return
     try {
-      await api.resumeRun(activeRun.value.id, {
-        command_id: latest.id,
-        decision,
-      })
+      await api.resumeRun(activeRun.value.id, latest.id, decision)
       state.status = 'idle'
       state.guidanceMode = false
       state.guidanceTarget = null

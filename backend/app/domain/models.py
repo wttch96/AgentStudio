@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Literal
@@ -21,6 +22,19 @@ class DagTask(BaseModel):
     agent: str  # 动态 agent 名称，由项目配置决定
     depends_on: list[str] = Field(default_factory=list)
     write_scope: list[str] = Field(default_factory=list)
+    context: dict[str, Any] = Field(default_factory=dict)
+    inputs: list[dict[str, Any]] = Field(default_factory=list)
+    expected_outputs: list[str] = Field(default_factory=list)
+    acceptance_criteria: list[str] = Field(default_factory=list)
+    constraints: list[str] = Field(default_factory=list)
+    allowed_tools: list[str] = Field(default_factory=list)
+    forbidden_actions: list[str] = Field(default_factory=list)
+    priority: int = Field(default=0, ge=0, le=10)
+    max_iterations: int = Field(default=3, ge=1, le=20)
+    status: Literal[
+        "backlog", "ready", "in_progress", "blocked", "review",
+        "completed", "failed", "cancelled",
+    ] = "backlog"
 
 
 class TaskDag(BaseModel):
@@ -68,11 +82,15 @@ class TaskDag(BaseModel):
 
 
 class ReviewDecision(str, Enum):
-    ACCEPT = "accepted"
-    ACCEPT_WITH_RISKS = "accepted_with_risks"
+    ACCEPTED = "accepted"
+    ACCEPTED_WITH_RISKS = "accepted_with_risks"
     REVISION_REQUIRED = "revision_required"
     REJECTED = "rejected"
     BLOCKED = "blocked"
+
+    # Compatibility aliases for code written during the schema migration.
+    ACCEPT = ACCEPTED
+    ACCEPT_WITH_RISKS = ACCEPTED_WITH_RISKS
 
 
 class AgentResult(BaseModel):
@@ -80,9 +98,21 @@ class AgentResult(BaseModel):
 
     task_id: str
     agent: str
-    status: Literal["completed", "failed", "cancelled", "skipped"]
+    status: Literal[
+        "completed", "partially_completed", "blocked", "need_review",
+        "failed", "cancelled", "skipped",
+    ]
     summary: str
     changed_files: list[str] = Field(default_factory=list)
+    artifacts: list[dict[str, Any]] = Field(default_factory=list)
+    decisions: list[dict[str, Any]] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    dependencies_discovered: list[str] = Field(default_factory=list)
+    verification_performed: list[str] = Field(default_factory=list)
+    verification_not_performed: list[str] = Field(default_factory=list)
+    verification_result: Literal["passed", "failed", "partial", "not_run"] = "not_run"
+    next_actions: list[str] = Field(default_factory=list)
     provides: list[str] = Field(
         default_factory=list,
         description="Agent 声明产出的资源/能力标识，供下游 Agent 通过依赖筛选消费",
@@ -176,6 +206,7 @@ class InterruptTarget(str, Enum):
     ALL = 'all'
     AGENT = 'agent'
     PLANNER = 'planner'
+    TASK = 'task'
 
 
 class InterruptAction(str, Enum):
@@ -247,15 +278,17 @@ class Project(BaseModel):
 class ProjectAgent(BaseModel):
     id: str = Field(default_factory=lambda: uuid.uuid4().hex)
     project_id: str
-    name: str = Field(min_length=1, max_length=64)
+    name: str = Field(pattern=r"^[a-z][a-z0-9-]{1,63}$")
     display_name: str = Field(min_length=1, max_length=100)
     description: str = ""
     template_id: str | None = None
-    agent_type: Literal["brain", "rag", "claude", "file-ops", "chat", "todo", "blackboard", "doc-diff"]
+    role: str = Field(default="implementation_agent", min_length=1, max_length=100)
+    agent_type: Literal["brain", "rag", "claude", "file-ops", "chat", "todo", "blackboard", "doc-diff"] = "claude"
     sub_dir: str = ""
     system_prompt: str = Field(min_length=10, max_length=30000)
     tools: list[str] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
+    model: str = ""
     is_required: bool = False
     sort_order: int = 0
     # ── 增强 Agent 配置字段（全部可选，向后兼容）──
@@ -286,6 +319,11 @@ class AgentTemplate(BaseModel):
 
 class CreateProjectRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
+    project_name: str | None = Field(
+        default=None,
+        pattern=r"^[a-z][a-z0-9-]{1,63}$",
+        description="用于 .workspace/<project_name>/ 的稳定目录名",
+    )
     root_dir: str = Field(min_length=1, max_length=4096)
     description: str = ""
 
@@ -328,10 +366,28 @@ class TodoItem(BaseModel):
     """运行级别的待办项，由主脑自动生成或用户手动添加。"""
 
     id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    parent_task_id: str | None = None
+    title: str = ""
     content: str = Field(min_length=1, max_length=500)
+    objective: str = ""
     assigned_to: str | None = None
-    status: Literal["pending", "in_progress", "completed", "blocked"] = "pending"
+    status: Literal[
+        "backlog", "ready", "pending", "in_progress", "blocked",
+        "review", "completed", "failed", "cancelled",
+    ] = "pending"
     depends_on: list[str] = Field(default_factory=list)
+    context: dict[str, Any] = Field(default_factory=dict)
+    inputs: list[dict[str, Any]] = Field(default_factory=list)
+    expected_outputs: list[str] = Field(default_factory=list)
+    acceptance_criteria: list[str] = Field(default_factory=list)
+    artifacts: list[dict[str, Any]] = Field(default_factory=list)
+    decisions: list[dict[str, Any]] = Field(default_factory=list)
+    blockers: list[dict[str, Any]] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    verification: dict[str, Any] = Field(default_factory=dict)
+    updated_at: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
     created_at: str = Field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )

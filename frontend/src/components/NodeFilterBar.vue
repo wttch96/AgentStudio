@@ -15,7 +15,7 @@ const emit = defineEmits<{
   updateFilter: [status: NodeStatus | 'all']
 }>()
 
-const filters: Array<{ key: NodeStatus | 'all'; label: string; icon: string }> = [
+const filters: Array<{ key: 'all' | 'running' | 'completed' | 'failed'; label: string; icon: string }> = [
   { key: 'all', label: '全部', icon: '⊡' },
   { key: 'running', label: '运行中', icon: '●' },
   { key: 'completed', label: '已完成', icon: '✓' },
@@ -25,10 +25,11 @@ const filters: Array<{ key: NodeStatus | 'all'; label: string; icon: string }> =
 
 <template>
   <div class="filter-bar">
-    <button
+    <ElButton
       v-for="f in filters"
       :key="f.key"
-      type="button"
+      size="small"
+      text
       class="filter-btn"
       :class="{ active: filterStatus === f.key }"
       @click="emit('updateFilter', f.key)"
@@ -36,7 +37,7 @@ const filters: Array<{ key: NodeStatus | 'all'; label: string; icon: string }> =
       <span class="filter-icon">{{ f.icon }}</span>
       <span class="filter-label">{{ f.label }}</span>
       <span class="filter-count">{{ counts[f.key] || 0 }}</span>
-    </button>
+    </ElButton>
   </div>
 </template>
 
@@ -62,7 +63,7 @@ const filters: Array<{ key: NodeStatus | 'all'; label: string; icon: string }> =
   background: transparent;
   color: var(--secondary);
   cursor: pointer;
-  font-size: 0.5625rem;
+  font-size: var(--ui-font-sm);
   font-weight: 500;
   transition: all 0.15s ease;
   white-space: nowrap;
@@ -79,7 +80,7 @@ const filters: Array<{ key: NodeStatus | 'all'; label: string; icon: string }> =
 }
 
 .filter-icon {
-  font-size: 0.5rem;
+  font-size: var(--ui-font-xs);
 }
 
 .filter-label {
@@ -87,7 +88,7 @@ const filters: Array<{ key: NodeStatus | 'all'; label: string; icon: string }> =
 }
 
 .filter-count {
-  font-size: 0.4375rem;
+  font-size: var(--ui-font-xs);
   padding: 1px 4px;
   border-radius: 999px;
   background: rgba(118, 118, 128, 0.15);

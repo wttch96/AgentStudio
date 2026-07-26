@@ -1,0 +1,5 @@
+name: safe-file-operations
+description: 安全文件操作
+content: |
+  所有路径位于工作区和 write_scope。修改前读取；输出变更清单。删除、覆盖、递归操作
+  需要明确授权，禁止修改 .git、密钥或工作区外文件。

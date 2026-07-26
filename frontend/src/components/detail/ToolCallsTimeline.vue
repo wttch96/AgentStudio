@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import type { ToolCallGroup, ToolCall } from '../types'
+import type { ToolCallGroup, ToolCall } from '../../types'
 
-defineProps<{
+const props = defineProps<{
   toolCallGroups: ToolCallGroup[]
 }>()
 
@@ -16,7 +16,7 @@ function toggleGroup(key: string) {
 }
 
 function expandAll() {
-  expandedGroups.value = new Set(toolCallGroups?.map(g => g.key) ?? [])
+  expandedGroups.value = new Set(props.toolCallGroups.map((g) => g.key))
 }
 
 function collapseAll() {
@@ -54,8 +54,8 @@ const TOOL_ICONS: Record<string, string> = {
   <div class="tool-timeline">
     <!-- 控制栏 -->
     <div v-if="toolCallGroups.length > 1" class="tool-controls">
-      <button type="button" class="tool-ctrl-btn" @click="expandAll">展开全部</button>
-      <button type="button" class="tool-ctrl-btn" @click="collapseAll">折叠全部</button>
+      <ElButton size="small" text @click="expandAll">展开全部</ElButton>
+      <ElButton size="small" text @click="collapseAll">折叠全部</ElButton>
     </div>
 
     <!-- 无工具调用 -->
@@ -72,8 +72,8 @@ const TOOL_ICONS: Record<string, string> = {
         :class="{ expanded: expandedGroups.has(group.key) }"
       >
         <!-- 组头 -->
-        <button
-          type="button"
+        <ElButton
+          text
           class="tool-group-header"
           :class="{ 'is-group': group.count > 1 }"
           @click="toggleGroup(group.key)"
@@ -82,7 +82,7 @@ const TOOL_ICONS: Record<string, string> = {
           <span class="tool-group-name">{{ group.toolName }}</span>
           <span v-if="group.count > 1" class="tool-group-count">× {{ group.count }}</span>
           <span class="tool-group-chevron">{{ expandedGroups.has(group.key) ? '▾' : '▸' }}</span>
-        </button>
+        </ElButton>
 
         <!-- 详细调用列表 -->
         <div v-if="expandedGroups.has(group.key)" class="tool-calls">
@@ -94,14 +94,16 @@ const TOOL_ICONS: Record<string, string> = {
             <div class="tool-call-head">
               <span class="tool-call-seq">#{{ idx + 1 }}</span>
               <span class="tool-call-time">{{ new Date(call.startedAt).toLocaleTimeString() }}</span>
-              <button
-                type="button"
+              <ElButton
+                text
+                circle
+                size="small"
                 class="tool-copy-btn"
                 title="复制参数"
                 @click.stop="copyParams(call)"
               >
                 📋
-              </button>
+              </ElButton>
             </div>
             <pre class="tool-call-params">{{ formatParams(call.input) }}</pre>
             <!-- 待后端补充: tool.completed 结果展示 -->
@@ -124,28 +126,13 @@ const TOOL_ICONS: Record<string, string> = {
   gap: 4px;
 }
 
-.tool-ctrl-btn {
-  padding: 3px 8px;
-  border: 0;
-  border-radius: 5px;
-  background: rgba(118, 118, 128, 0.12);
-  color: var(--secondary);
-  font-size: 0.875rem;
-  cursor: pointer;
-}
-
-.tool-ctrl-btn:hover {
-  background: rgba(118, 118, 128, 0.22);
-  color: var(--label);
-}
-
 .tool-empty {
   text-align: center;
   padding: 20px 0;
 }
 
 .tool-empty p {
-  font-size: 0.9375rem;
+  font-size: var(--ui-font-md);
   color: var(--tertiary);
   font-style: italic;
   margin: 0;
@@ -175,11 +162,9 @@ const TOOL_ICONS: Record<string, string> = {
   gap: 6px;
   width: 100%;
   padding: 8px 10px;
-  border: 0;
   background: transparent;
   color: var(--label);
-  cursor: pointer;
-  font-size: 0.9375rem;
+  font-size: var(--ui-font-base);
   text-align: left;
   transition: background 0.12s;
 }
@@ -193,19 +178,19 @@ const TOOL_ICONS: Record<string, string> = {
 }
 
 .tool-group-icon {
-  font-size: 0.75rem;
+  font-size: var(--ui-font-sm);
   flex-shrink: 0;
 }
 
 .tool-group-name {
   font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
-  font-size: 0.875rem;
+  font-size: var(--ui-font-base);
   font-weight: 600;
   flex: 1;
 }
 
 .tool-group-count {
-  font-size: 0.875rem;
+  font-size: var(--ui-font-base);
   padding: 1px 5px;
   border-radius: 999px;
   background: rgba(10, 132, 255, 0.15);
@@ -214,7 +199,7 @@ const TOOL_ICONS: Record<string, string> = {
 }
 
 .tool-group-chevron {
-  font-size: 0.9375rem;
+  font-size: var(--ui-font-md);
   color: var(--tertiary);
   flex-shrink: 0;
 }
@@ -243,13 +228,13 @@ const TOOL_ICONS: Record<string, string> = {
 }
 
 .tool-call-seq {
-  font-size: 0.875rem;
+  font-size: var(--ui-font-base);
   color: var(--tertiary);
   font-weight: 600;
 }
 
 .tool-call-time {
-  font-size: 0.8125rem;
+  font-size: var(--ui-font-sm);
   color: var(--tertiary);
   flex: 1;
 }
@@ -258,7 +243,7 @@ const TOOL_ICONS: Record<string, string> = {
   border: 0;
   background: none;
   cursor: pointer;
-  font-size: 0.9375rem;
+  font-size: var(--ui-font-md);
   opacity: 0.5;
   padding: 0;
 }
@@ -270,7 +255,7 @@ const TOOL_ICONS: Record<string, string> = {
 .tool-call-params {
   margin: 0;
   padding: 8px;
-  font: 0.8125rem / 1.5 ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  font: var(--ui-font-sm) / 1.5 ui-monospace, 'SFMono-Regular', Menlo, monospace;
   color: var(--secondary);
   white-space: pre-wrap;
   word-break: break-all;

@@ -28,8 +28,9 @@ class FlowNode(BaseModel):
 class ConditionBlock(BaseModel):
     """If/Else conditional branching.
 
-    The condition is a Jinja2 expression evaluated against the blackboard at runtime.
-    e.g. ``blackboard.code_score > 0.8``
+    The condition is a Jinja2 expression evaluated against inputs, completed
+    results, and the blackboard at runtime.
+    e.g. ``input.amount | float <= 500 and blackboard.risk_level == "low"``
     """
 
     id: str = Field(pattern=r"^[a-zA-Z0-9_-]+$")

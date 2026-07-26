@@ -139,7 +139,7 @@ Settings
 用户 POST /api/runs
   ↓
 RunManager.start()
-  ├── parse_run_command()  → 解析斜杠命令（/frontend, /retry 等）
+  ├── parse_run_command()  → 解析动态斜杠目标（/brain、/<agent-name>）
   ├── 创建工作目录、创建 SQLite 运行记录
   ├── 启动 daemon 线程
   └── 立即返回 HTTP 202（异步）

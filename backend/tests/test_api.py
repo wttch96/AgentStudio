@@ -52,11 +52,13 @@ def test_cc_switch_token_configures_claude():
 
 
 def test_only_expected_execution_agents_are_registered(client):
-    response = client.get("/api/agents")
+    response = client.get("/api/agents", query_string={"project_id": "test-project"})
     assert response.status_code == 200
-    names = {agent["name"] for agent in response.json["items"]}
-    assert names == {"frontend-agent", "backend-agent", "netty-agent"}
-    assert all(agent["builtin"] is True for agent in response.json["items"])
+    agents = response.json["items"]
+    names = {agent["name"] for agent in agents}
+    assert {"frontend-agent", "backend-agent", "rag"} <= names
+    assert "master-brain" not in names
+    assert all("capabilities" in agent and "priority" in agent for agent in agents)
 
 
 def test_skill_creation_and_agent_assignment(client):
@@ -66,19 +68,26 @@ def test_skill_creation_and_agent_assignment(client):
             "name": "netty-framing",
             "description": "处理 Netty 帧边界",
             "content": "使用长度字段解码器，并覆盖半包和超长帧测试。",
+            "project_id": "test-project",
         },
     )
     assert created.status_code == 201
 
-    agent = client.get("/api/agents/netty-agent").json
+    agent = client.get(
+        "/api/agents/backend-agent", query_string={"project_id": "test-project"}
+    ).json
     agent["skills"] = ["netty-framing"]
-    agent.pop("name")
-    agent.pop("skill_count")
-    agent.pop("builtin")
-    updated = client.put("/api/agents/netty-agent", json=agent)
+    updated = client.put(
+        "/api/projects/test-project/agents/backend-agent",
+        json={"skills": agent["skills"]},
+    )
     assert updated.status_code == 200
     assert updated.json["skills"] == ["netty-framing"]
-    assert updated.json["skill_count"] == 1
+    skill_path = (
+        client.application.extensions["services"].settings.workspace_root
+        / ".workspace" / "test-project" / "skills" / "netty-framing.yaml"
+    )
+    assert skill_path.is_file()
 
 
 def test_workspace_can_be_selected_and_persisted(client):
@@ -95,7 +104,10 @@ def test_workspace_can_be_selected_and_persisted(client):
     assert updated.json == {"path": str(selected.resolve())}
     assert client.get("/api/workspace").json["path"] == str(selected.resolve())
 
-    config_path = client.application.extensions["services"].workspace.config_path
+    config_path = (
+        client.application.extensions["services"].settings.workspace_root
+        / ".workspace" / "test-project" / "workspace.yaml"
+    )
     assert config_path.exists()
     assert str(selected.resolve()) in config_path.read_text(encoding="utf-8")
 
@@ -105,6 +117,21 @@ def test_workspace_rejects_missing_directory(client):
     response = client.put("/api/workspace", json={"path": str(missing)})
     assert response.status_code == 400
     assert "不存在" in response.json["error"]
+
+
+def test_deleting_current_project_clears_pointer_and_keeps_data(client):
+    services = client.application.extensions["services"]
+    project_dir = (
+        services.settings.workspace_root / ".workspace" / "test-project"
+    )
+
+    response = client.delete("/api/projects/test-project")
+
+    assert response.status_code == 204
+    assert client.get("/api/projects/current").json == {"project_id": ""}
+    assert project_dir.is_dir()
+    assert not (project_dir / "project.yaml").exists()
+    assert (project_dir / "agents").is_dir()
 
 
 def test_scheduler_configuration_is_validated_and_persisted(client):
@@ -123,9 +150,12 @@ def test_scheduler_configuration_is_validated_and_persisted(client):
     assert updated.json == payload
     assert client.get("/api/scheduler").json == payload
 
-    config_path = client.application.extensions["services"].scheduler.config_path
+    config_path = (
+        client.application.extensions["services"].settings.workspace_root
+        / ".workspace" / "test-project" / "scheduler.yaml"
+    )
     assert config_path.exists()
-    assert '"max_concurrent_agents": 4' in config_path.read_text(encoding="utf-8")
+    assert "max_concurrent_agents: 4" in config_path.read_text(encoding="utf-8")
 
     invalid = client.put("/api/scheduler", json={**payload, "max_concurrent_agents": 0})
     assert invalid.status_code == 400
@@ -134,27 +164,29 @@ def test_scheduler_configuration_is_validated_and_persisted(client):
 def test_brain_prompts_are_editable_and_persisted_locally(client):
     current = client.get("/api/brain")
     assert current.status_code == 200
-    assert "工作空间" in current.json["planning_prompt"]
-    assert "最终验收" in current.json["summary_prompt"]
+    assert "任务分级" in current.json["orchestration_prompt"]
     default = client.get("/api/brain/default")
     assert default.status_code == 200
     assert default.json == current.json
 
-    payload = {
-        "planning_prompt": "优先根据项目发现证据选择真实项目，再定义共享接口契约并拆分实施任务。" * 2,
-        "summary_prompt": "汇总实际选择的项目、契约、改动、测试和遗留风险，不得编造结果。",
-    }
+    payload = {"orchestration_prompt": (
+        "优先根据项目发现证据选择真实项目，再定义共享接口契约并拆分实施任务。"
+        "汇总实际选择的项目、契约、改动、测试和遗留风险，不得编造结果。"
+    )}
     updated = client.put("/api/brain", json=payload)
     assert updated.status_code == 200
     assert updated.json == payload
     assert client.get("/api/brain").json == payload
     assert client.get("/api/brain/default").json == default.json
 
-    config_path = client.application.extensions["services"].brain.config_path
+    config_path = (
+        client.application.extensions["services"].settings.workspace_root
+        / ".workspace" / "test-project" / "brain.yaml"
+    )
     assert config_path.exists()
     assert "共享接口契约" in config_path.read_text(encoding="utf-8")
 
-    invalid = client.put("/api/brain", json={**payload, "planning_prompt": "太短"})
+    invalid = client.put("/api/brain", json={"orchestration_prompt": "太短"})
     assert invalid.status_code == 400
 
 
@@ -181,9 +213,9 @@ def test_demo_run_completes(client):
     ]
     plan_event = plan_events[-1]
     assert plan_event["payload"]["coordination_contract"]
-    assert len(plan_event["payload"]["tasks"]) == 6
+    assert len(plan_event["payload"]["tasks"]) >= 3
     planned_agents = {task["agent"] for task in plan_event["payload"]["tasks"]}
-    assert planned_agents == {"frontend-agent", "backend-agent", "netty-agent"}
+    assert {"frontend-agent", "backend-agent"} <= planned_agents
 
 
 def test_follow_up_run_inherits_upstream_context_and_workspace(client):
@@ -244,7 +276,7 @@ def test_follow_up_rejects_an_active_upstream(client):
 
 
 def test_direct_agent_command_bypasses_deepseek_planning(client):
-    response = client.post("/api/runs", json={"objective": "/backend 检查后端接口"})
+    response = client.post("/api/runs", json={"objective": "/flask-backend 检查后端接口"})
     assert response.status_code == 202
     run_id = response.json["id"]
 
@@ -261,10 +293,10 @@ def test_direct_agent_command_bypasses_deepseek_planning(client):
     assert "planner.started" not in event_types
     assert "brain.synthesizing" not in event_types
     plan = next(event for event in run["events"] if event["type"] == "plan.created")
-    assert [task["agent"] for task in plan["payload"]["tasks"]] == ["backend-agent"]
+    assert [task["agent"] for task in plan["payload"]["tasks"]] == ["flask-backend"]
 
 
-def test_failed_subtask_can_be_retried_without_replanning(client):
+def test_removed_retry_command_is_rejected(client):
     services = client.application.extensions["services"]
     workspace = client.get("/api/workspace").json["path"]
     parent = services.store.create_run("retry-parent", "实现协议功能", workspace)
@@ -298,22 +330,28 @@ def test_failed_subtask_can_be_retried_without_replanning(client):
         "/api/runs",
         json={"objective": "/retry parse-packet", "parent_run_id": parent["id"]},
     )
+    assert response.status_code == 400
+    assert "Agent" in response.json["error"] or "不存在" in response.json["error"]
+
+
+def test_single_task_can_be_aborted_without_cancelling_run(client):
+    services = client.application.extensions["services"]
+    run = services.store.create_run("task-abort-run", "并行任务", "/tmp")
+    services.todo_store.init(run["id"], [{
+        "id": "frontend-task",
+        "content": "实现前端",
+        "assigned_to": "vue-frontend",
+        "status": "in_progress",
+    }])
+
+    response = client.post(
+        f"/api/runs/{run['id']}/interrupt",
+        json={"target": "task", "action": "abort", "target_task": "frontend-task"},
+    )
+
     assert response.status_code == 202
-    run_id = response.json["id"]
-
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline:
-        run = client.get(f"/api/runs/{run_id}").json
-        if run["status"] in {"completed", "failed", "cancelled"}:
-            break
-        time.sleep(0.1)
-
-    plan = next(event for event in run["events"] if event["type"] == "plan.created")
-    task = plan["payload"]["tasks"][0]
-    assert task["id"] == "retry-parse-packet"
-    assert task["agent"] == "netty-agent"
-    assert task["write_scope"] == ["netty/"]
-    assert "达到最大交互轮次" in task["objective"]
+    assert services.interrupt_router.is_task_aborted(run["id"], "frontend-task")
+    assert services.todo_store.get(run["id"], "frontend-task").status == "cancelled"
 
 
 def test_terminal_run_can_be_deleted_with_all_events(client):

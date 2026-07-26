@@ -122,9 +122,15 @@ class WaveReviewer:
                         agent=orig.agent,
                         depends_on=orig.depends_on,
                         write_scope=orig.write_scope,
-                        acceptance_criteria=rr.failed_criteria or orig.write_scope,
+                        context=orig.context,
+                        inputs=orig.inputs,
+                        constraints=orig.constraints,
+                        expected_outputs=orig.expected_outputs,
+                        allowed_tools=orig.allowed_tools,
+                        forbidden_actions=orig.forbidden_actions,
+                        acceptance_criteria=rr.failed_criteria or orig.acceptance_criteria,
                         status="ready",
-                        max_iterations=3,
+                        max_iterations=max(1, orig.max_iterations - 1),
                     )
                 )
 
@@ -149,9 +155,10 @@ class WaveReviewer:
         issues: list[str] = []
         risks: list[str] = []
         instructions: list[str] = []
+        task = next((t for t in (dag.tasks if dag else []) if t.id == result.task_id), None)
 
         # 1. 检查执行状态
-        if result.status == "failed":
+        if result.status in ("failed", "blocked"):
             failed.append("执行失败")
             issues.append(f"Agent 报告执行失败: {result.error or '无具体错误'}")
             instructions.append("分析失败原因并修正")
@@ -160,11 +167,11 @@ class WaveReviewer:
             failed.append("任务被取消")
             issues.append("任务被用户或系统取消")
 
-        elif result.status == "completed":
+        elif result.status in ("completed", "partially_completed", "need_review"):
             passed.append("执行状态为 completed")
 
             # 2. 摘要质量检查
-            if not result.summary or len(result.summary) < 20:
+            if not result.summary or len(result.summary.strip()) < 10:
                 failed.append("摘要质量不足")
                 issues.append("Agent 返回的摘要过短或为空")
                 instructions.append("提供完整的执行摘要，至少包含做了什么、结果如何")
@@ -179,8 +186,28 @@ class WaveReviewer:
                 # 没有修改文件不一定失败 — 可能是只读任务
                 pass
 
+            # 4. 按任务协议检查产物和验收证据
+            if task and task.expected_outputs and not (result.artifacts or result.changed_files):
+                failed.append("缺少结构化产物")
+                issues.append(f"预期产物未提供: {task.expected_outputs}")
+                instructions.append("提供真实 artifact 路径或标识，并确认其存在")
+            if task and task.acceptance_criteria:
+                if result.verification_result == "passed":
+                    passed.extend(task.acceptance_criteria)
+                else:
+                    failed.extend(task.acceptance_criteria)
+                    issues.append("没有足够验证证据证明验收标准通过")
+                    instructions.append(
+                        "逐条验证并报告: " + "；".join(task.acceptance_criteria)
+                    )
+
             # 4. 验证检查
-            if "测试" in result.summary or "test" in result.summary.lower():
+            if (
+                result.verification_result == "passed"
+                or result.verification_performed
+                or "测试" in result.summary
+                or "test" in result.summary.lower()
+            ):
                 passed.append("执行了测试或验证")
             else:
                 risks.append("未明确说明是否执行了验证")
@@ -198,8 +225,10 @@ class WaveReviewer:
             instructions.append("不要再重新规划此任务")
 
         # ── 判定最终状态 ──
-        if result.status == "failed" and iteration >= max_iterations:
+        if result.status in ("failed", "blocked") and iteration >= max_iterations:
             decision = ReviewDecision.REJECTED
+        elif result.status == "blocked":
+            decision = ReviewDecision.BLOCKED
         elif result.status == "failed":
             decision = ReviewDecision.REVISION_REQUIRED
         elif failed:

@@ -15,9 +15,16 @@ let timer: ReturnType<typeof setInterval> | null = null
 
 const entries = computed(() => {
   if (!state.value) return []
-  return Object.values(state.value.entries).sort(
-    (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
-  )
+  const derivedKeys = new Set(['__todos__', 'all_results', 'all_reviews', 'review_decisions'])
+  return Object.values(state.value.entries)
+    .filter(entry => (
+      !derivedKeys.has(entry.key)
+      && !/^(artifact|decision|blocker|risk|log):[^:]+:/.test(entry.key)
+      && !/^(result|review):[^:]+$/.test(entry.key)
+    ))
+    .sort(
+      (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
+    )
 })
 
 watch(
@@ -70,18 +77,15 @@ function fmt(val: unknown): string {
 <template>
   <div class="bb-inspector">
     <div class="bb-header">
-      <span class="bb-title">黑板</span>
-      <label class="bb-toggle">
-        <input v-model="autoRefresh" type="checkbox" />
-        自动刷新
-      </label>
-      <button class="bb-btn" :disabled="!props.runId" @click="props.runId && load(props.runId)">刷新</button>
+      <span class="bb-title">运行共享数据</span>
+      <ElSwitch v-model="autoRefresh" size="small" inline-prompt active-text="自动" inactive-text="手动" />
+      <ElButton size="small" :disabled="!props.runId" @click="props.runId && load(props.runId)">刷新</ElButton>
     </div>
 
     <div v-if="error" class="bb-error">{{ error }}</div>
 
     <div v-if="!props.runId" class="bb-empty">选择运行后查看黑板状态</div>
-    <div v-else-if="!entries.length" class="bb-empty">黑板为空，暂无共享数据</div>
+    <div v-else-if="!entries.length" class="bb-empty">暂无任务之外的共享数据</div>
 
     <table v-else class="bb-table">
       <thead>
@@ -119,10 +123,10 @@ function fmt(val: unknown): string {
 }
 .bb-title {
   font-weight: 600;
-  font-size: 14px;
+  font-size: var(--ui-font-md);
 }
 .bb-toggle {
-  font-size: 12px;
+  font-size: var(--ui-font-sm);
   display: flex;
   align-items: center;
   gap: 4px;
@@ -130,20 +134,20 @@ function fmt(val: unknown): string {
   cursor: pointer;
 }
 .bb-btn {
-  font-size: 11px;
+  font-size: var(--ui-font-xs);
   padding: 2px 8px;
   border: 1px solid var(--border-color, #ddd);
   border-radius: 4px;
   background: var(--bg-secondary, #fefefe);
   cursor: pointer;
 }
-.bb-error { color: var(--danger, #e00); font-size: 12px; }
-.bb-empty { color: var(--text-muted, #888); font-size: 13px; text-align: center; padding: 24px 0; }
+.bb-error { color: var(--danger, #e00); font-size: var(--ui-font-sm); }
+.bb-empty { color: var(--text-muted, #888); font-size: var(--ui-font-base); text-align: center; padding: 24px 0; }
 
 .bb-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: var(--ui-font-sm);
   table-layout: fixed;
 }
 .bb-table th {
@@ -152,7 +156,7 @@ function fmt(val: unknown): string {
   padding: 6px 4px;
   border-bottom: 2px solid var(--border-color, #ddd);
   color: var(--text-muted, #888);
-  font-size: 11px;
+  font-size: var(--ui-font-xs);
 }
 .bb-table td {
   padding: 4px;

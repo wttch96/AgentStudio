@@ -106,7 +106,7 @@ export function useWorkspace() {
     state.projectId = projectId
     state.projectName = project?.name || ''
     localStorage.setItem(PROJECT_STORAGE_KEY, projectId)
-    // 同步到后端 currentProject.yml
+    // 同步到后端 .workspace/current-project.yaml
     api.setCurrentProject(projectId).catch(() => {})
     refreshConfiguration()
     // changed: true on first set (from '' → id) and on subsequent switches

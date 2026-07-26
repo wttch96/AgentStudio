@@ -180,13 +180,13 @@ onMounted(async () => {
                 <span :class="'status-badge ' + statusClass(turn.status)">
                   {{ statusLabel(turn.status) }}
                 </span>
-                <button
+                <ElButton
                   v-if="turn.status === 'complete'"
-                  type="button"
+                  text
                   class="fork-btn"
                   title="分叉此对话"
                   @click="emit('fork', turn.runId)"
-                >⎇ 分叉</button>
+                >⎇ 分叉</ElButton>
               </div>
             </div>
           </div>
@@ -220,12 +220,13 @@ onMounted(async () => {
                 <div v-if="turn.planTasks.length" class="task-flow-inline">
                   <div class="task-flow-label">
                     <span>⚙ 任务流程节点</span>
-                    <button
-                      type="button"
+                    <ElButton
+                      size="small"
+                      text
                       class="dag-link-btn"
                       @click.stop="emit('showDag')"
                       title="查看完整DAG图"
-                    >◇ 展开完整DAG</button>
+                    >◇ 展开完整DAG</ElButton>
                   </div>
 
                   <div class="task-swimlanes">
@@ -278,13 +279,14 @@ onMounted(async () => {
                             <span class="task-failure-label">失败原因：</span>
                             <pre class="task-failure-text">{{ taskFailureReason(turn, task.id) }}</pre>
                           </div>
-                          <button
-                            type="button"
+                          <ElButton
+                            size="small"
+                            text
                             class="task-expand-btn"
                             @click.stop="toggleTaskDetail(`${turn.id}-${task.id}`)"
                           >
                             {{ taskDetailCollapsed.has(`${turn.id}-${task.id}`) ? '展开详情' : '收起详情' }}
-                          </button>
+                          </ElButton>
                         </div>
                       </div>
                     </div>
@@ -408,14 +410,14 @@ onMounted(async () => {
 
 .chat-empty h3 {
   margin: 0 0 0.35rem;
-  font-size: 1rem;
+  font-size: var(--ui-font-lg);
   font-weight: 600;
   color: var(--label);
 }
 
 .chat-empty p {
   margin: 0;
-  font-size: 0.75rem;
+  font-size: var(--ui-font-sm);
 }
 
 /* Turn */
@@ -452,7 +454,7 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 0.75rem;
+  font-size: var(--ui-font-sm);
   font-weight: 700;
   flex-shrink: 0;
 }
@@ -483,7 +485,7 @@ onMounted(async () => {
 .msg-bubble {
   padding: 0.6rem 0.85rem;
   border-radius: 10px;
-  font-size: 0.8rem;
+  font-size: var(--ui-font-sm);
   line-height: 1.55;
   color: var(--label);
   overflow-x: auto;
@@ -529,12 +531,12 @@ onMounted(async () => {
   align-items: center;
   gap: 0.5rem;
   margin-top: 0.25rem;
-  font-size: 0.6rem;
+  font-size: var(--ui-font-xs);
   color: var(--tertiary);
 }
 
 .status-badge {
-  font-size: 0.55rem;
+  font-size: var(--ui-font-xs);
   padding: 0.1rem 0.4rem;
   border-radius: 4px;
   font-weight: 550;
@@ -565,7 +567,7 @@ onMounted(async () => {
   border-radius: 6px;
   cursor: pointer;
   user-select: none;
-  font-size: 0.7rem;
+  font-size: var(--ui-font-xs);
   color: var(--secondary);
   background: rgba(118, 118, 128, 0.08);
   margin-bottom: 0.3rem;
@@ -578,7 +580,7 @@ onMounted(async () => {
 }
 
 .thinking-icon {
-  font-size: 0.55rem;
+  font-size: var(--ui-font-xs);
 }
 
 .thinking-label {
@@ -586,7 +588,7 @@ onMounted(async () => {
 }
 
 .thinking-badge {
-  font-size: 0.55rem;
+  font-size: var(--ui-font-xs);
   padding: 0.1rem 0.35rem;
   border-radius: 4px;
   background: rgba(191, 90, 242, 0.14);
@@ -616,7 +618,7 @@ onMounted(async () => {
 
 .thinking-text {
   margin: 0;
-  font-size: 0.7rem;
+  font-size: var(--ui-font-xs);
   color: var(--secondary);
   white-space: pre-wrap;
   line-height: 1.5;
@@ -633,7 +635,7 @@ onMounted(async () => {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 0.4rem;
-  font-size: 0.65rem;
+  font-size: var(--ui-font-xs);
   color: var(--secondary);
   font-weight: 600;
 }
@@ -647,7 +649,7 @@ onMounted(async () => {
   border-radius: 6px;
   background: rgba(10, 132, 255, 0.08);
   color: #64d2ff;
-  font-size: 0.6rem;
+  font-size: var(--ui-font-xs);
   font-weight: 550;
   cursor: pointer;
   transition: background 0.15s;
@@ -697,7 +699,7 @@ onMounted(async () => {
 }
 
 .task-node-dot {
-  font-size: 0.55rem;
+  font-size: var(--ui-font-xs);
   flex-shrink: 0;
 }
 
@@ -707,7 +709,7 @@ onMounted(async () => {
 .task-node-dot.failed { color: var(--red); }
 
 .task-node-agent {
-  font-size: 0.55rem;
+  font-size: var(--ui-font-xs);
   padding: 0.1rem 0.35rem;
   border-radius: 3px;
   background: var(--blue-soft);
@@ -717,14 +719,14 @@ onMounted(async () => {
 }
 
 .task-node-title {
-  font-size: 0.65rem;
+  font-size: var(--ui-font-xs);
   color: var(--label);
   font-weight: 550;
 }
 
 .task-node-time {
   margin-left: auto;
-  font-size: 0.5rem;
+  font-size: var(--ui-font-xs);
   color: var(--tertiary);
   font-variant-numeric: tabular-nums;
 }
@@ -735,7 +737,7 @@ onMounted(async () => {
   background: none;
   color: var(--tertiary);
   cursor: pointer;
-  font-size: 0.5rem;
+  font-size: var(--ui-font-xs);
   padding: 1px 0;
 }
 
@@ -754,7 +756,7 @@ onMounted(async () => {
   display: flex;
   gap: 0.3rem;
   margin-bottom: 0.2rem;
-  font-size: 0.55rem;
+  font-size: var(--ui-font-xs);
   line-height: 1.4;
 }
 
@@ -783,14 +785,14 @@ onMounted(async () => {
 }
 
 .task-failure-label {
-  font-size: 0.5rem;
+  font-size: var(--ui-font-xs);
   font-weight: 600;
   color: #ff6961;
 }
 
 .task-failure-text {
   margin: 0.2rem 0 0;
-  font-size: 0.5rem;
+  font-size: var(--ui-font-xs);
   color: var(--secondary);
   white-space: pre-wrap;
   word-break: break-all;
@@ -813,7 +815,7 @@ onMounted(async () => {
 }
 
 .wave-label {
-  font-size: 0.55rem;
+  font-size: var(--ui-font-xs);
   color: var(--tertiary);
   padding: 0.15rem 0.5rem;
   border-radius: 4px;
@@ -825,7 +827,7 @@ onMounted(async () => {
 }
 
 .wave-icon {
-  font-size: 0.7rem;
+  font-size: var(--ui-font-xs);
   color: var(--blue);
 }
 
@@ -838,12 +840,12 @@ onMounted(async () => {
   border-radius: 6px;
   background: rgba(191, 90, 242, 0.06);
   border: 1px solid rgba(191, 90, 242, 0.12);
-  font-size: 0.65rem;
+  font-size: var(--ui-font-xs);
   color: var(--secondary);
 }
 
 .memory-icon {
-  font-size: 0.8rem;
+  font-size: var(--ui-font-sm);
 }
 
 /* Fork button */
@@ -855,7 +857,7 @@ onMounted(async () => {
   background: rgba(191, 90, 242, 0.08);
   color: var(--tertiary);
   cursor: pointer;
-  font-size: 0.55rem;
+  font-size: var(--ui-font-xs);
   font-weight: 550;
   transition: background 0.15s, color 0.15s;
 }
@@ -867,14 +869,14 @@ onMounted(async () => {
 
 /* Streaming text */
 .streaming-thinking {
-  font-size: 0.75rem;
+  font-size: var(--ui-font-sm);
   color: var(--secondary);
   font-style: italic;
   margin-bottom: 0.3rem;
 }
 
 .streaming-response {
-  font-size: 0.8rem;
+  font-size: var(--ui-font-sm);
   color: var(--label);
   white-space: pre-wrap;
 }
@@ -884,7 +886,7 @@ onMounted(async () => {
   align-items: center;
   gap: 0.4rem;
   color: var(--tertiary);
-  font-size: 0.8rem;
+  font-size: var(--ui-font-sm);
 }
 
 .wait-dot {

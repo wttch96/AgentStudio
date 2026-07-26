@@ -36,8 +36,10 @@ class TestAgentTaskConversion:
         assert dt.title == "测试任务"
         assert dt.objective == "完成任务目标"
         assert dt.agent == "test-agent"
-        # 增强字段不应出现在 DagTask 中
-        assert not hasattr(dt, "acceptance_criteria")
+        # 任务协议字段必须保留到 LangGraph 实际执行阶段。
+        assert dt.acceptance_criteria == ["确认文件已创建"]
+        assert dt.expected_outputs == ["output.txt"]
+        assert dt.allowed_tools == ["Read", "Write"]
 
     def test_from_dag_task(self):
         """AgentTask.from_dag_task() 应从 DagTask 创建。"""

@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import operator
+import inspect
 import json
 import threading
 import time
@@ -46,6 +47,7 @@ class GraphState(TypedDict, total=False):
     run_id: str
     objective: str
     guidance: str
+    agent_guidance: dict[str, str]
     preset_dag: dict[str, Any] | None
     direct_mode: bool
     stage: str
@@ -98,6 +100,49 @@ def build_graph(
     max_replan_iterations: int = 3,
     max_task_revisions: int = 2,
 ):
+    def call_planner(method_name: str, *args: Any, **kwargs: Any) -> Any:
+        """兼容旧版 Planner/插件：只传递其声明支持的关键字参数。"""
+        method = getattr(planner, method_name)
+        accepted = inspect.signature(method).parameters
+        return method(*args, **{
+            key: value for key, value in kwargs.items() if key in accepted
+        })
+
+    def apply_agent_selection(dag: TaskDag, project_id: str) -> TaskDag:
+        if agent_selector is None or not project_agents:
+            return dag
+        profiles = {getattr(profile, "name", ""): profile for profile in project_agents}
+        workloads: dict[str, int] = {}
+        selected_tasks: list[DagTask] = []
+        for task in dag.tasks:
+            profile = profiles.get(task.agent)
+            valid = False
+            if profile is not None:
+                try:
+                    valid, _ = agent_selector.validate_assignment(profile, task.objective)
+                except Exception:
+                    valid = True
+            if not valid:
+                required = list(task.context.get("required_capabilities", []))
+                choice = agent_selector.select(
+                    project_id,
+                    task.objective,
+                    required_tools=task.allowed_tools,
+                    required_capabilities=required,
+                    workload_counts=workloads,
+                )
+                if choice is not None:
+                    task = task.model_copy(update={
+                        "agent": choice.agent_name,
+                        "context": {
+                            **task.context,
+                            "agent_selection_reason": choice.selection_reason,
+                        },
+                    })
+            workloads[task.agent] = workloads.get(task.agent, 0) + 1
+            selected_tasks.append(task)
+        return dag.model_copy(update={"tasks": selected_tasks})
+
     # ── 初始化可选组件 ──
     if reviewer is None:
         from app.orchestration.reviewer import NoOpReviewer
@@ -125,23 +170,32 @@ def build_graph(
             stage = "execution"
             events.emit(run_id, "planner.bypassed",
                         payload={"reason": "direct-agent-or-retry"})
-        elif not project_agents:
-            events.emit(run_id, "workspace.discovery_skipped",
-                        payload={"reason": "no-project-agents"})
-            dag = planner.create_dag(
-                state["objective"], state["workspace_root"],
-                run_id=run_id, guidance=state.get("guidance", ""),
-                project_agents=project_agents,
-            )
-            stage = "execution"
         else:
-            dag = planner.create_dag(
-                state["objective"], state["workspace_root"],
-                run_id=run_id, guidance=state.get("guidance", ""),
+            discovery = call_planner(
+                "create_discovery_dag",
+                state["objective"],
                 project_agents=project_agents,
+            ) if hasattr(planner, "create_discovery_dag") else TaskDag(
+                summary="跳过项目发现", tasks=[]
             )
-            stage = "execution"
+            if discovery.tasks:
+                dag = discovery
+                stage = "discovery"
+            else:
+                events.emit(run_id, "workspace.discovery_skipped",
+                            payload={"reason": "no-discovery-agents"})
+                dag = call_planner(
+                    "create_dag",
+                    state["objective"], state["workspace_root"],
+                    run_id=run_id,
+                    guidance=state.get("guidance", ""),
+                    continuation_context=state.get("guidance", ""),
+                    project_agents=project_agents,
+                    project_id=state.get("project_id", ""),
+                )
+                stage = "execution"
 
+        dag = apply_agent_selection(dag, state.get("project_id", ""))
         events.emit(run_id, "plan.created",
                     payload={**dag.model_dump(), "stage": stage})
 
@@ -151,8 +205,7 @@ def build_graph(
         if todo_store is not None and dag.tasks:
             try:
                 todo_store.init(run_id, [
-                    {"id": t.id, "content": t.title,
-                     "assigned_to": t.agent, "depends_on": t.depends_on}
+                    {**t.model_dump(), "content": t.title, "assigned_to": t.agent}
                     for t in dag.tasks
                 ])
             except Exception:
@@ -258,11 +311,19 @@ def build_graph(
         if not pending:
             return {}
         inject_instructions = []
+        agent_guidance = dict(state.get("agent_guidance", {}))
         pause_commands = []
         for cmd in pending:
             if cmd.get("action") == "inject":
-                inject_instructions.append(cmd.get("instruction", ""))
-            else:
+                instruction = cmd.get("instruction", "")
+                if cmd.get("target") == "agent" and cmd.get("target_agent"):
+                    target = cmd["target_agent"]
+                    agent_guidance[target] = (
+                        f"{agent_guidance.get(target, '')}\n{instruction}".strip()
+                    )
+                else:
+                    inject_instructions.append(instruction)
+            elif cmd.get("target") == "all":
                 pause_commands.append(cmd)
         events.emit(state["run_id"], "interrupt.received", payload={
             "count": len(pending), "injected": len(inject_instructions),
@@ -274,6 +335,8 @@ def build_graph(
         })
         guidance = "\n".join(inject_instructions) if inject_instructions else ""
         result: dict = {}
+        if agent_guidance:
+            result["agent_guidance"] = agent_guidance
         if guidance:
             existing = state.get("guidance", "")
             result["guidance"] = (f"[用户引导]\n{guidance}\n\n{existing}"
@@ -307,11 +370,12 @@ def build_graph(
             try:
                 conflicts = conflict_detector.detect(ready)
                 if conflicts:
-                    ready = conflict_detector.resolve(conflicts, ready)
+                    deferred = {conflict.task_b for conflict in conflicts}
+                    ready = [task for task in ready if task.id not in deferred]
                     events.emit(state["run_id"], "conflicts.detected", payload={
                         "conflicts": [(c.task_a, c.task_b, c.conflicting_path)
                                        for c in conflicts],
-                        "resolution": "sequentialized",
+                        "resolution": "deferred-conflicting-tasks",
                     })
             except Exception:
                 pass
@@ -367,6 +431,8 @@ def build_graph(
                         "agent_max_turns": state["agent_max_turns"],
                         "agent_timeout_seconds": state["agent_timeout_seconds"],
                         "continuation_context": state.get("guidance", ""),
+                        "guidance": state.get("guidance", ""),
+                        "agent_guidance": state.get("agent_guidance", {}),
                         "project_id": state.get("project_id", ""),
                         "execution_plan": state.get("execution_plan", {}),
                     }))
@@ -401,9 +467,16 @@ def build_graph(
                     agent_profile = a
                     break
 
+        targeted_guidance = state.get("agent_guidance", {}).get(task.agent, "")
+        worker_state = dict(state)
+        if targeted_guidance:
+            worker_state["guidance"] = (
+                f"{state.get('guidance', '')}\n[面向 {task.agent} 的用户引导]\n"
+                f"{targeted_guidance}"
+            ).strip()
         if context_builder is not None:
             try:
-                ctx = context_builder.build(state, task, agent_profile)
+                ctx = context_builder.build(worker_state, task, agent_profile)
                 dependencies = ctx.build_dependency_results()
             except Exception:
                 # 回退到原有上下文构建
@@ -492,19 +565,26 @@ def build_graph(
                 except Exception:
                     pass
 
+            execute_kwargs = {
+                "workspace_root": state["workspace_root"],
+                "max_turns": state["agent_max_turns"],
+                "timeout_seconds": state["agent_timeout_seconds"],
+                "project_id": state.get("project_id", ""),
+                "interrupt_router": interrupt_router,
+            }
+            accepted = inspect.signature(active_executor.execute).parameters
             result = active_executor.execute(
-                state["run_id"], task, dependencies,
-                cancel_event, workspace_root=state["workspace_root"],
-                max_turns=state["agent_max_turns"],
-                timeout_seconds=state["agent_timeout_seconds"],
-                project_id=state.get("project_id", ""),
+                state["run_id"], task, dependencies, cancel_event,
+                **{key: value for key, value in execute_kwargs.items() if key in accepted},
             )
             duration_ms = int(time.time() * 1000) - started_ms
             if result is not None:
                 result.started_at = started_at
                 result.duration_ms = duration_ms
             events.emit(state["run_id"],
-                        "agent.completed" if result and result.status == "completed"
+                        "agent.completed" if result and result.status in (
+                            "completed", "partially_completed", "need_review"
+                        )
                         else "agent.failed",
                         agent_id=task.agent, task_id=task.id,
                         payload={**(result.model_dump() if result else {}),
@@ -514,7 +594,9 @@ def build_graph(
                         agent_id=task.agent, task_id=task.id,
                         payload={"title": task.title, "objective": task.objective})
             events.emit(state["run_id"],
-                        "agent.completed" if result.status == "completed" else "agent.failed",
+                        "agent.completed" if result.status in (
+                            "completed", "partially_completed", "need_review"
+                        ) else "agent.failed",
                         agent_id=task.agent, task_id=task.id,
                         payload=result.model_dump())
 
@@ -525,6 +607,20 @@ def build_graph(
                     state["run_id"], f"result:{task.id}",
                     result.model_dump(), task.agent,
                 )
+                for artifact in result.artifacts:
+                    blackboard_store.write(
+                        state["run_id"],
+                        f"artifact:{task.id}:{len(blackboard_store.read_all(state['run_id']))}",
+                        artifact,
+                        task.agent,
+                    )
+                for decision in result.decisions:
+                    blackboard_store.write(
+                        state["run_id"],
+                        f"decision:{task.id}:{len(blackboard_store.read_all(state['run_id']))}",
+                        decision,
+                        task.agent,
+                    )
                 all_results = blackboard_store.read(state["run_id"], "all_results") or []
                 all_results.append({
                     "task_id": task.id, "agent": task.agent,
@@ -537,7 +633,9 @@ def build_graph(
         # ── Todo 状态更新 ──
         if todo_store is not None:
             try:
-                todo_store.update_status(state["run_id"], task.id, result.status, task.agent)
+                todo_store.apply_result(
+                    state["run_id"], task.id, result.model_dump(), task.agent
+                )
             except Exception:
                 pass
 
@@ -564,10 +662,19 @@ def build_graph(
         iter_count = state.get("iteration_count", 0)
         replan_count = state.get("replan_count", 0)
 
+        # Discovery is evidence collection, not a deliverable. Its results are
+        # consumed by the planner before normal acceptance review begins.
+        if state.get("stage") == "discovery":
+            return {"review_results": []}
+
         try:
+            active_limits = [
+                task.max_iterations for task in dag.tasks if task.id in active_ids
+            ]
             review_results = reviewer.review_wave(
                 run_id, active_ids, all_results, dag,
-                iteration=replan_count, max_iterations=max_replan_iterations,
+                iteration=replan_count,
+                max_iterations=min(active_limits or [max_task_revisions]),
             )
         except Exception as exc:
             events.emit(run_id, "review.error", payload={"error": str(exc)})
@@ -577,6 +684,21 @@ def build_graph(
             "decisions": [{"task_id": r.task_id, "decision": r.status.value}
                           for r in review_results],
         })
+        if todo_store is not None:
+            for item in review_results:
+                status_map = {
+                    ReviewDecision.ACCEPTED: "completed",
+                    ReviewDecision.ACCEPTED_WITH_RISKS: "completed",
+                    ReviewDecision.BLOCKED: "blocked",
+                    ReviewDecision.REJECTED: "failed",
+                    ReviewDecision.REVISION_REQUIRED: "review",
+                }
+                try:
+                    todo_store.update_status(
+                        run_id, item.task_id, status_map[item.status], "reviewer"
+                    )
+                except Exception:
+                    pass
 
         needs_replan = reviewer.should_replan(review_results)
 
@@ -621,6 +743,8 @@ def build_graph(
         stage = state.get("stage", "")
         if stage == "replan_requested":
             return "replan"
+        if stage == "discovery":
+            return "replan_after_discovery"
 
         return "compact_memory"
 
@@ -734,6 +858,21 @@ def build_graph(
                 icon = "✓" if r.status == "completed" else "✗" if r.status == "failed" else "-"
                 parts.append(f"{icon} {r.agent}: {r.summary[:300]}")
             final_answer = "\n".join(parts) if parts else "无执行结果"
+            try:
+                dag = TaskDag.model_validate(state["dag"])
+                if not state.get("direct_mode"):
+                    events.emit(state["run_id"], "brain.synthesizing",
+                                payload={"result_count": len(results)})
+                    final_answer = call_planner(
+                        "summarize",
+                        state["objective"], dag, results,
+                        run_id=state["run_id"],
+                        guidance=state.get("guidance", ""),
+                        continuation_context=state.get("guidance", ""),
+                    )
+            except Exception as exc:
+                events.emit(state["run_id"], "summary.fallback",
+                            payload={"error": str(exc)})
 
         if stop_reason:
             final_answer = (
@@ -845,11 +984,14 @@ def build_graph(
         ]
         events.emit(run_id, "planner.started",
                     payload={"model": "deepseek", "phase": "implementation"})
-        implementation_dag = planner.create_dag(
+        implementation_dag = call_planner(
+            "create_dag",
             state["objective"], state["workspace_root"],
             run_id=run_id, guidance=state.get("guidance", ""),
+            continuation_context=state.get("guidance", ""),
             discovery_results=discovery_results,
             project_agents=project_agents,
+            project_id=state.get("project_id", ""),
         )
         successful_discovery_ids = [
             r.task_id for r in discovery_results if r.status == "completed"
@@ -868,6 +1010,20 @@ def build_graph(
         if combined_dag.coordination_contract:
             events.emit(run_id, "brain.contract_created",
                         payload={"text": combined_dag.coordination_contract})
+        if todo_store is not None:
+            try:
+                for task in implementation_tasks:
+                    todo_store.add(
+                        run_id,
+                        {
+                            **task.model_dump(),
+                            "content": task.title,
+                            "assigned_to": task.agent,
+                        },
+                        "planner",
+                    )
+            except Exception:
+                pass
         events.emit(run_id, "plan.created",
                     payload={**combined_dag.model_dump(), "stage": "execution"})
         return {"dag": combined_dag.model_dump(), "stage": "execution"}
@@ -910,7 +1066,7 @@ def build_graph(
     builder.add_edge("barrier", "review")
     builder.add_conditional_edges(
         "review", route_after_review,
-        ["replan", "compact_memory", "synthesize"]
+        ["replan", "replan_after_discovery", "compact_memory", "synthesize"]
     )
 
     # replan → scheduler (重新进入调度循环)

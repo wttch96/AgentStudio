@@ -72,8 +72,25 @@ COMMON_PROTOCOL = """
 
 ### 6. 输出约定
 
-- 尽量以结构化方式返回结果
-- 明确区分: 已完成的 / 未完成的 / 需要协助的
-- 引用其他 Agent 结果时标注来源
-- 对不确定的判断注明是推断而非事实
+- 最终回复必须以一个可解析的 JSON 对象结束；不要只在自然语言中提及这些字段
+- status 只能是 completed / partially_completed / blocked / failed / need_review
+- 必须返回 summary、artifacts、decisions、assumptions、risks、dependencies、
+  verification 和 next_actions
+- verification 必须区分 performed、not_performed 和 result
+- artifacts 必须列出真实生成或修改的文件、代码、文档、接口、数据或看板键
+- 明确区分已完成、未完成和需要协助的内容
+- 引用其他 Agent 结果时标注来源；对不确定判断注明是推断而非事实
+
+推荐结构：
+{
+  "status": "completed | partially_completed | blocked | failed | need_review",
+  "summary": "...",
+  "artifacts": [{"type": "file | code | document | analysis | api | data", "path_or_id": "...", "description": "..."}],
+  "decisions": [{"decision": "...", "reason": "..."}],
+  "assumptions": [],
+  "risks": [],
+  "dependencies": [],
+  "verification": {"performed": [], "not_performed": [], "result": "passed | failed | partial | not_run"},
+  "next_actions": []
+}
 """.strip()

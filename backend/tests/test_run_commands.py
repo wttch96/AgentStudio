@@ -2,18 +2,18 @@ from app.services.run_commands import parse_run_command
 
 
 def test_direct_agent_commands_are_parsed():
-    frontend = parse_run_command("/frontend 修复页面布局")
-    backend = parse_run_command("/agent backend 检查接口")
+    frontend = parse_run_command("/vue-frontend 修复页面布局")
+    backend = parse_run_command("/flask-backend 检查接口")
 
     assert frontend.kind == "direct"
-    assert frontend.agent == "frontend-agent"
+    assert frontend.agent == "vue-frontend"
     assert frontend.instruction == "修复页面布局"
-    assert backend.agent == "backend-agent"
+    assert backend.agent == "flask-backend"
     assert backend.instruction == "检查接口"
 
 
-def test_retry_command_keeps_task_id():
-    command = parse_run_command("/retry parse-packet")
+def test_brain_command_routes_to_planner():
+    command = parse_run_command("/brain 重新评估接口契约")
 
-    assert command.kind == "retry"
-    assert command.task_id == "parse-packet"
+    assert command.kind == "normal"
+    assert command.instruction == "重新评估接口契约"

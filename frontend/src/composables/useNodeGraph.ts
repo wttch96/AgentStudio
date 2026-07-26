@@ -34,6 +34,42 @@ function groupToolCalls(rawCalls: ToolCall[]): ToolCallGroup[] {
   return groups
 }
 
+function estimateTokens(value: unknown): number {
+  if (value == null) return 0
+  const text = typeof value === 'string' ? value : JSON.stringify(value)
+  let ascii = 0
+  let nonAscii = 0
+  for (const char of text) {
+    if (char.charCodeAt(0) <= 0x7f) ascii++
+    else nonAscii++
+  }
+  return Math.ceil(ascii / 4 + nonAscii / 1.5)
+}
+
+function deriveTokenUsage(
+  taskEvents: RunEvent[],
+  fallbackInput: unknown,
+  fallbackOutput: unknown,
+) {
+  const usageEvents = taskEvents.filter((event) => event.type === 'agent.usage')
+  const input = usageEvents.reduce(
+    (sum, event) => sum + Number(event.payload.input_tokens || 0),
+    0,
+  )
+  const output = usageEvents.reduce(
+    (sum, event) => sum + Number(event.payload.output_tokens || 0),
+    0,
+  )
+  if (input > 0 || output > 0) {
+    return { input, output, estimated: false }
+  }
+  return {
+    input: estimateTokens(fallbackInput),
+    output: estimateTokens(fallbackOutput),
+    estimated: true,
+  }
+}
+
 // ==================== 中间步骤派生 ====================
 
 function deriveIntermediateSteps(events: RunEvent[]): IntermediateStep[] {
@@ -131,32 +167,45 @@ export function useNodeGraph(
    */
   const nodes = computed<ExecutionNode[]>(() => {
     const allEvents = events.value
-    const convRuns = conversationRuns?.value || []
+    const convRuns = [...(conversationRuns?.value || [])].sort((left, right) => {
+      const turnDelta = (left.turn_index || 1) - (right.turn_index || 1)
+      if (turnDelta !== 0) return turnDelta
+      const createdDelta = String(left.created_at || '').localeCompare(String(right.created_at || ''))
+      return createdDelta || left.id.localeCompare(right.id)
+    })
+    // 侧栏代表整段 conversation；重新进入时 activeRun 可能仍是根 run。
+    // DAG 总览固定展示最新轮任务，避免刷新前后出现不同布局。
+    const layoutRunId = convRuns.at(-1)?.id ?? activeRunId.value
+    const graphEvents = layoutRunId
+      ? allEvents.filter(event => event.run_id === layoutRunId)
+      : allEvents
 
     // 0. 多轮对话 turn 节点
     const turnNodes: ExecutionNode[] = []
     if (convRuns.length > 1) {
       for (const cr of convRuns) {
-        const isActive = cr.id === activeRunId.value
+        const turnIndex = cr.turn_index || 1
         turnNodes.push({
           id: `turn-${cr.id}`,
-          type: 'agent' as const,
-          name: cr.objective.slice(0, 30),
-          sub: `轮次 ${cr.turn_index || '?'} · ${cr.status}`,
+          type: 'conversation' as const,
+          name: `第 ${turnIndex} 轮 · 用户`,
+          sub: cr.objective.slice(0, 35),
           status: (cr.status as NodeStatus) || 'pending',
           parentId: cr.parent_run_id ? `turn-${cr.parent_run_id}` : null,
           agentId: 'brain',
           taskId: null,
           runId: cr.id,
-          depth: (cr.turn_index || 1) - 1,  // 从左往右排列：turn 1 在 depth 0, turn 2 在 depth 1...
-          startedAt: cr.created_at || null,
-          finishedAt: cr.status === 'completed' ? cr.created_at : null,
+          depth: turnIndex - 1,
+          startedAt: cr.created_at ?? null,
+          finishedAt: cr.status === 'completed' ? (cr.created_at ?? null) : null,
           durationMs: null,
           objective: cr.objective,
           summary: cr.final_answer || null,
           input: null,
           output: cr.final_answer ? { text: cr.final_answer } : null,
-          error: cr.status === 'failed' ? { nodeId: `turn-${cr.id}`, type: 'error', message: '执行失败' } : null,
+          error: cr.status === 'failed'
+            ? { nodeId: `turn-${cr.id}`, type: 'UNKNOWN', message: '执行失败', stack: null }
+            : null,
           hasError: cr.status === 'failed',
           hasToolCalls: false,
           toolCallCount: 0,
@@ -165,24 +214,25 @@ export function useNodeGraph(
           dependsOn: cr.parent_run_id ? [`turn-${cr.parent_run_id}`] : [],
           interruptible: false,
           agentType: undefined,
+          tokenUsage: deriveTokenUsage([], cr.objective, cr.final_answer),
         })
       }
     }
 
     // 1-6. (原有逻辑) 构建 orchestrator + agent 节点
-    if (!allEvents.length) return []
+    if (!graphEvents.length) return []
 
     // 1. 查找 plan.created 事件获取 DAG 定义
-    const planEvent = allEvents
+    const planEvent = graphEvents
       .slice()
       .reverse()
       .find((e) => e.type === 'plan.created')
     const tasks: PlanTask[] = (planEvent?.payload.tasks as PlanTask[] | undefined) ?? []
-    const runId = activeRunId.value || planEvent?.run_id || ''
+    const runId = layoutRunId || planEvent?.run_id || ''
 
     // 2. 按 task_id 分组事件
     const eventsByTask = new Map<string, RunEvent[]>()
-    for (const e of allEvents) {
+    for (const e of graphEvents) {
       if (!e.task_id) continue
       const list = eventsByTask.get(e.task_id) || []
       list.push(e)
@@ -207,22 +257,24 @@ export function useNodeGraph(
     for (const t of tasks) getDepth(t.id)
 
     // 4. 收集没有任务的 agent 事件（如主脑事件）
-    const plannerEvents = allEvents.filter(
+    const plannerEvents = graphEvents.filter(
       (e) => e.type === 'planner.started' || e.type === 'plan.created',
     )
-    const runCompleted = allEvents.some((e) => e.type === 'run.completed')
-    const runFailed = allEvents.some((e) => e.type === 'run.failed')
+    const runCompleted = graphEvents.some((e) => e.type === 'run.completed')
+    const runFailed = graphEvents.some((e) => e.type === 'run.failed')
 
     // 5. 构建 Orchestrator 节点 (主脑)
-    // depth 偏移：排在对话 turn 节点右侧
-    const depthOffset = turnNodes.length
+    // 主脑固定接在当前轮次后；状态、摘要和完成时间更新不得改变 depth。
+    const activeTurnNode = turnNodes.find(node => node.runId === runId)
+      ?? turnNodes.at(-1)
+    const depthOffset = activeTurnNode ? activeTurnNode.depth + 1 : 0
     const orchestratorNode: ExecutionNode = {
       id: `orchestrator-${runId}`,
       type: 'orchestrator',
       name: '主脑编排',
       sub: tasks.length ? `${tasks.length} 个任务` : runCompleted ? '直接回答' : '规划中',
       status: tasks.length || runCompleted ? 'completed' : runFailed ? 'failed' : plannerEvents.length ? 'running' : 'pending',
-      parentId: null,
+      parentId: activeTurnNode?.id ?? null,
       agentId: 'brain',
       taskId: null,
       runId,
@@ -240,9 +292,14 @@ export function useNodeGraph(
       toolCallCount: 0,
       intermediateSteps: deriveIntermediateSteps(plannerEvents),
       toolCallGroups: [],
-      dependsOn: [],
+      dependsOn: activeTurnNode ? [activeTurnNode.id] : [],
       interruptible: false,
       agentType: undefined,
+      tokenUsage: deriveTokenUsage(
+        plannerEvents,
+        plannerEvents.map(event => event.payload),
+        planEvent?.payload,
+      ),
     }
 
     // 6. 构建 Agent 节点
@@ -271,10 +328,17 @@ export function useNodeGraph(
       const failedEvent = taskEvents.find((e) => e.type === 'agent.failed')
       let error: TaskError | null = null
       if (failedEvent) {
-        const errorMsg =
+        let errorMsg =
           (failedEvent.payload.error as string) ||
           (failedEvent.payload.summary as string) ||
           'Agent 执行错误'
+        if (errorMsg.includes('Claude Code returned an error result: success')) {
+          const apiErrorEvent = [...taskEvents].reverse().find(
+            event => event.type === 'agent.message'
+              && String(event.payload.text || '').trim().toLowerCase().startsWith('api error:'),
+          )
+          if (apiErrorEvent) errorMsg = String(apiErrorEvent.payload.text)
+        }
         error = {
           nodeId: `task-${task.id}`,
           type: classifyErrorType(errorMsg),
@@ -286,6 +350,9 @@ export function useNodeGraph(
       // 提取完成信息
       const completedEvent = taskEvents.find((e) => e.type === 'agent.completed')
       const startedEvent = taskEvents.find((e) => e.type === 'agent.started')
+      const messageOutput = taskEvents
+        .filter((event) => event.type === 'agent.message')
+        .map((event) => event.payload.text)
 
       return {
         id: `task-${task.id}`,
@@ -324,6 +391,15 @@ export function useNodeGraph(
         dependsOn: task.depends_on.map((d) => `task-${d}`),
         interruptible: true,
         agentType: task.agent_type || undefined,
+        tokenUsage: deriveTokenUsage(
+          taskEvents,
+          {
+            objective: task.objective,
+            depends_on: task.depends_on,
+            write_scope: task.write_scope,
+          },
+          messageOutput.length ? messageOutput : completedEvent?.payload,
+        ),
       }
     })
 
@@ -342,7 +418,7 @@ export function useNodeGraph(
         label: node.type === 'agent' ? '依赖' : undefined,
       })),
     )
-    // 为所有没有 depends_on 的 agent 节点自动添加 orchestrator → agent 边
+    // 只给真正的执行 Agent 补主脑连线；conversation 节点有自己的轮次链。
     const leafIds = new Set(
       nodes.value
         .filter(n => n.type === 'agent' && n.dependsOn.length === 0)

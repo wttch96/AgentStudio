@@ -158,19 +158,40 @@ class AgentSelector:
         Returns:
             (is_valid, reason)
         """
-        obj_lower = task_objective.lower()
-
-        # 检查 forbidden_tasks
+        obj_lower = self._normalise_constraint_text(task_objective)
         for forbidden in profile.forbidden_tasks:
-            if forbidden.lower() in obj_lower:
+            if self._constraint_matches(forbidden, obj_lower):
                 return False, f"任务命中禁止项: {forbidden}"
 
         # 检查 limitations
         for limitation in profile.limitations:
-            if limitation.lower() in obj_lower:
+            if self._constraint_matches(limitation, obj_lower):
                 return False, f"任务涉及已知限制: {limitation}"
 
         return True, "验证通过"
+
+    @staticmethod
+    def _normalise_constraint_text(value: str) -> str:
+        text = value.lower().replace("_", " ").replace("-", " ")
+        aliases = {
+            "数据库迁移": "database migration",
+            "数据库": "database",
+            "认证模块": "auth module",
+            "认证": "auth",
+            "前端": "frontend",
+            "后端": "backend",
+            "删除": "delete",
+        }
+        for source, target in aliases.items():
+            text = text.replace(source, f" {target} ")
+        return " ".join(text.split())
+
+    @classmethod
+    def _constraint_matches(cls, constraint: str, objective: str) -> bool:
+        normalized = cls._normalise_constraint_text(constraint)
+        # "no-auth-module" describes an inability; match the capability noun.
+        tokens = [token for token in normalized.split() if token not in {"no", "not", "none"}]
+        return bool(tokens) and all(token in objective for token in tokens)
 
     @staticmethod
     def resolve_role(
@@ -229,13 +250,13 @@ class AgentSelector:
 
         # ── 强制规则检查 ──
         for forbidden in profile.forbidden_tasks:
-            if forbidden.lower() in obj_lower:
+            if self._constraint_matches(forbidden, self._normalise_constraint_text(obj_lower)):
                 score.excluded = True
                 score.exclusion_reason = f"命中禁止任务: {forbidden}"
                 return score
 
         for limitation in profile.limitations:
-            if limitation.lower() in obj_lower:
+            if self._constraint_matches(limitation, self._normalise_constraint_text(obj_lower)):
                 score.excluded = True
                 score.exclusion_reason = f"任务涉及已知限制: {limitation}"
                 return score

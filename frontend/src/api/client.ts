@@ -128,6 +128,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ command_id: commandId, decision: decision || 'apply' }),
     }),
+  executeFlow: (name: string, payload: { objective?: string; inputs?: Record<string, unknown>; project_id?: string }) =>
+    request<Run>(`/flows/${name}/runs`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 
   knowledgeSearch: (q: string, category?: string, topK?: number, projectId?: string) => {
     const params = new URLSearchParams()
@@ -160,8 +165,8 @@ export const api = {
     return request<import('../types').KnowledgeStats>('/knowledge-stats' + p)
   },
   projects: () => request<{ items: import("../types").Project[] }>("/projects"),
-  createProject: (name: string, root_dir: string, description?: string) =>
-    request<import("../types").Project>("/projects", { method: "POST", body: JSON.stringify({ name, root_dir, description }) }),
+  createProject: (name: string, root_dir: string, description?: string, project_name?: string) =>
+    request<import("../types").Project>("/projects", { method: "POST", body: JSON.stringify({ name, root_dir, description, project_name }) }),
   deleteProject: (id: string) =>
     fetch(API_BASE + "/projects/" + id, { method: "DELETE" }).then(r => { if (!r.ok) throw new Error("delete failed") }),
   setCurrentProject: (projectId: string) =>

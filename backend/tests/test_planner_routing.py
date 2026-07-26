@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+from app.agents.registry import AgentProfile
 from app.domain.models import DagTask, TaskDag
 from app.planning.deepseek_planner import DeepSeekPlanner
 
@@ -75,7 +76,13 @@ def test_workspace_context_is_shallow_and_ignores_secrets(tmp_path: Path):
 def test_discovery_dag_searches_only_explicit_frontend_and_backend_domains():
     planner = DeepSeekPlanner.__new__(DeepSeekPlanner)
 
-    dag = planner.create_discovery_dag("给现有前后端项目增加一个新 API 功能，不用 Netty")
+    dag = planner.create_discovery_dag(
+        "给现有前后端项目增加一个新 API 功能，不用 Netty",
+        project_agents=[
+            AgentProfile(name="frontend-agent", display_name="前端", sub_dir="frontend"),
+            AgentProfile(name="backend-agent", display_name="后端", sub_dir="backend"),
+        ],
+    )
 
     assert {task.agent for task in dag.tasks} == {
         "frontend-agent",

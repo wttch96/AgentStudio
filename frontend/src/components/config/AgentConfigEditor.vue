@@ -13,6 +13,9 @@ const message = ref('')
 const form = reactive<AgentDetail & { id: string; sub_dir: string; display_name: string; agent_type: string }>({
   id: '', name: '', display_name: '', description: '', tools: [], skills: [],
   skill_count: 0, builtin: false, prompt: '', sub_dir: '', agent_type: 'claude', model: '',
+  role: 'implementation_agent', capabilities: [], limitations: [], preferred_tasks: [],
+  forbidden_tasks: [], input_contract: {}, output_contract: {}, dependencies_info: [],
+  priority: 0, max_iterations: 3,
 })
 
 const templates = ref<AgentTemplate[]>([])
@@ -31,7 +34,7 @@ const manualSkills: Ref<string[]> = ref([])
 
 const codingAgents = ref<AgentProfile[]>([])
 watch(() => props.agents, (agents) => {
-  codingAgents.value = agents.filter(a => a.agent_type !== 'brain')
+  codingAgents.value = agents
   if (codingAgents.value.length > 0 && selectedName.value === '__new__') {
     selectedName.value = codingAgents.value[0].name
   }
@@ -40,6 +43,11 @@ watch(() => props.agents, (agents) => {
 function reset() {
   Object.assign(form, { id: '', name: '', display_name: '', description: '', tools: [], skills: [],
     skill_count: 0, builtin: false, prompt: '', sub_dir: '', agent_type: 'claude', model: '' })
+  Object.assign(form, {
+    role: 'implementation_agent', capabilities: [], limitations: [], preferred_tasks: [],
+    forbidden_tasks: [], input_contract: {}, output_contract: {}, dependencies_info: [],
+    priority: 0, max_iterations: 3,
+  })
   message.value = ''
 }
 function resetManualForm() {
@@ -111,7 +119,15 @@ async function save() {
   if (!props.projectId || !form.id) { message.value = '请先选择或创建一个 Agent'; return }
   saving.value = true; message.value = ''
   try {
-    const payload: Record<string, unknown> = { display_name: form.display_name, description: form.description, system_prompt: form.prompt, skills: form.skills }
+    const payload: Record<string, unknown> = {
+      display_name: form.display_name, description: form.description,
+      role: form.role, system_prompt: form.prompt, skills: form.skills,
+      capabilities: form.capabilities, limitations: form.limitations,
+      preferred_tasks: form.preferred_tasks, forbidden_tasks: form.forbidden_tasks,
+      input_contract: form.input_contract, output_contract: form.output_contract,
+      dependencies_info: form.dependencies_info, priority: form.priority,
+      max_iterations: form.max_iterations,
+    }
     if (form.agent_type === 'claude') { payload.tools = form.tools; payload.sub_dir = form.sub_dir }
     if (form.agent_type === 'rag' || form.agent_type === 'chat') { payload.model = form.model }
     await api.updateProjectAgent(props.projectId, form.id, payload)
@@ -285,6 +301,30 @@ watch(() => props.projectId, (pid) => { if (pid && selectedName.value && selecte
           <label class="form-label">用途说明</label>
           <ElInput v-model="form.description" size="small" />
         </div>
+        <div class="mb-3">
+          <label class="form-label">角色</label>
+          <ElInput v-model="form.role" size="small" placeholder="implementation_agent / reviewer" />
+        </div>
+        <div class="row g-2 mb-3">
+          <div class="col">
+            <label class="form-label">优先级（0-10）</label>
+            <ElInputNumber v-model="form.priority" :min="0" :max="10" size="small" />
+          </div>
+          <div class="col">
+            <label class="form-label">最大迭代次数</label>
+            <ElInputNumber v-model="form.max_iterations" :min="1" :max="20" size="small" />
+          </div>
+        </div>
+        <div class="mb-3"><label class="form-label">能力</label>
+          <ElSelect v-model="form.capabilities" multiple filterable allow-create default-first-option size="small" style="width:100%" placeholder="输入后回车添加" /></div>
+        <div class="mb-3"><label class="form-label">限制</label>
+          <ElSelect v-model="form.limitations" multiple filterable allow-create default-first-option size="small" style="width:100%" placeholder="输入后回车添加" /></div>
+        <div class="mb-3"><label class="form-label">偏好任务</label>
+          <ElSelect v-model="form.preferred_tasks" multiple filterable allow-create default-first-option size="small" style="width:100%" placeholder="输入后回车添加" /></div>
+        <div class="mb-3"><label class="form-label">禁止任务</label>
+          <ElSelect v-model="form.forbidden_tasks" multiple filterable allow-create default-first-option size="small" style="width:100%" placeholder="输入后回车添加" /></div>
+        <div class="mb-3"><label class="form-label">运行依赖</label>
+          <ElSelect v-model="form.dependencies_info" multiple filterable allow-create default-first-option size="small" style="width:100%" placeholder="输入后回车添加" /></div>
 
         <template v-if="form.agent_type === 'rag' || form.agent_type === 'chat'">
           <div class="mb-3">

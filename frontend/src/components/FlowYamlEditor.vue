@@ -123,24 +123,25 @@ async function doSave() {
 <template>
   <div class="flow-editor">
     <div class="editor-toolbar">
-      <input
+      <ElInput
         v-model="name"
         placeholder="流程名称 (唯一)"
         class="name-input"
         :disabled="!isNew"
       />
       <span class="spacer" />
-      <button class="tb-btn" @click="doValidate">校验</button>
-      <button class="tb-btn primary" :disabled="loading" @click="doSave">
+      <ElButton size="small" @click="doValidate">校验</ElButton>
+      <ElButton size="small" type="primary" :loading="loading" @click="doSave">
         {{ loading ? '保存中...' : '保存' }}
-      </button>
+      </ElButton>
     </div>
 
     <div class="editor-body">
       <div class="editor-pane">
-        <textarea
+        <ElInput
           v-model="yamlContent"
           class="yaml-textarea"
+          type="textarea"
           placeholder="# 在此编写 YAML 流程定义..."
           spellcheck="false"
         />
@@ -180,29 +181,8 @@ async function doSave() {
 }
 .name-input {
   width: 200px;
-  padding: 4px 8px;
-  border: 1px solid var(--border-color, #ddd);
-  border-radius: 4px;
-  font-size: 13px;
-  background: var(--bg-primary, #fff);
-  color: var(--text-primary, #333);
 }
-.name-input:disabled { opacity: 0.6; }
 .spacer { flex: 1; }
-.tb-btn {
-  font-size: 12px;
-  padding: 4px 14px;
-  border: 1px solid var(--border-color, #ddd);
-  border-radius: 4px;
-  background: var(--bg-secondary, #fefefe);
-  cursor: pointer;
-}
-.tb-btn.primary {
-  background: var(--brand, #409eff);
-  color: #fff;
-  border-color: var(--brand, #409eff);
-}
-.tb-btn:disabled { opacity: 0.5; cursor: default; }
 
 .editor-body {
   flex: 1;
@@ -220,15 +200,19 @@ async function doSave() {
 .yaml-textarea {
   width: 100%;
   height: 100%;
+}
+.yaml-textarea :deep(.el-textarea__inner) {
+  height: 100%;
+  min-height: 100% !important;
   padding: 12px;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
   font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
-  font-size: 13px;
+  font-size: var(--ui-font-base);
   line-height: 1.5;
   tab-size: 2;
-  border: none;
   resize: none;
-  background: var(--bg-primary, #fff);
-  color: var(--text-primary, #333);
 }
 
 .validate-pane, .validate-pane-empty {
@@ -236,7 +220,7 @@ async function doSave() {
   border-radius: 6px;
   padding: 12px;
   overflow-y: auto;
-  font-size: 12px;
+  font-size: var(--ui-font-sm);
 }
 .vp-header { margin-bottom: 8px; font-weight: 600; }
 .vp-ok { color: #67c23a; }

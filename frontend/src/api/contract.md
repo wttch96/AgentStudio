@@ -433,7 +433,7 @@ data: {"run_id":"...","sequence":42,"type":"agent_message","timestamp":"...","ag
 ```
 
 **字段**:
-- `target`: `"all"` | `"agent"` | `"planner"`
+- `target`: `"all"` | `"agent"` | `"planner"` | `"task"`
 - `action`: `"pause"` | `"inject"` | `"replan"` | `"abort"` | `"resume"`
 
 **Response** (202): `{ "id": "cmd-id", "accepted": true }`
@@ -453,6 +453,9 @@ data: {"run_id":"...","sequence":42,"type":"agent_message","timestamp":"...","ag
 `decision`: `"apply"` | `"discard"` | `"defer"`
 
 **Response** (202): `{ "accepted": true }`
+
+运行中的引导统一使用 `/brain <指令>` 或 `/<agent-name> <指令>`。节点详情只发送
+`target: "task", action: "abort"`，不再提供第二套引导输入。
 
 ---
 
@@ -639,10 +642,14 @@ data: {"run_id":"...","sequence":42,"type":"agent_message","timestamp":"...","ag
 ```json
 {
   "name": "My Project",
+  "project_name": "my-project",
   "root_dir": "/path/to/project",
   "description": "Project description"
 }
 ```
+
+`project_name` 可选，但建议显式提供；它是 `.workspace/<project_name>/`
+的稳定目录名，只允许小写字母、数字和连字符。
 
 **Response** (201): `Project`
 
@@ -657,6 +664,11 @@ data: {"run_id":"...","sequence":42,"type":"agent_message","timestamp":"...","ag
 #### `DELETE /api/projects/{id}`
 
 删除项目。Response: 204
+
+#### `GET/PUT /api/projects/current`
+
+读取或设置 `.workspace/current-project.yaml`。切换后，后续请求使用目标项目
+自己的配置、SQLite、RAG、记忆和 checkpoint。
 
 #### `GET /api/projects/{id}/agents`
 
@@ -684,7 +696,9 @@ data: {"run_id":"...","sequence":42,"type":"agent_message","timestamp":"...","ag
 
 更新项目 Agent 配置。
 
-**Request**: 部分字段 JSON（`sub_dir`, `system_prompt`, `tools`, `skills` 等任意字段）
+**Request**: 部分字段 JSON，支持 `role`、`sub_dir`、`system_prompt`、
+`capabilities`、`limitations`、`preferred_tasks`、`forbidden_tasks`、
+`tools`、`skills`、输入/输出契约、`priority` 和 `max_iterations`。
 
 **Response** (200): `ProjectAgent`
 

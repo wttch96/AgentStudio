@@ -561,10 +561,11 @@ function nodeStrokeColor(node: LayoutNode) {
       <span class="legend-hint">点击节点展开详情</span>
     </div>
 
-    <details v-if="contract" class="coordination-contract" style="margin-top:0.5rem">
-      <summary>共享接口 / 协议契约</summary>
-      <pre>{{ contract }}</pre>
-    </details>
+    <ElCollapse v-if="contract" class="coordination-contract" style="margin-top:0.5rem">
+      <ElCollapseItem title="共享接口 / 协议契约" name="contract">
+        <pre>{{ contract }}</pre>
+      </ElCollapseItem>
+    </ElCollapse>
   </section>
 </template>
 
@@ -573,7 +574,7 @@ function nodeStrokeColor(node: LayoutNode) {
 .dag-graph-header {
   display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.35rem;
 }
-.dag-stats { font-size: 0.625rem; color: var(--tertiary); }
+.dag-stats { font-size: var(--ui-font-xs); color: var(--tertiary); }
 
 .graph-container {
   background: var(--surface);
@@ -594,22 +595,22 @@ function nodeStrokeColor(node: LayoutNode) {
 
 .graph-legend {
   display: flex; flex-wrap: wrap; gap: 0.65rem; align-items: center;
-  font-size: 0.625rem; color: var(--tertiary); margin-top: 0.35rem;
+  font-size: var(--ui-font-xs); color: var(--tertiary); margin-top: 0.35rem;
 }
 .legend-item { display: flex; align-items: center; gap: 0.25rem; }
 .legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-.legend-hint { margin-left: auto; font-style: italic; opacity: 0.7; font-size: 0.55rem; }
+.legend-hint { margin-left: auto; font-style: italic; opacity: 0.7; font-size: var(--ui-font-xs); }
 
 .coordination-contract {
   margin-bottom: 10px; padding: 11px 13px;
   border: 1px solid rgba(10,132,255,.22); border-radius: 12px;
   background: rgba(10,132,255,.08);
 }
-.coordination-contract summary { color: #64d2ff; cursor: pointer; font-size: 0.625rem; font-weight: 600; }
+.coordination-contract summary { color: #64d2ff; cursor: pointer; font-size: var(--ui-font-xs); font-weight: 600; }
 .coordination-contract pre {
   max-height: 200px; overflow: auto; margin: 9px 0 0;
   color: var(--secondary);
-  font: 0.5625rem/1.6 ui-monospace,"SFMono-Regular",Menlo,monospace;
+  font: var(--ui-font-xs)/1.6 ui-monospace,"SFMono-Regular",Menlo,monospace;
   white-space: pre-wrap;
 }
 </style>

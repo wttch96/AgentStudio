@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { IntermediateStep } from '../types'
+import type { IntermediateStep } from '../../types'
 
 defineProps<{
   steps: IntermediateStep[]
@@ -86,14 +86,14 @@ const STEP_COLORS: Record<string, string> = {
 }
 
 .steps-empty p {
-  font-size: 0.9375rem;
+  font-size: var(--ui-font-md);
   color: var(--tertiary);
   font-style: italic;
   margin: 0;
 }
 
 .steps-hint {
-  font-size: 0.8125rem !important;
+  font-size: var(--ui-font-sm) !important;
   color: var(--tertiary) !important;
   margin-top: 8px !important;
   font-style: normal !important;
@@ -137,7 +137,7 @@ const STEP_COLORS: Record<string, string> = {
   width: 20px;
   height: 20px;
   border-radius: 6px;
-  font-size: 0.9375rem;
+  font-size: var(--ui-font-md);
   flex-shrink: 0;
 }
 
@@ -155,21 +155,21 @@ const STEP_COLORS: Record<string, string> = {
 }
 
 .step-type {
-  font-size: 0.875rem;
+  font-size: var(--ui-font-base);
   font-weight: 650;
   text-transform: uppercase;
   letter-spacing: 0.03em;
 }
 
 .step-time {
-  font-size: 0.8125rem;
+  font-size: var(--ui-font-sm);
   color: var(--tertiary);
   white-space: nowrap;
 }
 
 .step-text {
   margin: 4px 0 0;
-  font-size: 0.9375rem;
+  font-size: var(--ui-font-md);
   line-height: 1.5;
   color: var(--secondary);
   white-space: pre-wrap;
@@ -181,7 +181,7 @@ const STEP_COLORS: Record<string, string> = {
 }
 
 .step-action-info code {
-  font-size: 0.8125rem;
+  font-size: var(--ui-font-sm);
   padding: 2px 5px;
   border-radius: 3px;
   background: rgba(10, 132, 255, 0.1);

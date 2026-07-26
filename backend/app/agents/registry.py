@@ -1,4 +1,4 @@
-"""动态 Agent 注册表 —— 从 .agent-studio/agents/*.yaml 文件加载。"""
+"""动态 Agent 注册表 —— 从 .workspace/<project>/agents/*.yaml 加载。"""
 
 from __future__ import annotations
 
@@ -9,13 +9,14 @@ from app.storage.sqlite_store import SQLiteStore
 
 class AgentProfile:
     """运行时 Agent 配置快照。"""
-    __slots__ = ("id", "name", "display_name", "description", "agent_type",
+    __slots__ = ("id", "name", "display_name", "description", "role", "agent_type",
                  "tools", "skills", "prompt", "sub_dir", "is_required", "model",
                  "capabilities", "limitations", "preferred_tasks", "forbidden_tasks",
                  "input_contract", "output_contract", "dependencies_info",
                  "priority", "max_iterations")
 
     def __init__(self, agent_id: str = "", name: str = "", display_name: str = "", description: str = "",
+                 role: str = "implementation_agent",
                  agent_type: str = "", tools: list[str] = None, skills: list[str] = None,
                  prompt: str = "", sub_dir: str = "", is_required: bool = False, model: str = None,
                  capabilities: list[str] = None, limitations: list[str] = None,
@@ -27,6 +28,7 @@ class AgentProfile:
         self.name = name
         self.display_name = display_name
         self.description = description
+        self.role = role
         self.agent_type = agent_type
         self.tools = tuple(tools) if tools else ()
         self.skills = tuple(skills) if skills else ()
@@ -54,10 +56,10 @@ class AgentRegistry:
         self._cache: dict[str, dict[str, AgentProfile]] = {}  # project_id -> {name: profile}
 
     def _load_from_files(self, project_id: str = "") -> dict[str, AgentProfile]:
-        """从 .agent-studio/agents/ 加载所有 Agent。"""
+        """从当前或指定项目的 agents/ 目录加载所有 Agent。"""
         if not self.config_reader:
             return {}
-        reader = self.config_reader.for_project(project_id) if project_id else self.config_reader
+        reader = self.config_reader.for_project(project_id) if project_id else self.config_reader.current()
         agents = reader.list_agents()
         profiles = {}
         for a in agents:
@@ -69,6 +71,7 @@ class AgentRegistry:
                 name=name,
                 display_name=a.get("display_name", name),
                 description=a.get("description", ""),
+                role=a.get("role", "implementation_agent"),
                 agent_type=a.get("agent_type", "claude"),
                 tools=a.get("tools", []),
                 skills=a.get("skills", []),
@@ -112,6 +115,7 @@ class AgentRegistry:
                 "name": p.name,
                 "display_name": p.display_name,
                 "description": p.description,
+                "role": p.role,
                 "agent_type": p.agent_type,
                 "tools": list(p.tools),
                 "skills": list(p.skills),
@@ -123,6 +127,10 @@ class AgentRegistry:
                 "preferred_tasks": list(p.preferred_tasks),
                 "forbidden_tasks": list(p.forbidden_tasks),
                 "priority": p.priority,
+                "max_iterations": p.max_iterations,
+                "input_contract": p.input_contract,
+                "output_contract": p.output_contract,
+                "dependencies_info": list(p.dependencies_info),
             }
             for p in profiles.values()
             if p.agent_type not in ("brain", "deepseek")

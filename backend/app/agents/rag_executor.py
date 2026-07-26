@@ -80,8 +80,12 @@ class RAGAgentExecutor:
             f"- {r.task_id}: {r.summary}" for r in dependency_results
         ) or "无前置任务"
 
+        from app.prompts.builder import PromptBuilder
         system_prompt = (
-            f"{profile.prompt}\n\n"
+            PromptBuilder().add_common_protocol()
+            .add_role_prompt("rag", profile)
+            .add_system_prompt(profile).build_system()
+            + "\n\n"
             "你是知识库管理 Agent，可以检索知识库中的内容，也可以录入新的知识条目。\n"
             "使用 search_knowledge 工具搜索知识库，使用 add_knowledge 工具录入知识。\n"
             "优先从知识库中检索相关信息，综合后回答用户问题。"

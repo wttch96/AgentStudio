@@ -9,6 +9,8 @@ import RunSidebar from '../components/RunSidebar.vue'
 import PlanBoard from '../components/PlanBoard.vue'
 import StreamingChat from '../components/StreamingChat.vue'
 import ConversationView from '../components/ConversationView.vue'
+import AgentSequenceDiagram from '../components/AgentSequenceDiagram.vue'
+import TodoPanel from '../components/TodoPanel.vue'
 import { useWorkspace } from '../composables/useWorkspace'
 import { useNodeGraph } from '../composables/useNodeGraph'
 import { useTaskErrors } from '../composables/useTaskErrors'
@@ -21,7 +23,7 @@ import type { Project, NodeStatus } from '../types'
 const workspace = useWorkspace()
 const composer = ref<InstanceType<typeof PromptComposer> | null>(null)
 const showProjectDialog = ref(false)
-const viewMode = ref<'dag' | 'timeline' | 'events'>('dag')
+const viewMode = ref<'dag' | 'timeline' | 'events' | 'sequence' | 'board'>('dag')
 
 // 项目来自 workspace 全局状态
 const projects = computed(() => workspace.state.projects)
@@ -43,7 +45,7 @@ const conversationRunsForGraph = computed(() => workspace.state.conversationRuns
 const { nodes, edges, findNode } = useNodeGraph(allEvents, activeRunId, conversationRunsForGraph)
 const { errors, errorNodeIds } = useTaskErrors(allEvents)
 const timeoutDetection = useTimeoutDetection(activeRun, { defaultTimeoutMs: 300_000, checkIntervalMs: 2_000 })
-const { interruptState, pauseAll, pauseAgent, injectGuidance, abortRun, handleInterruptEvent } = useInterrupt(activeRun)
+const { handleInterruptEvent } = useInterrupt(activeRun)
 const { conversationTurns, activeAgents, memoryCompactions } = useRunTimeline(
   computed(() => workspace.state.conversationRuns),
   computed(() => workspace.state.conversationEvents),
@@ -68,7 +70,28 @@ const subtitle = computed(() => {
 })
 
 async function submit(objective: string) {
+  if (workspace.isRunning.value && objective.startsWith('/') && workspace.state.activeRun) {
+    const [targetToken, ...parts] = objective.trim().split(/\s+/)
+    const instruction = parts.join(' ')
+    const targetName = targetToken.slice(1)
+    if (!instruction) {
+      workspace.state.error = `${targetToken} 后需要填写引导内容`
+      return
+    }
+    await api.interruptRun(workspace.state.activeRun.id, {
+      target: targetName === 'brain' ? 'planner' : 'agent',
+      action: 'inject',
+      target_agent: targetName === 'brain' ? undefined : targetName,
+      instruction,
+    })
+    return
+  }
   await workspace.createRun(objective)
+}
+
+function onProjectCreated(project: Project) {
+  workspace.addProject(project)
+  showProjectDialog.value = false
 }
 
 async function forkRun(sourceRunId: string) {
@@ -98,12 +121,10 @@ function deselectNode() { workspace.state.selectedNodeId = null }
 function updateFilter(status: NodeStatus | 'all') { workspace.state.filterStatus = status }
 
 function handleInterruptNode(nodeId: string) {
-  const node = findNode(nodeId)
-  if (node?.agentId) void pauseAgent(node.agentId)
-}
-
-function handleInjectGuidance(nodeId: string, instruction: string) {
-  void injectGuidance(findNode(nodeId)?.agentId ?? null, instruction)
+  if (!workspace.state.activeRun) return
+  void api.interruptRun(workspace.state.activeRun.id, {
+    target: 'task', action: 'abort', target_task: nodeId,
+  })
 }
 
 onMounted(async () => {
@@ -183,7 +204,7 @@ onMounted(async () => {
         <!-- No active run: welcome -->
         <div v-if="!workspace.state.activeRun && !workspace.state.loading" class="welcome-area">
           <div class="p-4">
-            <ElTag type="info" class="mb-2">{{ currentProject.name }}</ElTag>
+            <ElTag type="info" class="mb-2">{{ currentProject?.name }}</ElTag>
             <h1 style="font-size:1.5rem;font-weight:600">今天想让 Agent 团队完成什么？</h1>
             <p class="text-secondary">{{ subtitle }}</p>
             <div class="d-flex gap-2 mt-3">
@@ -204,6 +225,8 @@ onMounted(async () => {
             <ElButton size="small" :type="viewMode === 'dag' ? 'primary' : ''" @click="viewMode = 'dag'">DAG 图</ElButton>
             <ElButton size="small" :type="viewMode === 'timeline' ? 'primary' : ''" @click="viewMode = 'timeline'">时间轴</ElButton>
             <ElButton size="small" :type="viewMode === 'events' ? 'primary' : ''" @click="viewMode = 'events'">事件记录</ElButton>
+            <ElButton size="small" :type="viewMode === 'sequence' ? 'primary' : ''" @click="viewMode = 'sequence'">时序图</ElButton>
+            <ElButton size="small" :type="viewMode === 'board' ? 'primary' : ''" @click="viewMode = 'board'">看板</ElButton>
           </div>
           <MainCanvas
             v-if="viewMode === 'dag'"
@@ -232,6 +255,18 @@ onMounted(async () => {
             :events="allEvents"
             :final-answer="workspace.state.activeRun?.final_answer ?? null"
           />
+          <AgentSequenceDiagram
+            v-else-if="viewMode === 'sequence'"
+            :tasks="workspace.plan.value"
+            :events="allEvents"
+          />
+          <div v-else class="board-workspace">
+            <TodoPanel
+              :run-id="activeRunId"
+              :tasks="workspace.plan.value"
+              :events="allEvents"
+            />
+          </div>
         </div>
 
         <!-- Bottom composer -->
@@ -242,6 +277,7 @@ onMounted(async () => {
           :queue-items="workspace.state.taskQueue"
           :active-agents="activeAgents"
           :active-run-id="workspace.state.activeRun?.id ?? null"
+          :agents="workspace.state.agents"
           @submit="submit"
           @interrupt="workspace.cancelActiveRun()"
           @promote-queue="workspace.promoteQueueItem"
@@ -267,7 +303,6 @@ onMounted(async () => {
       :is-running="workspace.isRunning.value"
       @close="deselectNode"
       @interrupt-node="handleInterruptNode"
-      @inject-guidance="handleInjectGuidance"
     />
 
     <!-- Project dialog -->
@@ -313,5 +348,9 @@ onMounted(async () => {
 .canvas-area > :nth-child(2) {
   flex: 1;
   overflow-y: auto;
+}
+.board-workspace {
+  padding: 12px;
+  overflow: auto;
 }
 </style>

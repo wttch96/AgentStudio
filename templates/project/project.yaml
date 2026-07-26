@@ -1,2 +1,4 @@
+id: my-project
 name: My Project
 description: 在此填写项目描述
+root_dir: /path/to/your/project

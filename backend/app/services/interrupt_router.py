@@ -20,6 +20,7 @@ class InterruptRouter:
         self._queues: dict[str, list[InterruptCommand]] = {}  # run_id -> pending
         self._agent_pause_events: dict[str, threading.Event] = {}  # "run_id:agent_id"
         self._node_pause_events: dict[str, threading.Event] = {}  # "run_id:node_id"
+        self._task_abort_events: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
 
     def send(self, command: InterruptCommand) -> str:
@@ -44,6 +45,12 @@ class InterruptRouter:
                     self._agent_pause_events[key] = threading.Event()
                 if command.action == InterruptAction.PAUSE:
                     self._agent_pause_events[key].set()
+            elif command.target == InterruptTarget.TASK and command.target_task:
+                key = f"{run_id}:{command.target_task}"
+                if key not in self._task_abort_events:
+                    self._task_abort_events[key] = threading.Event()
+                if command.action == InterruptAction.ABORT:
+                    self._task_abort_events[key].set()
 
         self.events.emit(
             run_id,
@@ -79,6 +86,12 @@ class InterruptRouter:
         key = f"{run_id}:{agent_id}"
         with self._lock:
             self._agent_pause_events.pop(key, None)
+
+    def is_task_aborted(self, run_id: str, task_id: str) -> bool:
+        key = f"{run_id}:{task_id}"
+        with self._lock:
+            event = self._task_abort_events.get(key)
+        return event is not None and event.is_set()
 
     # ---- Per-node pause (for flow engine) ----
 

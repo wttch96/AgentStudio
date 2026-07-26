@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import type { TaskError } from '../types'
+import type { TaskError } from '../../types'
 
 defineProps<{
   error: TaskError | null
@@ -60,14 +60,15 @@ const ERROR_LABELS: Record<string, string> = {
       <div class="error-stack-section">
         <h3 class="error-section-title" style="display:flex;justify-content:space-between;align-items:center;">
           堆栈跟踪
-          <button
+          <ElButton
             v-if="error.stack"
-            type="button"
+            size="small"
+            text
             class="error-toggle-btn"
             @click="showStack = !showStack"
           >
             {{ showStack ? '收起' : '展开' }}
-          </button>
+          </ElButton>
         </h3>
         <div v-if="error.stack && showStack">
           <pre class="error-stack">{{ error.stack }}</pre>
@@ -95,7 +96,7 @@ const ERROR_LABELS: Record<string, string> = {
 
 .error-none p {
   margin: 0;
-  font-size: 0.9375rem;
+  font-size: var(--ui-font-md);
   color: var(--green);
 }
 
@@ -111,13 +112,13 @@ const ERROR_LABELS: Record<string, string> = {
   padding: 4px 10px;
   border-radius: 8px;
   border: 1px solid;
-  font-size: 0.9375rem;
+  font-size: var(--ui-font-md);
   font-weight: 650;
 }
 
 .error-section-title {
   margin: 0 0 6px;
-  font-size: 0.9375rem;
+  font-size: var(--ui-font-md);
   font-weight: 650;
   color: var(--secondary);
   text-transform: uppercase;
@@ -126,7 +127,7 @@ const ERROR_LABELS: Record<string, string> = {
 
 .error-message {
   margin: 0;
-  font-size: 0.9375rem;
+  font-size: var(--ui-font-md);
   line-height: 1.5;
   color: var(--label);
   padding: 8px;
@@ -143,7 +144,7 @@ const ERROR_LABELS: Record<string, string> = {
   border-radius: 7px;
   background: #111113;
   color: rgba(235, 235, 245, 0.7);
-  font: 0.8125rem / 1.5 ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  font: var(--ui-font-sm) / 1.5 ui-monospace, 'SFMono-Regular', Menlo, monospace;
   white-space: pre-wrap;
   word-break: break-all;
   max-height: 300px;
@@ -152,7 +153,7 @@ const ERROR_LABELS: Record<string, string> = {
 }
 
 .error-stack-hint {
-  font-size: 0.875rem;
+  font-size: var(--ui-font-base);
   color: var(--tertiary);
   line-height: 1.5;
   font-style: italic;
@@ -165,7 +166,7 @@ const ERROR_LABELS: Record<string, string> = {
   padding: 2px 6px;
   background: rgba(118, 118, 128, 0.12);
   color: var(--secondary);
-  font-size: 0.875rem;
+  font-size: var(--ui-font-base);
   cursor: pointer;
 }
 

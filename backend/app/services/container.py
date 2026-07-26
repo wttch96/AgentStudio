@@ -102,7 +102,11 @@ class ServiceContainer:
         )
         deepseek_balance = DeepSeekBalanceService(settings)
         knowledge_store = KnowledgeStore(store, settings)
-        flow_store = FlowStore(settings.workspace_root / "templates" / "flows", store=store)
+        flow_store = FlowStore(
+            config_reader.current().flows_dir,
+            store=store,
+            fallback_dir=settings.workspace_root / "templates" / "flows",
+        )
         planner = DeepSeekPlanner(settings, brain, knowledge_store=knowledge_store)
         executor = ClaudeAgentExecutor(settings, registry, events)
         memory_settings = MemorySettings(config_reader=config_reader)
@@ -167,6 +171,7 @@ class ServiceContainer:
             reviewer=reviewer,
             agent_context_builder=agent_context_builder,
             conflict_detector=conflict_detector,
+            agent_selector=agent_selector,
             settings=settings,
         )
         return cls(

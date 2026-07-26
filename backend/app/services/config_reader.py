@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 from pathlib import Path
 from typing import Any
@@ -18,13 +19,41 @@ class ConfigReader:
 
     def __init__(self, workspace_root: Path | str, project_id: str = "") -> None:
         self.workspace_root = Path(workspace_root)
-        self.project_id = project_id
+        self.project_id = self.validate_project_id(project_id) if project_id else ""
         if project_id:
             self.root = self.workspace_root / ".workspace" / project_id
         else:
             # 无 project_id 时使用全局配置目录（不在任何项目下）
             self.root = self.workspace_root / ".workspace" / ".global"
         self._lock = threading.RLock()
+
+    @staticmethod
+    def validate_project_id(project_id: str) -> str:
+        value = str(project_id).strip()
+        if not re.fullmatch(r"[a-z][a-z0-9-]{1,63}", value):
+            raise ValueError("project_id 必须是 2-64 位小写字母、数字或连字符，且以字母开头")
+        return value
+
+    @staticmethod
+    def validate_entry_name(name: str) -> str:
+        value = str(name).strip()
+        if not re.fullmatch(r"[a-z][a-z0-9-]{1,63}", value):
+            raise ValueError("名称必须是 2-64 位小写字母、数字或连字符，且以字母开头")
+        return value
+
+    def current_project_id(self) -> str:
+        data = self.read_setting("currentProject") or {}
+        value = str(data.get("project_id", "")).strip()
+        if not value:
+            return ""
+        try:
+            return self.validate_project_id(value)
+        except ValueError:
+            return ""
+
+    def current(self) -> "ConfigReader":
+        project_id = self.current_project_id()
+        return self.for_project(project_id) if project_id else self
 
     # ------------------------------------------------------------------
     # Directory helpers
@@ -116,6 +145,7 @@ class ConfigReader:
 
     def delete_project(self, project_id: str) -> bool:
         """删除 .workspace/<project_id>/project.yaml，不清除项目目录。"""
+        project_id = self.validate_project_id(project_id)
         project_yaml = self.workspace_root / ".workspace" / project_id / "project.yaml"
         with self._lock:
             if project_yaml.is_file():
@@ -125,7 +155,7 @@ class ConfigReader:
 
     def for_project(self, project_id: str) -> "ConfigReader":
         """为指定项目创建 ConfigReader 实例。"""
-        return ConfigReader(self.workspace_root, project_id=project_id)
+        return ConfigReader(self.workspace_root, project_id=self.validate_project_id(project_id))
 
     # ------------------------------------------------------------------
     # Settings (brain / workspace / scheduler / memory)
@@ -185,20 +215,41 @@ class ConfigReader:
             return agents
 
     def get_agent(self, name: str) -> dict[str, Any]:
+        name = self.validate_entry_name(name)
         with self._lock:
-            return self._read_yaml(self.agents_dir / f"{name}.yaml")
+            return self._read_yaml(self._agent_path(name))
 
     def save_agent(self, name: str, data: dict[str, Any]) -> None:
+        name = self.validate_entry_name(name)
         with self._lock:
             self._ensure_dirs()
             data["name"] = name
+            existing_path = self._agent_path(name, required=False)
             self._write_yaml(self.agents_dir / f"{name}.yaml", data)
+            if existing_path and existing_path.name != f"{name}.yaml":
+                existing_path.unlink(missing_ok=True)
 
     def delete_agent(self, name: str) -> None:
+        name = self.validate_entry_name(name)
         with self._lock:
-            path = self.agents_dir / f"{name}.yaml"
-            if path.is_file():
+            path = self._agent_path(name, required=False)
+            if path:
                 path.unlink()
+
+    def _agent_path(self, name: str, required: bool = True) -> Path | None:
+        direct = self.agents_dir / f"{name}.yaml"
+        if direct.is_file():
+            return direct
+        if self.agents_dir.is_dir():
+            for path in self.agents_dir.glob("*.yaml"):
+                try:
+                    if self._read_yaml(path).get("name") == name:
+                        return path
+                except Exception:
+                    continue
+        if required:
+            raise FileNotFoundError(str(direct))
+        return None
 
     # ------------------------------------------------------------------
     # Skills
@@ -217,16 +268,19 @@ class ConfigReader:
             return skills
 
     def get_skill(self, name: str) -> dict[str, Any]:
+        name = self.validate_entry_name(name)
         with self._lock:
             return self._read_yaml(self.skills_dir / f"{name}.yaml")
 
     def save_skill(self, name: str, data: dict[str, Any]) -> None:
+        name = self.validate_entry_name(name)
         with self._lock:
             self._ensure_dirs()
             data["name"] = name
             self._write_yaml(self.skills_dir / f"{name}.yaml", data)
 
     def delete_skill(self, name: str) -> None:
+        name = self.validate_entry_name(name)
         with self._lock:
             path = self.skills_dir / f"{name}.yaml"
             if path.is_file():

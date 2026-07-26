@@ -472,7 +472,7 @@ App.vue
 |------|------|
 | **Props** | `submitting`, `continuing`, `disabled` |
 | **Emits** | `submit(objective)` |
-| **功能** | 自动调整高度 textarea、快捷键提示、`/` 命令菜单（`/frontend`, `/backend`, `/netty`, `/retry`） |
+| **功能** | 自动调整高度 textarea、快捷键提示、动态 `/brain` 与 `/<agent-name>` 引导菜单 |
 
 #### 7.2.9 ProjectDialog.vue
 | 特性 | 说明 |

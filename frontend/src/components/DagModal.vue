@@ -426,9 +426,9 @@ function formatTime(ts: string): string {
             </span>
           </div>
           <div class="dag-modal-actions">
-            <button class="dag-btn" @click="resetView" title="重置视图 (0)">⟲ 重置</button>
+            <ElButton size="small" class="dag-btn" @click="resetView" title="重置视图 (0)">⟲ 重置</ElButton>
             <span class="zoom-label">{{ Math.round(scale * 100) }}%</span>
-            <button class="dag-btn" @click="emit('close')" title="关闭 (Esc)">✕ 关闭</button>
+            <ElButton size="small" class="dag-btn" @click="emit('close')" title="关闭 (Esc)">✕ 关闭</ElButton>
           </div>
         </div>
 
@@ -626,10 +626,11 @@ function formatTime(ts: string): string {
         </div>
 
         <!-- Contract -->
-        <details v-if="contract" class="dag-contract">
-          <summary>共享接口 / 协议契约</summary>
-          <pre>{{ contract }}</pre>
-        </details>
+        <ElCollapse v-if="contract" class="dag-contract">
+          <ElCollapseItem title="共享接口 / 协议契约" name="contract">
+            <pre>{{ contract }}</pre>
+          </ElCollapseItem>
+        </ElCollapse>
       </div>
     </div>
   </Teleport>
@@ -674,7 +675,7 @@ function formatTime(ts: string): string {
 }
 
 .dag-modal-stats {
-  font-size: 0.65rem;
+  font-size: var(--ui-font-xs);
   color: var(--tertiary);
 }
 
@@ -693,7 +694,7 @@ function formatTime(ts: string): string {
   border-radius: 8px;
   background: var(--surface);
   color: var(--secondary);
-  font-size: 0.7rem;
+  font-size: var(--ui-font-xs);
   font-weight: 550;
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
@@ -705,7 +706,7 @@ function formatTime(ts: string): string {
 }
 
 .zoom-label {
-  font-size: 0.65rem;
+  font-size: var(--ui-font-xs);
   color: var(--tertiary);
   font-variant-numeric: tabular-nums;
   min-width: 40px;
@@ -718,7 +719,7 @@ function formatTime(ts: string): string {
   gap: 12px;
   align-items: center;
   padding: 10px 20px;
-  font-size: 0.6rem;
+  font-size: var(--ui-font-xs);
   color: var(--tertiary);
   border-bottom: 1px solid var(--separator-soft);
   flex-shrink: 0;
@@ -741,7 +742,7 @@ function formatTime(ts: string): string {
   margin-left: auto;
   font-style: italic;
   opacity: 0.7;
-  font-size: 0.55rem;
+  font-size: var(--ui-font-xs);
 }
 
 .dag-svg-container {
@@ -788,7 +789,7 @@ function formatTime(ts: string): string {
 .dag-contract summary {
   color: #64d2ff;
   cursor: pointer;
-  font-size: 0.65rem;
+  font-size: var(--ui-font-xs);
   font-weight: 600;
 }
 
@@ -797,7 +798,7 @@ function formatTime(ts: string): string {
   overflow: auto;
   margin: 8px 0 0;
   color: var(--secondary);
-  font: 0.55rem/1.6 ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font: var(--ui-font-xs)/1.6 ui-monospace, "SFMono-Regular", Menlo, monospace;
   white-space: pre-wrap;
 }
 </style>

@@ -23,18 +23,18 @@ const tab = ref<'brain' | 'rag' | 'knowledge' | 'agents' | 'skills' | 'workspace
           <span class="eyebrow">本机配置</span>
           <h2>Agent Studio 配置</h2>
         </div>
-        <button type="button" aria-label="关闭配置中心" @click="$emit('close')">×</button>
+        <ElButton text circle aria-label="关闭配置中心" @click="$emit('close')">×</ElButton>
       </header>
-      <nav class="config-tabs" aria-label="配置类型">
-        <button type="button" :class="{ active: tab === 'brain' }" @click="tab = 'brain'">主脑配置</button>
-        <button type="button" :class="{ active: tab === 'rag' }" @click="tab = 'rag'">RAG 配置</button>
-        <button type="button" :class="{ active: tab === 'knowledge' }" @click="tab = 'knowledge'">知识库</button>
-        <button type="button" :class="{ active: tab === 'agents' }" @click="tab = 'agents'">Agent 配置</button>
-        <button type="button" :class="{ active: tab === 'skills' }" @click="tab = 'skills'">Skill 编辑</button>
-        <button type="button" :class="{ active: tab === 'workspace' }" @click="tab = 'workspace'">工作目录</button>
-        <button type="button" :class="{ active: tab === 'scheduler' }" @click="tab = 'scheduler'">调度配置</button>
-        <button type="button" :class="{ active: tab === 'memory' }" @click="tab = 'memory'">记忆配置</button>
-      </nav>
+      <ElTabs v-model="tab" class="config-tabs">
+        <ElTabPane label="主脑配置" name="brain" />
+        <ElTabPane label="RAG 配置" name="rag" />
+        <ElTabPane label="知识库" name="knowledge" />
+        <ElTabPane label="Agent 配置" name="agents" />
+        <ElTabPane label="Skill 编辑" name="skills" />
+        <ElTabPane label="工作目录" name="workspace" />
+        <ElTabPane label="调度配置" name="scheduler" />
+        <ElTabPane label="记忆配置" name="memory" />
+      </ElTabs>
       <BrainConfigEditor v-if="tab === 'brain'" @saved="$emit('saved')" />
       <RAGConfigEditor v-else-if="tab === 'rag'" :agents="agents" :project-id="projectId" @saved="$emit('saved')" />
       <KnowledgeConfig v-else-if="tab === 'knowledge'" :project-id="projectId" />

@@ -260,26 +260,26 @@ onMounted(() => { search(); loadStats() })
           <div v-if="currentDir" class="dir-current">📁 {{ currentDir || '/' }}</div>
           <div v-if="dirs.length === 0 && files.length === 0 && !currentDir" class="dir-empty">加载中…</div>
           <div class="dir-list">
-            <button
+            <ElButton
               v-for="d in dirs"
               :key="d.path"
-              type="button"
+              text
               class="dir-entry"
               @click="selectFile(d.name); browseDir(d.path)"
             >
               <span class="dir-icon">📁</span>
               <span>{{ d.name }}</span>
-            </button>
-            <button
+            </ElButton>
+            <ElButton
               v-for="f in files"
               :key="f.path"
-              type="button"
+              text
               class="dir-entry file-entry"
               @click="importPath = f.path"
             >
               <span class="dir-icon">📄</span>
               <span>{{ f.name }}</span>
-            </button>
+            </ElButton>
           </div>
           <div v-if="dirs.length === 0 && files.length === 0 && currentDir" class="dir-empty">此目录为空。请选择其他目录，或直接在路径框输入文件路径。</div>
         </div>
@@ -305,48 +305,48 @@ onMounted(() => { search(); loadStats() })
 .import-btn { background: rgba(191, 90, 242, 0.7) !important; }
 .import-btn:hover { background: rgba(191, 90, 242, 0.9) !important; }
 
-.knowledge-stats { display: flex; gap: 1rem; font-size: 0.7rem; color: var(--secondary); margin-bottom: 0.5rem; }
+.knowledge-stats { display: flex; gap: 1rem; font-size: var(--ui-font-xs); color: var(--secondary); margin-bottom: 0.5rem; }
 .expired-warn { color: var(--orange); }
 
-.msg { font-size: 0.75rem; margin-bottom: 0.5rem; color: var(--green); }
+.msg { font-size: var(--ui-font-sm); margin-bottom: 0.5rem; color: var(--green); }
 .msg.error { color: var(--red); }
 
 .knowledge-list { display: flex; flex-direction: column; gap: 0.5rem; max-height: 500px; overflow-y: auto; }
 .k-entry { padding: 0.6rem; border: 1px solid var(--separator-soft); border-radius: 8px; background: var(--surface); }
 .k-entry-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.3rem; }
-.k-entry-header strong { font-size: 0.8rem; }
-.k-category { font-size: 0.6rem; background: var(--blue-soft); color: var(--blue); padding: 0.1rem 0.4rem; border-radius: 4px; }
-.k-source-type { font-size: 0.6rem; padding: 0.1rem 0.4rem; border-radius: 4px; }
+.k-entry-header strong { font-size: var(--ui-font-sm); }
+.k-category { font-size: var(--ui-font-xs); background: var(--blue-soft); color: var(--blue); padding: 0.1rem 0.4rem; border-radius: 4px; }
+.k-source-type { font-size: var(--ui-font-xs); padding: 0.1rem 0.4rem; border-radius: 4px; }
 .st-manual { background: rgba(100, 210, 140, 0.15); color: var(--green); }
 .st-import { background: rgba(191, 90, 242, 0.12); color: rgba(191, 90, 242, 1); }
 .st-auto { background: rgba(255, 159, 10, 0.12); color: var(--orange); }
-.k-score { font-size: 0.65rem; color: var(--secondary); margin-left: auto; }
-.k-content { font-size: 0.72rem; color: var(--secondary); margin: 0.25rem 0; line-height: 1.4; }
-.k-meta { font-size: 0.6rem; color: var(--tertiary); margin-bottom: 0.3rem; }
+.k-score { font-size: var(--ui-font-xs); color: var(--secondary); margin-left: auto; }
+.k-content { font-size: var(--ui-font-xs); color: var(--secondary); margin: 0.25rem 0; line-height: 1.4; }
+.k-meta { font-size: var(--ui-font-xs); color: var(--tertiary); margin-bottom: 0.3rem; }
 .k-expiry { color: var(--orange); margin-left: 0.5rem; }
 .k-actions { display: flex; gap: 0.3rem; }
 
 .k-form-overlay { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: rgba(0,0,0,.5); }
 .k-form { width: 500px; max-height: 80vh; overflow-y: auto; padding: 1.25rem; background: var(--bg); border-radius: 12px; display: flex; flex-direction: column; gap: 0.6rem; }
-.k-form h3 { margin: 0; font-size: 1rem; }
-.k-form label { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.7rem; color: var(--secondary); }
+.k-form h3 { margin: 0; font-size: var(--ui-font-lg); }
+.k-form label { display: flex; flex-direction: column; gap: 0.2rem; font-size: var(--ui-font-xs); color: var(--secondary); }
 .k-form-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
 .k-form-actions .cancel { background: var(--surface-hover); color: var(--label); }
 
 /* Import dialog */
 .import-dialog { width: 550px; }
-.import-hint { font-size: 0.72rem; color: var(--secondary); margin: 0; }
-.import-path-row label { font-size: 0.65rem; color: var(--secondary); }
+.import-hint { font-size: var(--ui-font-xs); color: var(--secondary); margin: 0; }
+.import-path-row label { font-size: var(--ui-font-xs); color: var(--secondary); }
 .path-input-row { display: flex; gap: 0.4rem; }
 .path-input-row .el-input { flex: 1; }
-.dir-up { padding: 0.3rem 0.6rem; border: 1px solid var(--separator-soft); border-radius: 6px; background: var(--surface); color: var(--secondary); cursor: pointer; font-size: 0.7rem; }
+.dir-up { padding: 0.3rem 0.6rem; border: 1px solid var(--separator-soft); border-radius: 6px; background: var(--surface); color: var(--secondary); cursor: pointer; font-size: var(--ui-font-xs); }
 .dir-browser { max-height: 250px; overflow-y: auto; border: 1px solid var(--separator-soft); border-radius: 8px; padding: 0.5rem; background: var(--surface); }
-.dir-current { font-size: 0.7rem; color: var(--blue); margin-bottom: 0.35rem; font-weight: 600; }
+.dir-current { font-size: var(--ui-font-xs); color: var(--blue); margin-bottom: 0.35rem; font-weight: 600; }
 .dir-list { display: flex; flex-direction: column; gap: 2px; }
-.dir-entry { display: flex; align-items: center; gap: 0.4rem; width: 100%; padding: 0.35rem 0.5rem; border: 0; border-radius: 5px; background: transparent; color: var(--label); cursor: pointer; font-size: 0.75rem; text-align: left; }
+.dir-entry { display: flex; align-items: center; gap: 0.4rem; width: 100%; padding: 0.35rem 0.5rem; border: 0; border-radius: 5px; background: transparent; color: var(--label); cursor: pointer; font-size: var(--ui-font-sm); text-align: left; }
 .dir-entry:hover { background: var(--surface-hover); }
 .file-entry { color: var(--secondary); }
 .file-entry:hover { background: rgba(191, 90, 242, 0.12); color: rgba(191, 90, 242, 1); }
-.dir-icon { font-size: 0.9rem; }
-.dir-empty { font-size: 0.65rem; color: var(--tertiary); padding: 0.5rem; text-align: center; }
+.dir-icon { font-size: var(--ui-font-md); }
+.dir-empty { font-size: var(--ui-font-xs); color: var(--tertiary); padding: 0.5rem; text-align: center; }
 </style>

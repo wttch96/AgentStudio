@@ -74,12 +74,12 @@ function requestFork(run: Run) {
             <ElButton v-if="run.status === 'completed' || run.status === 'failed'"
               link size="small" class="p-0 text-secondary" title="分叉"
               @click.stop="requestFork(run)">
-              <span style="font-size:14px">&#9095;</span>
+              <span style="font-size: var(--ui-font-md)">&#9095;</span>
             </ElButton>
             <ElButton link size="small" class="p-0 text-secondary"
               :disabled="run.status === 'queued' || run.status === 'running'"
               title="删除" @click.stop="requestDelete(run)">
-              <span style="font-size:16px;font-weight:bold">&times;</span>
+              <span style="font-size: var(--ui-font-lg);font-weight:bold">&times;</span>
             </ElButton>
           </div>
         </div>

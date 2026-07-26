@@ -4,6 +4,7 @@ import logging
 import traceback
 from flask import Flask
 from flask_cors import CORS
+from werkzeug.exceptions import HTTPException
 
 from app.api.routes import api
 from app.config import Settings
@@ -18,7 +19,7 @@ def create_app(settings: Settings | None = None) -> Flask:
     """创建应用并组装依赖，测试时可传入独立配置。"""
 
     current_settings = settings or Settings.from_env()
-    app = Flask(__name__, instance_path=str(current_settings.instance_dir))
+    app = Flask(__name__, instance_path=str(current_settings.data_dir))
     app.config["JSON_SORT_KEYS"] = False
     app.config["SETTINGS"] = current_settings
 
@@ -29,7 +30,7 @@ def create_app(settings: Settings | None = None) -> Flask:
     ]
     CORS(app, resources={r"/api/*": {"origins": allowed_origins}})
 
-    current_settings.instance_dir.mkdir(parents=True, exist_ok=True)
+    current_settings.data_dir.mkdir(parents=True, exist_ok=True)
     container = ServiceContainer.build(current_settings)
     app.extensions["services"] = container
     app.register_blueprint(api, url_prefix="/api")
@@ -45,8 +46,9 @@ def create_app(settings: Settings | None = None) -> Flask:
 
     @app.errorhandler(Exception)
     def handle_exception(e):
+        if isinstance(e, HTTPException):
+            return {"error": e.name, "detail": e.description}, e.code
         logger.error("Unhandled exception:\n%s", traceback.format_exc())
         return {"error": "Internal Server Error", "detail": str(e)}, 500
 
     return app
-

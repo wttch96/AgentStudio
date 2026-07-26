@@ -1,0 +1,3 @@
+# 在此目录放置 Agent YAML。建议包含 role、capabilities、limitations、
+# preferred_tasks、forbidden_tasks、tools、skills、输入/输出契约、
+# priority、max_iterations 和 system_prompt。

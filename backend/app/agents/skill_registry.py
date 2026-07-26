@@ -1,7 +1,7 @@
 """项目级 Claude Skill 的读取、创建和更新服务。
 
 公共 Skill：.claude/skills/<name>/SKILL.md
-项目 Skill：.workspace/.agent-studio/skills/<name>.yaml
+项目 Skill：.workspace/<project-id>/skills/<name>.yaml
 Skill 模板：templates/skills/<name>.yaml
 """
 
@@ -91,48 +91,50 @@ class SkillRegistry:
             self._profiles = self._load_all()
         return self.get_public(name)
 
-    # ── 项目级 Skill（.workspace/.agent-studio/skills/*.yaml）──
+    # ── 项目级 Skill（.workspace/<project-id>/skills/*.yaml）──
 
     def list_project(self, project_id: str) -> list[dict]:
         """列出项目 Skill（文件优先）。"""
         if self._config_reader:
-            return self._config_reader.list_skills()
+            return self._config_reader.for_project(project_id).list_skills()
         return []
 
     def get_project(self, project_id: str, name: str) -> dict:
         """获取单个项目 Skill。"""
         if self._config_reader:
-            return self._config_reader.get_skill(name)
+            return self._config_reader.for_project(project_id).get_skill(name)
         raise ValueError(f"未知 Skill: {name}")
 
     def create_project(self, project_id: str, name: str, description: str, content: str) -> dict:
         """创建项目 Skill 为 YAML 文件。"""
         if not self._config_reader:
             raise RuntimeError("ConfigReader not available")
-        existing = self._config_reader.list_skills()
+        reader = self._config_reader.for_project(project_id)
+        existing = reader.list_skills()
         if any(s.get("name") == name for s in existing):
             raise FileExistsError(f"Skill 已存在: {name}")
-        self._config_reader.save_skill(name, {
+        reader.save_skill(name, {
             "name": name,
             "description": description,
             "content": content,
         })
-        return self._config_reader.get_skill(name)
+        return reader.get_skill(name)
 
     def update_project(self, project_id: str, name: str, description: str, content: str) -> dict:
         """更新项目 Skill YAML 文件。"""
         if not self._config_reader:
             raise RuntimeError("ConfigReader not available")
+        reader = self._config_reader.for_project(project_id)
         try:
-            self._config_reader.get_skill(name)
+            reader.get_skill(name)
         except FileNotFoundError:
             raise ValueError(f"未知 Skill: {name}")
-        self._config_reader.save_skill(name, {
+        reader.save_skill(name, {
             "name": name,
             "description": description,
             "content": content,
         })
-        return self._config_reader.get_skill(name)
+        return reader.get_skill(name)
 
     # ── Skill 模板（templates/skills/*.yaml）──
 

@@ -1,13 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue'
-import { Close } from '@element-plus/icons-vue'
-import { api } from '../api/client'
-import type { ActiveAgent, FlowDefinition } from '../types'
+import { computed, nextTick, ref, watch } from 'vue'
+import type { ActiveAgent, AgentProfile } from '../types'
 
 const props = defineProps<{
   submitting: boolean; autofocus?: boolean; isRunning: boolean
   queueItems: { id: string; objective: string }[]
   activeAgents: ActiveAgent[]; activeRunId: string | null
+  agents: AgentProfile[]
 }>()
 const emit = defineEmits<{
   submit: [objective: string]; interrupt: []
@@ -18,36 +17,33 @@ const emit = defineEmits<{
 const objective = ref('')
 const input = ref<InstanceType<typeof HTMLTextAreaElement> | any>(null)
 const showInterruptMenu = ref(false)
-const showInjectPopup = ref(false)
-const injectTarget = ref('all')
-const injectInstruction = ref('')
+const isComposing = ref(false)
+const activeCommandIndex = ref(0)
+const commandMenu = ref<HTMLElement | null>(null)
 
-const commandOptions = [
-  { command: '/+', label: '执行预定义流程 (用法: /+流程名)', isFlow: true },
-  { command: '/agent', label: '指定 Agent 并传递引导指令' },
-  { command: '/frontend', label: '快捷引导 vue-frontend' },
-  { command: '/backend', label: '快捷引导 flask-backend' },
-  { command: '/retry', label: '重试失败节点' },
-]
-const flowOptions = ref<Array<{ command: string; label: string; isFlow: boolean }>>([])
-const loadingFlows = ref(false)
-
-async function fetchFlows() {
-  if (loadingFlows.value) return; loadingFlows.value = true
-  try {
-    const items = await api.flows()
-    flowOptions.value = items.map((f: FlowDefinition) => ({
-      command: `/+${f.name}`, label: `${f.description} (v${f.version})`, isFlow: true,
-    }))
-  } catch { flowOptions.value = [] }
-  finally { loadingFlows.value = false }
-}
+const commandOptions = computed(() => [
+  { command: '/brain', label: props.isRunning ? '引导主脑并按需重规划' : '由主脑规划任务' },
+  ...props.agents.map(a => ({
+    command: `/${a.name}`, label: `引导 ${a.display_name || a.name}`,
+  })),
+])
 
 const visibleCommands = computed(() => {
-  const value = objective.value.trim().toLowerCase()
-  if (!value.startsWith('/') || value.includes(' ')) return []
-  if (value.startsWith('/+')) { fetchFlows(); return flowOptions.value.filter(i => i.command.startsWith(value)) }
-  return commandOptions.filter(i => i.command.startsWith(value))
+  const value = objective.value.toLowerCase()
+  if (!value.startsWith('/') || /\s/.test(value)) return []
+  return commandOptions.value.filter(i => i.command.startsWith(value))
+})
+
+watch(objective, () => {
+  activeCommandIndex.value = 0
+})
+
+watch(visibleCommands, (commands) => {
+  if (!commands.length) {
+    activeCommandIndex.value = 0
+  } else if (activeCommandIndex.value >= commands.length) {
+    activeCommandIndex.value = commands.length - 1
+  }
 })
 
 async function submit() {
@@ -55,35 +51,61 @@ async function submit() {
   if (!value || props.submitting) return
   emit('submit', value); objective.value = ''
 }
-function handleKeydown(event: KeyboardEvent) {
-  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); void submit() }
+
+async function moveCommand(delta: number) {
+  const count = visibleCommands.value.length
+  if (!count) return
+  activeCommandIndex.value = (activeCommandIndex.value + delta + count) % count
+  await nextTick()
+  commandMenu.value
+    ?.querySelector<HTMLElement>('.command-option.selected')
+    ?.scrollIntoView({ block: 'nearest' })
 }
+
+function handleKeydown(event: KeyboardEvent) {
+  const composing = isComposing.value || event.isComposing || event.keyCode === 229
+  if (composing) return
+
+  if (visibleCommands.value.length) {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      void moveCommand(1)
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      void moveCommand(-1)
+      return
+    }
+    if (event.key === 'Tab') {
+      event.preventDefault()
+      void chooseCommand(visibleCommands.value[activeCommandIndex.value].command)
+      return
+    }
+  }
+
+  if (
+    event.key === 'Enter'
+    && (event.ctrlKey || event.metaKey)
+  ) {
+    event.preventDefault()
+    void submit()
+  }
+}
+function handleCompositionStart() { isComposing.value = true }
+function handleCompositionEnd() { isComposing.value = false }
 async function focus() { await nextTick(); input.value?.focus() }
 async function chooseCommand(command: string) { objective.value = `${command} `; await focus() }
 defineExpose({ focus })
 
 function handleInterruptAction(agent: string, action: string) {
-  if (action === 'inject') { injectTarget.value = agent; showInjectPopup.value = true; showInterruptMenu.value = false; return }
   emit('interruptAgent', agent, action); showInterruptMenu.value = false
-}
-function sendInjectInstruction() {
-  if (!injectInstruction.value.trim()) return
-  emit('interruptAgent', injectTarget.value, 'inject', injectInstruction.value.trim())
-  injectInstruction.value = ''; showInjectPopup.value = false
 }
 function onInterruptBlur() { setTimeout(() => { if (showInterruptMenu.value) showInterruptMenu.value = false }, 150) }
 </script>
 
 <template>
   <div class="border-top bg-body-tertiary p-2 position-relative">
-    <!-- Command menu -->
-    <div v-if="visibleCommands.length" class="position-absolute bottom-100 start-0 end-0 mb-1 mx-2 bg-body border rounded shadow-sm p-1" style="z-index:10">
-      <ElButton v-for="item in visibleCommands" :key="item.command" link size="small"
-        class="d-block w-100 text-start" @click="chooseCommand(item.command)">
-        <strong>{{ item.command }}</strong> <small class="text-secondary">{{ item.label }}</small>
-      </ElButton>
-    </div>
-
     <!-- Queue -->
     <div v-if="queueItems.length" class="mb-1">
       <div class="d-flex justify-content-between small text-secondary mb-1">
@@ -98,23 +120,51 @@ function onInterruptBlur() { setTimeout(() => { if (showInterruptMenu.value) sho
       </div>
     </div>
 
-    <!-- Inject popup -->
-    <div v-if="showInjectPopup" class="position-absolute bottom-100 start-0 end-0 mb-1 mx-2 p-2 bg-body border rounded shadow" style="z-index:10">
-      <div class="d-flex justify-content-between mb-1">
-        <strong class="small">注入指令到 {{ injectTarget === 'all' ? '全部 Agent' : injectTarget }}</strong>
-        <ElButton :icon="Close" circle size="small" @click="showInjectPopup = false" />
+    <!-- Textarea + slash command menu -->
+    <div class="prompt-input-wrap mb-1">
+      <div
+        v-if="visibleCommands.length"
+        ref="commandMenu"
+        class="command-menu"
+        role="listbox"
+        aria-label="命令建议"
+        :aria-activedescendant="`command-option-${activeCommandIndex}`"
+      >
+        <ElButton
+          v-for="(item, index) in visibleCommands"
+          :id="`command-option-${index}`"
+          :key="item.command"
+          link
+          size="small"
+          role="option"
+          class="command-option"
+          :class="{ selected: index === activeCommandIndex }"
+          :aria-selected="index === activeCommandIndex"
+          @mouseenter="activeCommandIndex = index"
+          @click="chooseCommand(item.command)"
+        >
+          <strong>{{ item.command }}</strong>
+          <small>{{ item.label }}</small>
+        </ElButton>
+        <div class="command-menu-hint">
+          <kbd>↑</kbd><kbd>↓</kbd> 选择
+          <kbd>Tab</kbd> 补全
+        </div>
       </div>
-      <ElInput v-model="injectInstruction" type="textarea" :rows="3" size="small" class="mb-1" placeholder="输入引导指令…" @keydown.enter.exact.prevent="sendInjectInstruction" />
-      <div class="d-flex justify-content-end gap-1">
-        <ElButton size="small" @click="showInjectPopup = false">取消</ElButton>
-        <ElButton type="primary" size="small" :disabled="!injectInstruction.trim()" @click="sendInjectInstruction">发送指令</ElButton>
-      </div>
-    </div>
 
-    <!-- Textarea -->
-    <ElInput ref="input" v-model="objective" type="textarea" :rows="3" maxlength="20000" class="mb-1"
-      :placeholder="isRunning ? '任务执行中，输入引导指令加入队列…' : '描述你希望多个 Agent 完成的任务…'"
-      aria-label="任务目标" @keydown="handleKeydown" />
+      <ElInput
+        ref="input"
+        v-model="objective"
+        type="textarea"
+        :rows="3"
+        maxlength="20000"
+        :placeholder="isRunning ? '使用 /brain 或 /<agent-name> 引导；普通输入加入队列…' : '描述任务，或使用 / 选择主脑/Agent…'"
+        aria-label="任务目标"
+        @keydown="handleKeydown"
+        @compositionstart="handleCompositionStart"
+        @compositionend="handleCompositionEnd"
+      />
+    </div>
 
     <!-- Toolbar -->
     <div class="d-flex justify-content-between align-items-center">
@@ -123,7 +173,9 @@ function onInterruptBlur() { setTimeout(() => { if (showInterruptMenu.value) sho
           <span class="d-inline-block rounded-circle bg-primary me-1" style="width:7px;height:7px;animation:pulse-dot 1.5s ease-in-out infinite" />
           任务执行中 · {{ activeAgents.length }} 个 Agent 活跃
         </template>
-        <template v-else><kbd>/</kbd> 选择 Agent · <kbd>Enter</kbd> 发送</template>
+        <template v-else>
+          <kbd>/</kbd> 选择 Agent · <kbd>Enter</kbd> 换行 · <kbd>⌘/Ctrl + Enter</kbd> 发送
+        </template>
       </div>
 
       <div class="d-flex gap-1">
@@ -136,9 +188,6 @@ function onInterruptBlur() { setTimeout(() => { if (showInterruptMenu.value) sho
             <ElButton v-for="a in activeAgents" :key="a.name" link size="small" class="d-block w-100 text-start" @click="handleInterruptAction(a.name, 'pause')">
               &#9208; 暂停 {{ a.name }} <small class="text-secondary">{{ a.title }}</small>
             </ElButton>
-            <hr class="my-1" />
-            <div class="px-2 py-1 small text-secondary">注入指令</div>
-            <ElButton link size="small" class="d-block w-100 text-start" @click="handleInterruptAction('all', 'inject')">&#128172; 注入指令到全部</ElButton>
             <hr class="my-1" />
             <ElButton link size="small" class="d-block w-100 text-start" @click="handleInterruptAction('all', 'replan')">&#128260; 触发重规划</ElButton>
             <ElButton type="danger" size="small" class="d-block w-100" @click="$emit('interrupt'); showInterruptMenu = false">&#9209; 中止运行</ElButton>
@@ -154,4 +203,64 @@ function onInterruptBlur() { setTimeout(() => { if (showInterruptMenu.value) sho
 
 <style scoped>
 @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.2; } }
+
+.prompt-input-wrap {
+  position: relative;
+}
+
+.command-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  max-height: min(320px, 45vh);
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--el-border-color);
+  border-radius: var(--el-border-radius-base);
+  background: var(--el-bg-color-overlay);
+  box-shadow: var(--el-box-shadow-light);
+}
+
+.command-option {
+  display: flex;
+  width: 100%;
+  height: 32px;
+  margin: 0;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 0 10px;
+  border-radius: var(--el-border-radius-small);
+  color: var(--el-text-color-primary);
+}
+
+.command-option + .command-option {
+  margin-left: 0;
+}
+
+.command-option:hover,
+.command-option.selected {
+  background: var(--el-fill-color-light);
+  color: var(--el-color-primary);
+}
+
+.command-option small {
+  overflow: hidden;
+  color: var(--el-text-color-secondary);
+  font-size: var(--ui-font-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-menu-hint {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  padding: 4px 8px 2px;
+  color: var(--el-text-color-secondary);
+  font-size: var(--ui-font-xs);
+}
 </style>

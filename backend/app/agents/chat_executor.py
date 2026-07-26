@@ -74,7 +74,12 @@ class ChatExecutor:
             f"- {r.task_id}: {r.summary}" for r in dependency_results
         ) or "无前置任务"
 
-        system_prompt = profile.prompt or "你是一个智能对话助手，请根据用户的问题提供有用、准确的回答。"
+        from app.prompts.builder import PromptBuilder
+        system_prompt = (
+            PromptBuilder().add_common_protocol()
+            .add_role_prompt("chat", profile)
+            .add_system_prompt(profile).build_system()
+        )
 
         try:
             model_name = profile.model or self.settings.deepseek_model

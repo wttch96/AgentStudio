@@ -5,8 +5,10 @@ HTTP 请求只负责创建任务；LangGraph 在守护线程中执行，避免�
 
 from __future__ import annotations
 
+import asyncio
 import threading
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -17,12 +19,30 @@ from app.domain.models import DagTask, TaskDag
 from app.events.publisher import EventPublisher
 from app.orchestration.graph import build_graph
 from app.planning.deepseek_planner import DeepSeekPlanner
+from app.services.interrupt_router import InterruptRouter
+from app.services.memory_manager import MemoryManager
 from app.services.run_commands import RunCommand, parse_run_command
 from app.services.scheduler_settings import SchedulerSettings
-from app.storage.sqlite_store import SQLiteStore
 from app.services.workspace_settings import WorkspaceSettings
-from app.services.memory_manager import MemoryManager
-from app.services.interrupt_router import InterruptRouter
+from app.storage.sqlite_store import SQLiteStore
+
+
+async def _ainvoke_graph(
+    graph_factory: Callable[[Any], Any],
+    checkpoint_path: Path | None,
+    state: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    """在单一事件循环内创建异步 checkpointer、执行图并关闭连接。"""
+    if checkpoint_path is None:
+        return await graph_factory(None).ainvoke(state, config)
+
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+    async with AsyncSqliteSaver.from_conn_string(str(checkpoint_path)) as checkpointer:
+        graph = graph_factory(checkpointer)
+        return await graph.ainvoke(state, config)
 
 
 class RunManager:
@@ -47,6 +67,7 @@ class RunManager:
         reviewer: Any = None,
         agent_context_builder: Any = None,
         conflict_detector: Any = None,
+        agent_selector: Any = None,
         settings: Any = None,
     ) -> None:
         self.store = store
@@ -68,22 +89,32 @@ class RunManager:
         self.reviewer = reviewer
         self.agent_context_builder = agent_context_builder
         self.conflict_detector = conflict_detector
+        self.agent_selector = agent_selector
         self._settings = settings
         self._cancel_events: dict[str, threading.Event] = {}
         self._agent_pause_events: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
 
     def start(self, objective: str, parent_run_id: str | None = None,
-              project_id: str | None = None) -> dict:
+              project_id: str | None = None, flow_name: str | None = None,
+              flow_inputs: dict | None = None) -> dict:
         command = parse_run_command(objective)
-        root = self.workspace_settings.current()
+        parent = self.store.get_run(parent_run_id) if parent_run_id else None
+        if parent_run_id and not parent:
+            raise ValueError("上游任务不存在")
+        if parent and parent["status"] not in {"completed", "failed", "cancelled"}:
+            raise RuntimeError("上游任务仍在执行，请等待结束后再继续")
+        root = (
+            Path(parent["workspace_root"])
+            if parent and parent.get("workspace_root")
+            else self.workspace_settings.current(project_id or "")
+        )
         if not root.is_dir():
             raise ValueError(f"工作目录不存在：{root}")
-        scheduler = self.scheduler_settings.current()
+        scheduler = self.scheduler_settings.current(project_id or "")
         run_id = uuid.uuid4().hex
-        preset_dag = self._preset_dag(command, parent_run_id)
-        flow_name = command.flow_name if command.kind == "flow" else None
-        flow_inputs = command.flow_inputs if command.kind == "flow" else None
+        continuation_context = self._continuation_context(parent_run_id)
+        preset_dag = self._preset_dag(command, parent_run_id, project_id or "")
         run = self.store.create_run(run_id, objective, str(root), parent_run_id, project_id)
         cancel_event = threading.Event()
         with self._lock:
@@ -97,9 +128,9 @@ class RunManager:
                 root,
                 scheduler,
                 cancel_event,
-                "",
+                continuation_context,
                 preset_dag.model_dump() if preset_dag else None,
-                command.kind in {"direct", "retry"},
+                command.kind == "direct",
                 self.interrupt_router,
                 self.memory_manager,
                 self.store.get_run(run_id).get("conversation_id", run_id),
@@ -112,6 +143,32 @@ class RunManager:
         )
         thread.start()
         return run
+
+    def _continuation_context(self, parent_run_id: str | None) -> str:
+        """把最近上游输出压缩为有界上下文，供规划器和执行 Agent 使用。"""
+        if not parent_run_id:
+            return ""
+        sections: list[str] = []
+        for run in self.store.run_ancestry(parent_run_id):
+            agent_summaries: list[str] = []
+            for event in self.store.list_events(run["id"]):
+                if event["type"] not in {"agent.completed", "agent.failed"}:
+                    continue
+                payload = event["payload"]
+                summary = str(payload.get("summary") or payload.get("error") or "")[:1600]
+                if summary:
+                    agent_summaries.append(
+                        f"- {event.get('agent_id') or 'agent'}: {summary}"
+                    )
+            answer = str(run.get("final_answer") or run.get("error") or "无最终输出")[:6000]
+            sections.append("\n".join([
+                f"第 {run.get('turn_index', 1)} 轮用户目标：{run['objective']}",
+                f"状态：{run['status']}",
+                "Agent 结果：",
+                *(agent_summaries[-6:] or ["- 无"]),
+                f"最终输出：\n{answer}",
+            ]))
+        return "\n\n--- 上游轮次 ---\n\n".join(sections)[-24_000:]
 
     def fork(self, source_run_id: str, objective_override: str | None = None,
              project_id: str | None = None) -> dict:
@@ -215,20 +272,98 @@ class RunManager:
                     "parent_run_id": self.store.get_run(run_id).get("parent_run_id"),
                 },
             )
+            if not flow_name and preset_dag is None and self.flow_store is not None:
+                try:
+                    flow_name = self.planner.classify_intent(
+                        objective, self.flow_store.list_all()
+                    )
+                    if flow_name:
+                        flow_inputs = {"prompt": objective}
+                        self.events.emit(
+                            run_id, "planner.flow_selected",
+                            payload={"flow_name": flow_name, "inputs": flow_inputs},
+                        )
+                except Exception:
+                    flow_name = None
             # ---- Flow engine path (deterministic YAML pipeline) ----
             if flow_name and self.flow_engine:
                 flow = self.flow_engine._flow_store_loader(flow_name)
                 if flow:
-                    output = self.flow_engine.execute(
-                        flow=flow,
-                        inputs=flow_inputs or {},
-                        run_id=run_id,
-                        workspace_root=str(workspace_root),
-                        cancel_event=cancel_event,
-                        interrupt_router=interrupt_router,
-                        scheduler=scheduler,
-                        project_id=project_id or "",
-                    )
+                    if flow.is_extended and self.yaml_compiler is not None:
+                        self.events.emit(
+                            run_id,
+                            "plan.created",
+                            payload={
+                                "flow_name": flow.name,
+                                "flow_version": flow.version,
+                                "stage": "execution",
+                                "tasks": [
+                                    {
+                                        "id": node.id,
+                                        "title": node.title,
+                                        "objective": node.objective,
+                                        "agent": node.agent,
+                                        "depends_on": node.depends_on,
+                                        "write_scope": node.write_scope,
+                                    }
+                                    for node in flow.nodes
+                                ],
+                                "summary": flow.description,
+                                "coordination_contract": (
+                                    f"流程 {flow.name} v{flow.version}: {flow.description}"
+                                ),
+                            },
+                        )
+                        self.events.emit(
+                            run_id,
+                            "flow.started",
+                            payload={
+                                "flow_name": flow.name,
+                                "flow_version": flow.version,
+                                "node_count": len(flow.nodes),
+                                "extended": True,
+                            },
+                        )
+                        if self.blackboard_store is not None:
+                            self.blackboard_store.init(run_id)
+                        if self.todo_store is not None:
+                            self.todo_store.init(run_id, [
+                                {
+                                    **node.model_dump(),
+                                    "content": node.title,
+                                    "assigned_to": node.agent,
+                                }
+                                for node in flow.nodes
+                            ])
+                        compiled = self.yaml_compiler.compile(flow)
+                        output = compiled.invoke(
+                            {
+                                "run_id": run_id,
+                                "flow_name": flow.name,
+                                "workspace_root": str(workspace_root),
+                                "project_id": project_id or "",
+                                "inputs": flow_inputs or {},
+                                "blackboard": {},
+                                "loop_counters": {},
+                            },
+                            config={
+                                "recursion_limit": max(
+                                    25,
+                                    scheduler.recursion_limit,
+                                ),
+                            },
+                        )
+                    else:
+                        output = self.flow_engine.execute(
+                            flow=flow,
+                            inputs=flow_inputs or {},
+                            run_id=run_id,
+                            workspace_root=str(workspace_root),
+                            cancel_event=cancel_event,
+                            interrupt_router=interrupt_router,
+                            scheduler=scheduler,
+                            project_id=project_id or "",
+                        )
                     final_answer = output.get("final_answer", "")
                     status = "cancelled" if cancel_event.is_set() else "completed"
                     # Long-term memory
@@ -269,42 +404,59 @@ class RunManager:
             except Exception:
                 pass
 
-            graph = build_graph(
-                self.planner, self.executor, self.events, cancel_event,
-                None, interrupt_router, memory_manager, project_agents,
-                rag_executor=self.rag_executor,
-                chat_executor=self.chat_executor,
-                file_agent_executor=self.file_agent_executor,
-                blackboard_store=self.blackboard_store,
-                todo_store=self.todo_store,
-                yaml_compiler=self.yaml_compiler,
-                flow_store=self.flow_store,
-                reviewer=self.reviewer,
-                agent_selector=None,
-                conflict_detector=self.conflict_detector,
-                context_builder=self.agent_context_builder,
-                max_graph_iterations=getattr(self._settings, 'max_graph_iterations', 20) if self._settings else 20,
-                max_replan_iterations=getattr(self._settings, 'max_replan_iterations', 3) if self._settings else 3,
-                max_task_revisions=getattr(self._settings, 'max_task_revisions', 2) if self._settings else 2,
+            def graph_factory(checkpointer: Any):
+                return build_graph(
+                    self.planner, self.executor, self.events, cancel_event,
+                    checkpointer, interrupt_router, memory_manager, project_agents,
+                    rag_executor=self.rag_executor,
+                    chat_executor=self.chat_executor,
+                    file_agent_executor=self.file_agent_executor,
+                    blackboard_store=self.blackboard_store,
+                    todo_store=self.todo_store,
+                    yaml_compiler=self.yaml_compiler,
+                    flow_store=self.flow_store,
+                    reviewer=self.reviewer,
+                    agent_selector=self.agent_selector,
+                    conflict_detector=self.conflict_detector,
+                    context_builder=self.agent_context_builder,
+                    max_graph_iterations=getattr(
+                        self._settings, "max_graph_iterations", 20
+                    ) if self._settings else 20,
+                    max_replan_iterations=getattr(
+                        self._settings, "max_replan_iterations", 3
+                    ) if self._settings else 3,
+                    max_task_revisions=getattr(
+                        self._settings, "max_task_revisions", 2
+                    ) if self._settings else 2,
+                )
+
+            checkpoint_path = (
+                self._settings.data_dir / "checkpoints.db"
+                if self._settings is not None
+                else None
             )
-            output = graph.invoke(
-                {
-                    "run_id": run_id,
-                    "objective": objective,
-                    "guidance": guidance,
-                    "preset_dag": preset_dag,
-                    "direct_mode": direct_mode,
-                    "workspace_root": str(workspace_root),
-                    "agent_max_turns": scheduler.agent_max_turns,
-                    "agent_timeout_seconds": scheduler.agent_timeout_seconds,
-                    "project_id": project_id or "",
-                    "results": [],
-                },
-                {
-                    "configurable": {"thread_id": run_id},
-                    "max_concurrency": scheduler.max_concurrent_agents,
-                    "recursion_limit": scheduler.recursion_limit,
-                },
+            output = asyncio.run(
+                _ainvoke_graph(
+                    graph_factory,
+                    checkpoint_path,
+                    {
+                        "run_id": run_id,
+                        "objective": objective,
+                        "guidance": guidance,
+                        "preset_dag": preset_dag,
+                        "direct_mode": direct_mode,
+                        "workspace_root": str(workspace_root),
+                        "agent_max_turns": scheduler.agent_max_turns,
+                        "agent_timeout_seconds": scheduler.agent_timeout_seconds,
+                        "project_id": project_id or "",
+                        "results": [],
+                    },
+                    {
+                        "configurable": {"thread_id": run_id},
+                        "max_concurrency": scheduler.max_concurrent_agents,
+                        "recursion_limit": scheduler.recursion_limit,
+                    },
+                )
             )
             final_answer = output.get("final_answer", "")
             status = "cancelled" if cancel_event.is_set() else "completed"
@@ -347,11 +499,12 @@ class RunManager:
                 self._cancel_events.pop(run_id, None)
 
     def _preset_dag(
-        self, command: RunCommand, parent_run_id: str | None
+        self, command: RunCommand, parent_run_id: str | None, project_id: str = ""
     ) -> TaskDag | None:
-        if command.kind in ("normal", "flow"):
+        if command.kind == "normal":
             return None
         if command.kind == "direct" and command.agent:
+            self.executor.registry.get(project_id, command.agent)
             return TaskDag(
                 summary=f"直接对话：{command.agent}",
                 tasks=[
@@ -361,52 +514,12 @@ class RunManager:
                         objective=command.instruction,
                         agent=command.agent,
                         write_scope=["."],
+                        expected_outputs=["Agent 的实际执行结果"],
+                        acceptance_criteria=["完成用户指令并说明验证结果"],
+                        forbidden_actions=["不得写出所选工作空间"],
+                        status="ready",
                     )
                 ],
             )
 
-        if not parent_run_id or not command.task_id:
-            raise ValueError("/retry 必须在选中的上游任务中使用")
-        events = self.store.list_events(parent_run_id)
-        plan_event = next(
-            (event for event in reversed(events) if event["type"] == "plan.created"),
-            None,
-        )
-        tasks = plan_event["payload"].get("tasks", []) if plan_event else []
-        source = next((item for item in tasks if item.get("id") == command.task_id), None)
-        failure = next(
-            (
-                event
-                for event in reversed(events)
-                if event.get("task_id") == command.task_id
-                and event["type"] == "agent.failed"
-            ),
-            None,
-        )
-        if not source:
-            raise ValueError(f"上游任务中不存在子任务：{command.task_id}")
-        if not failure:
-            raise ValueError(f"子任务 {command.task_id} 没有失败记录，无需重试")
-        error = str(
-            failure["payload"].get("error")
-            or failure["payload"].get("summary")
-            or "未知失败"
-        )[:1200]
-        objective = (
-            f"重新执行失败子任务 {command.task_id}。\n"
-            f"原任务目标：{source.get('objective', source.get('title', ''))}\n"
-            f"上次失败原因：{error}\n"
-            "请检查当前工作区已有进度，避免重复或覆盖已完成的正确修改，并完成验证。"
-        )[:4000]
-        return TaskDag(
-            summary=f"重试失败节点 {command.task_id}",
-            tasks=[
-                DagTask(
-                    id=f"retry-{command.task_id}",
-                    title=f"重试：{source.get('title', command.task_id)}",
-                    objective=objective,
-                    agent=source["agent"],
-                    write_scope=source.get("write_scope", []),
-                )
-            ],
-        )
+        return None

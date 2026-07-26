@@ -131,6 +131,63 @@ class DeepSeekPlanner:
             a for a in (project_agents or [])
             if getattr(a, 'agent_type', '') not in ('brain',)
         ]
+        lowered = objective.lower().replace(" ", "")
+        domain_keywords = {
+            "frontend": ("前端", "页面", "ui", "vue", "react", "frontend"),
+            "backend": ("后端", "服务端", "接口", "api", "数据库", "backend"),
+            "netty": ("netty", "tcp", "udp"),
+            "rag": ("知识库", "检索", "rag"),
+            "file": ("文件", "目录", "复制", "移动", "file"),
+            "document": ("文档", "readme", "document"),
+        }
+        requested_domains = {
+            domain for domain, words in domain_keywords.items()
+            if any(word in lowered for word in words)
+        }
+        if "前后端" in lowered:
+            requested_domains.update({"frontend", "backend"})
+        if any(word in lowered for word in ("不用netty", "不要netty", "不需要netty")):
+            requested_domains.discard("netty")
+
+        def domains(agent: object) -> set[str]:
+            haystack = " ".join([
+                str(getattr(agent, "name", "")),
+                str(getattr(agent, "display_name", "")),
+                *map(str, getattr(agent, "capabilities", ())),
+                *map(str, getattr(agent, "preferred_tasks", ())),
+            ]).lower()
+            return {
+                domain for domain, words in domain_keywords.items()
+                if any(word in haystack for word in words)
+            }
+
+        if requested_domains:
+            chosen: list[object] = []
+            for domain in requested_domains:
+                candidates = [agent for agent in selected if domain in domains(agent)]
+                if candidates:
+                    chosen.append(max(
+                        candidates,
+                        key=lambda agent: (
+                            getattr(agent, "priority", 0),
+                            len(getattr(agent, "capabilities", ())),
+                        ),
+                    ))
+            selected = list({getattr(agent, "name", str(agent)): agent for agent in chosen}.values())
+        else:
+            coding = [
+                agent for agent in selected
+                if getattr(agent, "agent_type", "") in ("claude", "chat")
+                and not domains(agent).intersection({"document", "rag", "file"})
+            ]
+            selected = sorted(
+                coding or selected,
+                key=lambda agent: (
+                    getattr(agent, "priority", 0),
+                    len(getattr(agent, "capabilities", ())),
+                ),
+                reverse=True,
+            )[:2]
         tasks = []
         for agent_obj in selected:
             agent_name = agent_obj.name if hasattr(agent_obj, 'name') else str(agent_obj)
@@ -149,7 +206,7 @@ class DeepSeekPlanner:
                         "协调的跨项目问题。若没有合适项目，也要明确说明搜索范围和排除依据。"
                     )[:4000],
                     agent=agent_obj.name if hasattr(agent_obj, 'name') else str(agent_obj),
-                    write_scope=[sub_dir] if sub_dir and sub_dir != '.' else [],
+                    write_scope=[],
                 )
             )
         return TaskDag(summary="并行搜索工作空间并过滤候选项目", tasks=tasks)
@@ -162,11 +219,13 @@ class DeepSeekPlanner:
         guidance: str = "",
         discovery_results: list[AgentResult] | None = None,
         project_agents: list | None = None,
+        project_id: str = "",
     ) -> TaskDag:
         """基于项目发现结果生成实施 DAG；未设置密钥时返回代表性演示图。"""
 
         if not self.settings.deepseek_api_key:
-            return self._enforce_requested_agents(self._demo_dag(objective), objective, project_agents)
+            dag = self._enrich_dag(self._demo_dag(objective, project_agents), project_agents)
+            return self._enforce_requested_agents(dag, objective, project_agents)
 
         client = OpenAI(
             api_key=self.settings.deepseek_api_key,
@@ -188,7 +247,18 @@ class DeepSeekPlanner:
                 dtype = getattr(a, 'display_name', name)
                 atype = getattr(a, 'agent_type', 'claude')
                 sd = getattr(a, 'sub_dir', '.')
-                agent_list.append(f"- {name} (类型:{atype}): {dtype}（工作子目录: {sd}）")
+                agent_list.append(
+                    f"- {name}（{dtype}）\n"
+                    f"  role: {getattr(a, 'role', 'implementation_agent')}\n"
+                    f"  type: {atype}; workdir: {sd}\n"
+                    f"  capabilities: {list(getattr(a, 'capabilities', ()))}\n"
+                    f"  limitations: {list(getattr(a, 'limitations', ()))}\n"
+                    f"  preferred_tasks: {list(getattr(a, 'preferred_tasks', ()))}\n"
+                    f"  forbidden_tasks: {list(getattr(a, 'forbidden_tasks', ()))}\n"
+                    f"  tools: {list(getattr(a, 'tools', ()))}\n"
+                    f"  priority: {getattr(a, 'priority', 0)}; "
+                    f"max_iterations: {getattr(a, 'max_iterations', 3)}"
+                )
             agent_guard = (
                 "可用的执行 Agent：\n" + "\n".join(agent_list) + "\n\n"
                 "只允许把执行任务交给以上列出的 Agent，必须使用上面列出的精确名称。\n"
@@ -201,7 +271,9 @@ class DeepSeekPlanner:
         knowledge_context = ""
         if self.knowledge_store:
             try:
-                kb_results = self.knowledge_store.search(objective, top_k=3, project_id="")
+                kb_results = self.knowledge_store.search(
+                    objective, top_k=3, project_id=project_id
+                )
                 if kb_results:
                     knowledge_context = "相关知识库条目：\n" + "\n".join(
                         f"- [{r.get('category', '')}] {r.get('title', '')}: {r.get('content', '')[:500]}"
@@ -264,7 +336,50 @@ class DeepSeekPlanner:
                 summary=content_stripped[:1000],
                 tasks=[],
             )
+        dag = self._enrich_dag(dag, project_agents)
         return self._enforce_requested_agents(dag, objective, project_agents)
+
+    @staticmethod
+    def _enrich_dag(dag: TaskDag, project_agents: list | None) -> TaskDag:
+        """用可验证默认值和 Agent 配置补全模型可能省略的任务协议。"""
+        profiles = {
+            getattr(profile, "name", ""): profile
+            for profile in (project_agents or [])
+        }
+        tasks: list[DagTask] = []
+        for task in dag.tasks:
+            profile = profiles.get(task.agent)
+            criteria = task.acceptance_criteria or _infer_acceptance_criteria(task)
+            outputs = task.expected_outputs or [
+                f"{task.title}的实际产物或可复用结论",
+                "验证结果与未验证项说明",
+            ]
+            updates: dict[str, object] = {
+                "acceptance_criteria": criteria,
+                "expected_outputs": outputs,
+                "status": "ready" if not task.depends_on else "backlog",
+            }
+            if profile is not None:
+                updates.update({
+                    "allowed_tools": task.allowed_tools or list(
+                        getattr(profile, "tools", ())
+                    ),
+                    "max_iterations": min(
+                        task.max_iterations,
+                        getattr(profile, "max_iterations", task.max_iterations),
+                    ),
+                    "context": {
+                        **task.context,
+                        "agent_role": getattr(
+                            profile, "role", "implementation_agent"
+                        ),
+                        "agent_capabilities": list(
+                            getattr(profile, "capabilities", ())
+                        ),
+                    },
+                })
+            tasks.append(task.model_copy(update=updates))
+        return dag.model_copy(update={"tasks": tasks})
 
 
     @classmethod
@@ -282,6 +397,19 @@ class DeepSeekPlanner:
             name = getattr(a, 'name', '')
             if name in candidates:
                 return name
+        role_keywords = {
+            "frontend-agent": ("frontend", "vue", "react", "前端"),
+            "backend-agent": ("backend", "flask", "spring", "后端"),
+            "netty-agent": ("netty",),
+        }.get(role, ())
+        for a in project_agents:
+            haystack = " ".join([
+                getattr(a, "name", ""),
+                getattr(a, "display_name", ""),
+                *map(str, getattr(a, "capabilities", ())),
+            ]).lower()
+            if any(keyword in haystack for keyword in role_keywords):
+                return getattr(a, "name", None)
         # fallback: any claude agent for frontend/backend, any agent for others
         for a in project_agents:
             if getattr(a, 'agent_type', '') in ('claude',):
@@ -471,12 +599,39 @@ class DeepSeekPlanner:
         if not root.is_dir():
             return f"工作空间路径不存在: {workspace_root}"
         lines = [f"工作空间根目录: {workspace_root}"]
+        ignored = {
+            ".env", ".git", ".workspace", ".venv", "node_modules",
+            "__pycache__", ".pytest_cache", "dist", "build",
+        }
         try:
-            entries = sorted(root.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower()))
-            for entry in entries[:40]:
+            entries = [
+                entry for entry in sorted(
+                    root.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower())
+                )
+                if entry.name not in ignored and not entry.name.endswith((".key", ".pem"))
+            ]
+            shown = 0
+            for entry in entries:
+                if shown >= 40:
+                    break
                 marker = "/" if entry.is_dir() else ""
                 lines.append(f"  {entry.name}{marker}")
-            remaining = len(entries) - 40
+                shown += 1
+                if entry.is_dir():
+                    try:
+                        children = [
+                            child for child in sorted(entry.iterdir(), key=lambda e: e.name.lower())
+                            if child.name not in ignored
+                            and not child.name.startswith(".")
+                            and not child.name.endswith((".key", ".pem"))
+                        ][:8]
+                        lines.extend(
+                            f"    {child.name}{'/' if child.is_dir() else ''}"
+                            for child in children
+                        )
+                    except (OSError, PermissionError):
+                        pass
+            remaining = len(entries) - shown
             if remaining > 0:
                 lines.append(f"  ... 还有 {remaining} 项")
         except PermissionError:
@@ -488,25 +643,35 @@ class DeepSeekPlanner:
         """演示模式用执行 Agent 验证并行分发和结果汇合。"""
 
         short_objective = objective[:800]
+        frontend_agent = DeepSeekPlanner._resolve_agent_name(
+            "frontend-agent", project_agents
+        )
+        backend_agent = DeepSeekPlanner._resolve_agent_name(
+            "backend-agent", project_agents
+        )
+        fallback_agent = next(
+            (
+                getattr(agent, "name", "")
+                for agent in (project_agents or [])
+                if getattr(agent, "agent_type", "") != "brain"
+            ),
+            "brain",
+        )
+        analysis_agent = backend_agent or frontend_agent or fallback_agent
+        implementation_agent = frontend_agent or backend_agent or fallback_agent
         demo_tasks = [
             DagTask(
                 id="demo-analyze",
                 title="分析项目结构（演示）",
                 objective=f"分析当前工作空间结构并撰写简要发现报告。用户目标：{short_objective}",
-                agent="flask-backend" if any(
-                    a for a in (project_agents or [])
-                    if getattr(a, 'name', '') == 'flask-backend'
-                ) else "flask-backend",
+                agent=analysis_agent,
                 write_scope=[],
             ),
             DagTask(
                 id="demo-code",
                 title="代码实施（演示）",
                 objective=f"基于分析结果选择最佳实现方案并说明理由。用户目标：{short_objective}",
-                agent="vue-frontend" if any(
-                    a for a in (project_agents or [])
-                    if getattr(a, 'name', '') == 'vue-frontend'
-                ) else "vue-frontend",
+                agent=implementation_agent,
                 depends_on=["demo-analyze"],
                 write_scope=["frontend"],
             ),
@@ -514,10 +679,7 @@ class DeepSeekPlanner:
                 id="demo-verify",
                 title="验证总结（演示）",
                 objective=f"验证前两步结果并汇总报告。用户目标：{short_objective}",
-                agent="vue-frontend" if any(
-                    a for a in (project_agents or [])
-                    if getattr(a, 'name', '') == 'vue-frontend'
-                ) else "vue-frontend",
+                agent=implementation_agent,
                 depends_on=["demo-code"],
                 write_scope=[],
             ),
@@ -621,12 +783,6 @@ class DeepSeekPlanner:
         Returns the flow name if confidence >= 0.7, otherwise None.
         Falls back to keyword matching if LLM is unavailable.
         """
-        # Fast path: check if objective starts with /+flow-name
-        if objective.strip().startswith("/+"):
-            flow_name = objective.strip()[2:].split()[0]
-            if any(f["name"] == flow_name for f in available_flows):
-                return flow_name
-
         # If no flows registered, skip
         if not available_flows:
             return None
