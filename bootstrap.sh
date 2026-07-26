@@ -2,12 +2,12 @@
 # ============================================================
 # Agent Studio Bootstrap — 自举沙箱管理脚本
 # ============================================================
-# 将当前 Git 干净状态的代码复制到 .sandbox 沙箱目录中隔离
-# 运行。所有服务在沙箱内启动，与开发环境互不干扰。
+# 将已提交的 main 分支快照复制到 .sandbox 沙箱目录中隔离运行，
+# 然后把本地工作区切换到 dev 分支继续开发。沙箱与开发环境互不干扰。
 #
 # 用法:
 #   ./bootstrap.sh             一键自举（setup → start）
-#   ./bootstrap.sh setup       强制重建沙箱（需 Git 干净）
+#   ./bootstrap.sh setup       从 main 强制重建沙箱，并切换本地到 dev
 #   ./bootstrap.sh start       在沙箱内启动服务
 #   ./bootstrap.sh stop        停止沙箱内服务
 #   ./bootstrap.sh restart     重启沙箱服务
@@ -20,6 +20,8 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SANDBOX_DIR="${PROJECT_DIR}/.sandbox"
 BOOTSTRAP_NAME="$(basename "${BASH_SOURCE[0]}")"
+SANDBOX_SOURCE_BRANCH="main"
+LOCAL_DEVELOPMENT_BRANCH="dev"
 
 # —— 颜色 ——
 RED='\033[0;31m'
@@ -40,7 +42,7 @@ show_help() {
   sed -n '/^# 用法:/,/^# ====/p' "${BASH_SOURCE[0]}" | sed 's/^# //'
   echo
   echo "子命令:"
-  echo "  setup      强制重建沙箱（检查 Git 干净，删除旧沙箱，重新复制）"
+  echo "  setup      从 main 强制重建沙箱，并切换本地工作区到 dev"
   echo "  start      在沙箱内启动前后端服务"
   echo "  stop       停止沙箱内服务"
   echo "  restart    停止后重新启动"
@@ -50,73 +52,69 @@ show_help() {
   echo "不带参数默认执行: setup → start"
 }
 
-# —— Git 干净检查 ——
-check_git_clean() {
-  info "检查 Git 工作区状态…"
-  local dirty
-  dirty="$(cd "${PROJECT_DIR}" && git status --porcelain 2>/dev/null || true)"
-
-  # 过滤掉 .sandbox/ 下的变更（沙箱自身不应阻止自举）
-  dirty="$(echo "${dirty}" | grep -v '^[? ].*\.sandbox/' || true)"
-
-  if [[ -n "${dirty}" ]]; then
-    error "Git 工作区不干净！自举需要干净的 Git 状态以确保代码快照一致。"
-    echo ""
-    echo "  当前有未提交的变更:"
-    echo "${dirty}" | while read -r line; do
-      echo "    ${line}"
-    done
-    echo ""
-    echo "  请先处理以上变更（提交或暂存），再执行自举。"
-    die "自举中止：工作区不干净。"
+# —— Git 分支检查 ——
+require_source_branch() {
+  command -v git >/dev/null 2>&1 || die "缺少必需命令：git"
+  command -v tar >/dev/null 2>&1 || die "缺少必需命令：tar"
+  if ! git -C "${PROJECT_DIR}" show-ref --verify --quiet \
+    "refs/heads/${SANDBOX_SOURCE_BRANCH}"; then
+    die "缺少稳定分支 ${SANDBOX_SOURCE_BRANCH}，无法创建沙箱。"
   fi
-  success "Git 工作区干净。"
 }
 
-# —— 复制文件到沙箱 ——
+# —— 从 main 快照创建沙箱 ——
 copy_to_sandbox() {
-  info "复制项目文件到 .sandbox …"
+  require_source_branch
+  local source_commit
+  source_commit="$(git -C "${PROJECT_DIR}" rev-parse "${SANDBOX_SOURCE_BRANCH}")"
+  info "从 ${SANDBOX_SOURCE_BRANCH} (${source_commit:0:12}) 创建 .sandbox …"
 
   rm -rf "${SANDBOX_DIR}"
   mkdir -p "${SANDBOX_DIR}"
 
-  local copied=0
-  local skipped=0
+  git -C "${PROJECT_DIR}" archive "${SANDBOX_SOURCE_BRANCH}" \
+    | tar -x -C "${SANDBOX_DIR}"
 
-  # 1) 复制所有 Git 追踪的文件
-  cd "${PROJECT_DIR}"
-  while IFS= read -r file; do
-    # 跳过 bootstrap.sh 自身
-    if [[ "${file}" == "${BOOTSTRAP_NAME}" ]]; then
-      skipped=$((skipped + 1))
-      continue
-    fi
-    # 跳过 .sandbox 目录下的任何内容（理论上 git ls-files 不会输出）
-    if [[ "${file}" == .sandbox/* || "${file}" == ".sandbox" ]]; then
-      skipped=$((skipped + 1))
-      continue
-    fi
-
-    local dest="${SANDBOX_DIR}/${file}"
-    mkdir -p "$(dirname "${dest}")"
-    cp "${file}" "${dest}"
-    copied=$((copied + 1))
-  done < <(git ls-files)
-
-  # 2) 复制 .env（如果存在），这是运行时必需的非追踪文件
+  # .env 始终复制；本地没有时由示例生成，允许以演示模式完成自举。
   if [[ -f "${PROJECT_DIR}/.env" ]]; then
     cp "${PROJECT_DIR}/.env" "${SANDBOX_DIR}/.env"
-    info "已复制 .env（运行时环境变量）"
+    success "已复制本地 .env。"
+  elif [[ -f "${SANDBOX_DIR}/.env.example" ]]; then
+    cp "${SANDBOX_DIR}/.env.example" "${SANDBOX_DIR}/.env"
+    warn "本地 .env 不存在，已从 .env.example 创建演示模式配置。"
   else
-    warn ".env 不存在，沙箱将缺少 API Key 等环境变量。"
-    warn "请确保在沙箱内手动创建 .env 或通过其他方式提供环境变量。"
+    die "本地没有 .env，main 快照中也没有 .env.example。"
+  fi
+  chmod 600 "${SANDBOX_DIR}/.env" 2>/dev/null || true
+
+  printf 'source_branch=%s\nsource_commit=%s\ncreated_at=%s\n' \
+    "${SANDBOX_SOURCE_BRANCH}" \
+    "${source_commit}" \
+    "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+    > "${SANDBOX_DIR}/.bootstrap-meta"
+  success "main 沙箱快照创建完成。"
+}
+
+# —— 本地工作区切换到 dev ——
+switch_local_to_dev() {
+  local current_branch
+  current_branch="$(git -C "${PROJECT_DIR}" branch --show-current)"
+  if [[ "${current_branch}" == "${LOCAL_DEVELOPMENT_BRANCH}" ]]; then
+    success "本地工作区已位于 ${LOCAL_DEVELOPMENT_BRANCH} 分支。"
+    return 0
   fi
 
-  # 3) 复制 .claude/ 目录（如果存在且被 gitignore 排除但实际需要）
-  # 注意：git ls-files 已经包含了被追踪的 .claude/ 下的文件
-  # 如果有未被追踪但需要的 .claude 文件，可以在这里补充
-
-  success "沙箱创建完成：${copied} 个文件已复制，${skipped} 个文件已跳过。"
+  info "将本地工作区从 ${current_branch:-detached HEAD} 切换到 ${LOCAL_DEVELOPMENT_BRANCH} …"
+  if git -C "${PROJECT_DIR}" show-ref --verify --quiet \
+    "refs/heads/${LOCAL_DEVELOPMENT_BRANCH}"; then
+    git -C "${PROJECT_DIR}" switch "${LOCAL_DEVELOPMENT_BRANCH}" \
+      || die "无法切换到 dev；请检查本地修改是否与 dev 分支冲突。main 沙箱已保留。"
+  else
+    git -C "${PROJECT_DIR}" switch -c "${LOCAL_DEVELOPMENT_BRANCH}" \
+      "${SANDBOX_SOURCE_BRANCH}" \
+      || die "无法从 main 创建 dev 分支。main 沙箱已保留。"
+  fi
+  success "本地开发分支：${LOCAL_DEVELOPMENT_BRANCH}"
 }
 
 # —— 检查沙箱是否存在 ——
@@ -286,7 +284,6 @@ print_service_status() {
 
 # —— setup: 强制重建沙箱 ——
 cmd_setup() {
-  check_git_clean
   if [[ -d "${SANDBOX_DIR}" ]]; then
     warn "检测到现有沙箱，正在删除…"
     # 先尝试停止沙箱内可能还在跑的服务
@@ -294,6 +291,7 @@ cmd_setup() {
     rm -rf "${SANDBOX_DIR}"
   fi
   copy_to_sandbox
+  switch_local_to_dev
   success "沙箱已就绪: ${SANDBOX_DIR}"
 }
 
@@ -359,6 +357,12 @@ cmd_status() {
   # 沙箱目录
   if [[ -d "${SANDBOX_DIR}" ]]; then
     echo -e "  沙箱目录:  ${GREEN}存在${NC}  (${SANDBOX_DIR})"
+    if [[ -f "${SANDBOX_DIR}/.bootstrap-meta" ]]; then
+      local source_branch source_commit
+      source_branch="$(sed -n 's/^source_branch=//p' "${SANDBOX_DIR}/.bootstrap-meta")"
+      source_commit="$(sed -n 's/^source_commit=//p' "${SANDBOX_DIR}/.bootstrap-meta")"
+      echo "  稳定快照:  ${source_branch:-未知} @ ${source_commit:0:12}"
+    fi
 
     # 计算目录大小
     local size
@@ -394,7 +398,16 @@ cmd_status() {
   is_running "${bk_pid}" || bk_pid=""
   is_running "${fe_pid}" || fe_pid=""
 
-  local port_labels="5000:backend:${bk_pid} 5173:frontend:${fe_pid}"
+  local backend_port frontend_port
+  backend_port="$(
+    sed -n 's/^BACKEND_PORT=//p' "${SANDBOX_DIR}/.env" 2>/dev/null | tail -1
+  )"
+  frontend_port="$(
+    sed -n 's/^FRONTEND_PORT=//p' "${SANDBOX_DIR}/.env" 2>/dev/null | tail -1
+  )"
+  backend_port="${backend_port:-5000}"
+  frontend_port="${frontend_port:-5173}"
+  local port_labels="${backend_port}:backend:${bk_pid} ${frontend_port}:frontend:${fe_pid}"
   for entry in ${port_labels}; do
     local port="${entry%%:*}"
     local rest="${entry#*:}"

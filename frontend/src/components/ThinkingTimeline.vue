@@ -435,6 +435,7 @@ function convLabel(isUser: boolean) {
       <span>{{ tasks.length ? `${waves.length} 个调度批次` : '等待任务图' }}</span>
     </div>
 
+    <div class="timeline-content">
     <!-- ============ Phase 1: 对话节点 ============ -->
     <div v-if="turns.length" class="flow-phase">
       <div class="phase-divider">
@@ -746,6 +747,7 @@ function convLabel(isUser: boolean) {
         <small>LangMem 从本次会话提取了关键信息供后续使用</small>
       </div>
     </div>
+    </div>
   </section>
 </template>
 
@@ -756,10 +758,15 @@ function convLabel(isUser: boolean) {
   padding: 0 12px 12px 0;
 }
 
-.thinking-timeline::before {
+.timeline-content {
+  position: relative;
+  min-height: 24px;
+}
+
+.timeline-content::before {
   position: absolute;
   z-index: 0;
-  top: 34px;
+  top: 0;
   bottom: 20px;
   left: 34px;
   width: 2px;
@@ -962,8 +969,7 @@ function convLabel(isUser: boolean) {
 
 /* Synthesis highlight */
 .synthesis-entry {
-  border-left: 2px solid var(--green);
-  padding-left: 12px;
+  border-left: 0;
 }
 
 .result-stats {

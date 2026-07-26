@@ -99,6 +99,15 @@ CLAUDE_MODEL=claude-sonnet-4-5
 ./start.sh
 ```
 
+需要稳定运行 `main`、同时在本地继续开发时使用自举沙箱：
+
+```bash
+./bootstrap.sh
+```
+
+自举会从已提交的 `main` 创建 `.sandbox`，复制本地 `.env`，然后把本地工作区切换到
+`dev`（不存在时自动创建）。详细规则见[自举与本地启动](docs/bootstrap.md)。
+
 浏览器访问：
 
 ```text
@@ -170,6 +179,7 @@ npm run build
 ## 文档
 
 - [技术架构](docs/technical-architecture.md)
+- [自举与本地启动](docs/bootstrap.md)
 - [Agent 与 Skill 模版](docs/agent-skill-templates.md)
 - [Flow 管理](docs/flow-management.md)
 - [Flow YAML 参考](docs/flow-yaml-reference.md)
