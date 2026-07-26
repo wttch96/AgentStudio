@@ -418,8 +418,14 @@ cmd_status() {
     local expected_pid="${rest##*:}"
 
     local listener
-    listener="$(netstat -ano 2>/dev/null | grep ":${port} " | grep LISTEN | head -1 || true)"
+    listener=""
+    if command -v lsof >/dev/null 2>&1; then
+      listener="$(lsof -nP -iTCP:"${port}" -sTCP:LISTEN 2>/dev/null | tail -n +2 | head -1 || true)"
+    fi
     if [[ -z "${listener}" ]]; then
+      listener="$(netstat -ano 2>/dev/null | grep ":${port} " | grep LISTEN | head -1 || true)"
+    fi
+    if [[ -z "${listener}" ]] && command -v ss >/dev/null 2>&1; then
       listener="$(ss -tlnp 2>/dev/null | grep ":${port} " | head -1 || true)"
     fi
 
