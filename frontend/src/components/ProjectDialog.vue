@@ -1,21 +1,14 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
 import { api } from '../api/client'
-import type { AgentTemplate, Project, ProjectAgent, ProjectMode } from '../types'
+import type { AgentTemplate, Project, ProjectAgent } from '../types'
 
-const emit = defineEmits<{ created: [project: Project]; updated: [project: Project]; close: [] }>()
+const emit = defineEmits<{ created: [project: Project]; close: [] }>()
 const props = defineProps<{ projects: Project[] }>()
 
 const view = ref<'list' | 'create' | 'detail'>('list')
 const name = ref(''); const projectName = ref(''); const rootDir = ref(''); const description = ref('')
-const projectMode = ref<ProjectMode>('auto')
 const message = ref(''); const loading = ref(false)
-const projectModes: Array<{ value: ProjectMode; label: string; description: string }> = [
-  { value: 'manual', label: 'Manual', description: '主脑严格按用户明确指令规划，不主动扩展任务范围。' },
-  { value: 'editAutomatically', label: 'Edit Automatically', description: '主脑可自动规划并执行必要的文件修改，但避免无关或高风险扩展。' },
-  { value: 'plan', label: 'Plan', description: '主脑只生成任务计划和 DAG，不启动执行 Agent。' },
-  { value: 'auto', label: 'Auto', description: '主脑自动规划、执行、验收，并在限制内自主返工。' },
-]
 
 const allTemplates = ref<AgentTemplate[]>([])
 const selectedTemplates = ref<Set<string>>(new Set())
@@ -25,8 +18,6 @@ const dirParent = ref<string | null>(null); const dirCurrent = ref('')
 
 const detailProject = ref<Project | null>(null)
 const detailAgents = ref<ProjectAgent[]>([])
-const detailMode = ref<ProjectMode>('auto')
-
 const addAgentSelectVal = ref('')
 
 async function browseDir(path?: string) {
@@ -76,7 +67,6 @@ async function createProject() {
     const project = await api.createProject(
       name.value.trim(), rootDir.value, description.value,
       projectName.value.trim() || undefined,
-      projectMode.value,
     )
     for (const tid of [...selectedTemplates.value]) {
       await api.addProjectAgent(project.id, { template_id: tid })
@@ -88,24 +78,8 @@ async function createProject() {
 
 async function openDetail(p: Project) {
   detailProject.value = p
-  detailMode.value = p.mode || 'auto'
   try { detailAgents.value = (await api.projectAgents(p.id)).items } catch { detailAgents.value = [] }
   view.value = 'detail'
-}
-
-async function saveProjectMode() {
-  if (!detailProject.value) return
-  loading.value = true
-  try {
-    const updated = await api.updateProject(detailProject.value.id, { mode: detailMode.value })
-    detailProject.value = updated
-    emit('updated', updated)
-    message.value = '项目 Mode 已保存'
-  } catch (e) {
-    message.value = e instanceof Error ? e.message : '保存失败'
-  } finally {
-    loading.value = false
-  }
 }
 
 async function deleteProject() {
@@ -161,7 +135,6 @@ onMounted(async () => {
         <div v-for="p in projects" :key="p.id" class="d-flex justify-content-between align-items-center border-bottom p-2">
           <div @click="emit('created', p)" style="cursor:pointer" class="flex-grow-1">
             <strong>{{ p.name }}</strong>
-            <ElTag size="small" type="info" class="ms-2">{{ projectModes.find(item => item.value === (p.mode || 'auto'))?.label }}</ElTag>
             <small class="d-block text-secondary">{{ p.root_dir }}</small>
           </div>
           <ElButton size="small" @click="openDetail(p)">管理</ElButton>
@@ -191,14 +164,6 @@ onMounted(async () => {
           <ElInput v-model="rootDir" size="small" placeholder="输入本地文件夹路径，例如 /Users/wttch/Desktop" @keyup.enter="browseDir(rootDir)" class="flex-grow-1" />
           <ElButton size="small" @click="pickLocalFolder">选择文件夹</ElButton>
         </div>
-      </div>
-
-      <div class="mb-2">
-        <label class="form-label small">Project Mode</label>
-        <ElSelect v-model="projectMode" size="small" style="width:100%">
-          <ElOption v-for="mode in projectModes" :key="mode.value" :value="mode.value" :label="mode.label" />
-        </ElSelect>
-        <small class="d-block text-secondary mt-1">{{ projectModes.find(item => item.value === projectMode)?.description }}</small>
       </div>
 
       <div class="mb-2 border rounded overflow-hidden">
@@ -249,17 +214,6 @@ onMounted(async () => {
       <div class="text-secondary small mb-3">
         <div>根目录：{{ detailProject.root_dir }}</div>
         <div v-if="detailProject.description">描述：{{ detailProject.description }}</div>
-      </div>
-
-      <div class="mb-3">
-        <label class="form-label small">Project Mode</label>
-        <div class="d-flex gap-2">
-          <ElSelect v-model="detailMode" size="small" class="flex-grow-1">
-            <ElOption v-for="mode in projectModes" :key="mode.value" :value="mode.value" :label="mode.label" />
-          </ElSelect>
-          <ElButton type="primary" size="small" :loading="loading" @click="saveProjectMode">保存 Mode</ElButton>
-        </div>
-        <small class="d-block text-secondary mt-1">{{ projectModes.find(item => item.value === detailMode)?.description }}</small>
       </div>
 
       <div class="mb-2">

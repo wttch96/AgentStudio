@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { AgentProfile, SkillProfile } from '../../types'
 import AgentConfigEditor from './AgentConfigEditor.vue'
 import BrainConfigEditor from './BrainConfigEditor.vue'
@@ -7,12 +7,15 @@ import SchedulerConfigEditor from './SchedulerConfigEditor.vue'
 import SkillConfigEditor from './SkillConfigEditor.vue'
 import WorkspaceConfigEditor from './WorkspaceConfigEditor.vue'
 import MemoryConfigEditor from './MemoryConfig.vue'
-import RAGConfigEditor from './RAGConfigEditor.vue'
 import KnowledgeConfig from './KnowledgeConfig.vue'
 
-defineProps<{ agents: AgentProfile[]; skills: SkillProfile[]; projectId: string }>()
+const props = defineProps<{ agents: AgentProfile[]; skills: SkillProfile[]; projectId: string }>()
 defineEmits<{ close: []; saved: [] }>()
-const tab = ref<'brain' | 'rag' | 'knowledge' | 'agents' | 'skills' | 'workspace' | 'scheduler' | 'memory'>('brain')
+const tab = ref<'brain' | 'knowledge' | 'agents' | 'skills' | 'workspace' | 'scheduler' | 'memory'>('brain')
+const hasRagAgent = computed(() => props.agents.some(agent => agent.agent_type === 'rag'))
+watch(hasRagAgent, (enabled) => {
+  if (!enabled && tab.value === 'knowledge') tab.value = 'agents'
+})
 </script>
 
 <template>
@@ -27,8 +30,7 @@ const tab = ref<'brain' | 'rag' | 'knowledge' | 'agents' | 'skills' | 'workspace
       </header>
       <ElTabs v-model="tab" class="config-tabs">
         <ElTabPane label="主脑配置" name="brain" />
-        <ElTabPane label="RAG 配置" name="rag" />
-        <ElTabPane label="知识库" name="knowledge" />
+        <ElTabPane v-if="hasRagAgent" label="知识库" name="knowledge" />
         <ElTabPane label="Agent 配置" name="agents" />
         <ElTabPane label="Skill 编辑" name="skills" />
         <ElTabPane label="工作目录" name="workspace" />
@@ -36,7 +38,6 @@ const tab = ref<'brain' | 'rag' | 'knowledge' | 'agents' | 'skills' | 'workspace
         <ElTabPane label="记忆配置" name="memory" />
       </ElTabs>
       <BrainConfigEditor v-if="tab === 'brain'" @saved="$emit('saved')" />
-      <RAGConfigEditor v-else-if="tab === 'rag'" :agents="agents" :project-id="projectId" @saved="$emit('saved')" />
       <KnowledgeConfig v-else-if="tab === 'knowledge'" :project-id="projectId" />
       <AgentConfigEditor v-else-if="tab === 'agents'" :agents="agents" :skills="skills" :project-id="projectId" @saved="$emit('saved')" />
       <SkillConfigEditor v-else-if="tab === 'skills'" :skills="skills" :project-id="projectId" @saved="$emit('saved')" />

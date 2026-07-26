@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from app.domain.models import Project, ProjectAgent, ReviewDecision
+from app.domain.models import CreateRunRequest, ProjectAgent, ReviewDecision
 
 
 class TestAgentConfigBackwardCompat:
@@ -112,22 +112,18 @@ class TestAgentConfigEnhanced:
     "mode",
     ["manual", "editAutomatically", "plan", "auto"],
 )
-def test_project_modes_are_valid(mode):
-    project = Project(
-        id="mode-project",
-        name="Mode Project",
-        root_dir="/tmp/mode-project",
+def test_conversation_modes_are_valid(mode):
+    request = CreateRunRequest(
+        objective="执行当前对话任务",
         mode=mode,
     )
-    assert project.mode == mode
+    assert request.mode == mode
 
 
-def test_unknown_project_mode_is_rejected():
+def test_unknown_conversation_mode_is_rejected():
     with pytest.raises(ValidationError):
-        Project(
-            id="bad-mode-project",
-            name="Bad Mode",
-            root_dir="/tmp/bad-mode",
+        CreateRunRequest(
+            objective="执行当前对话任务",
             mode="dangerously-skip-everything",
         )
 

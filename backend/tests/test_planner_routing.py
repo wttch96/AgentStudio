@@ -101,3 +101,47 @@ def test_agent_enforcement_preserves_brain_contract():
     repaired = DeepSeekPlanner._enforce_requested_agents(dag, "修改后端 API")
 
     assert repaired.coordination_contract == dag.coordination_contract
+
+
+def test_rag_module_update_is_routed_to_code_agent_not_rag_agent():
+    rag_dag = TaskDag(
+        summary="更新 RAG",
+        tasks=[
+            DagTask(
+                id="query-rag",
+                title="查询 RAG",
+                objective="查询 RAG 相关信息",
+                agent="rag",
+            )
+        ],
+    )
+    agents = [
+        AgentProfile(name="backend-agent", display_name="后端", agent_type="claude"),
+        AgentProfile(name="rag", display_name="RAG", agent_type="rag"),
+    ]
+
+    repaired = DeepSeekPlanner._repair_rag_code_routing(
+        rag_dag,
+        "更新 RAG 相关模块接口",
+        agents,
+    )
+
+    assert [task.agent for task in repaired.tasks] == ["backend-agent"]
+    assert "修改的软件模块" in repaired.tasks[0].objective
+    assert "不要执行知识库检索" in repaired.tasks[0].objective
+
+
+def test_rag_code_update_discovery_uses_backend_agent_only():
+    planner = DeepSeekPlanner.__new__(DeepSeekPlanner)
+    agents = [
+        AgentProfile(name="backend-agent", display_name="后端", agent_type="claude"),
+        AgentProfile(name="rag", display_name="RAG", agent_type="rag"),
+    ]
+
+    dag = planner.create_discovery_dag("更新 RAG 相关模块接口", agents)
+
+    assert {task.agent for task in dag.tasks} == {"backend-agent"}
+
+
+def test_updating_a_knowledge_entry_remains_a_rag_operation():
+    assert not DeepSeekPlanner._rag_is_code_subject("更新知识库中的产品接口说明")

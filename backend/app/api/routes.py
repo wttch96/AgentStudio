@@ -21,17 +21,15 @@ from app.domain.configuration import (
     WorkspaceUpdate,
 )
 from app.domain.models import (
-    CreateRunRequest,
-    CreateProjectRequest,
-    Project,
-    ProjectAgent,
     AgentTemplate,
-    KnowledgeEntry,
-    KnowledgeRelation,
-    KnowledgeFeedback,
+    CreateProjectRequest,
+    CreateRunRequest,
     InterruptAction,
     InterruptCommand,
     InterruptTarget,
+    KnowledgeEntry,
+    KnowledgeFeedback,
+    KnowledgeRelation,
 )
 from app.services.container import ServiceContainer
 from app.storage.sqlite_store import TERMINAL_STATUSES
@@ -256,7 +254,8 @@ def pick_folder():
             return jsonify({"path": selected})
         elif system == "Linux":
             # 尝试 zenity (GNOME) 或 kdialog (KDE)
-            import subprocess, shutil
+            import shutil
+            import subprocess
             for cmd in ["zenity", "kdialog"]:
                 if shutil.which(cmd):
                     if cmd == "zenity":
@@ -332,7 +331,8 @@ def create_run():
     try:
         return jsonify(
             services().runs.start(payload.objective, payload.parent_run_id,
-                                  project_id=payload.project_id)
+                                  project_id=payload.project_id,
+                                  mode=payload.mode)
         ), 202
     except RuntimeError as error:
         return jsonify({"error": str(error)}), 409
@@ -942,8 +942,11 @@ def list_projects():
 
 @api.post("/projects")
 def create_project():
+    data = request.get_json(silent=True) or {}
+    if "mode" in data:
+        return jsonify({"error": "Mode 属于对话，请在创建运行时选择"}), 400
     try:
-        payload = CreateProjectRequest.model_validate(request.get_json(silent=True) or {})
+        payload = CreateProjectRequest.model_validate(data)
     except ValidationError as error:
         return jsonify({"error": "项目参数无效", "details": error.errors()}), 400
     try:
@@ -952,7 +955,6 @@ def create_project():
             payload.root_dir,
             payload.description,
             payload.project_name,
-            payload.mode,
         )
         return jsonify(project), 201
     except ValueError as error:
@@ -1003,6 +1005,8 @@ def get_project(project_id: str):
 @api.put("/projects/<project_id>")
 def update_project(project_id: str):
     data = request.get_json(silent=True) or {}
+    if "mode" in data:
+        return jsonify({"error": "Mode 属于对话，不能保存为项目属性"}), 400
     try:
         project = services().project_manager.update_project(project_id, data)
     except (ValueError, ValidationError) as error:

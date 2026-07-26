@@ -8,6 +8,7 @@ import type {
   MemoryCompactionRecord,
   PlanTask,
   Project,
+  ConversationMode,
   Run,
   RunEvent,
   SkillProfile,
@@ -31,7 +32,7 @@ interface WorkspaceState {
   loading: boolean
   submitting: boolean
   error: string
-  taskQueue: { id: string; objective: string }[]
+  taskQueue: { id: string; objective: string; mode: ConversationMode }[]
   // 新增：conversation 级别状态
   conversationRootId: string | null
   conversationRuns: Run[]
@@ -445,7 +446,7 @@ export function useWorkspace() {
         // 自动推进队列中的下一个任务 — 作为当前 conversation 的下一轮
         if (state.taskQueue.length > 0) {
           const next = state.taskQueue.shift()!
-          void _startRun(next.objective)
+          void _startRun(next.objective, next.mode)
         }
       } else if (event.type === 'run.started') {
         if (state.activeRun) {
@@ -493,7 +494,7 @@ export function useWorkspace() {
     }
   }
 
-  async function _startRun(objective: string) {
+  async function _startRun(objective: string, mode: ConversationMode) {
     try {
       // 关键：如果有 conversation 上下文，以最后一轮为 parent 继续
       let parentRunId: string | undefined
@@ -507,7 +508,7 @@ export function useWorkspace() {
         parentRunId = state.activeRun.id
       }
 
-      const run = await api.createRun(objective, parentRunId, state.projectId || undefined)
+      const run = await api.createRun(objective, parentRunId, state.projectId || undefined, mode)
       // 继续对话的轮次属于同一 conversation，不产生新的侧边栏条目
       if (!parentRunId) {
         state.runs.unshift(run)
@@ -538,7 +539,7 @@ export function useWorkspace() {
     }
   }
 
-  async function createRun(objective: string) {
+  async function createRun(objective: string, mode: ConversationMode = 'auto') {
     state.submitting = true
     state.error = ''
     try {
@@ -550,11 +551,11 @@ export function useWorkspace() {
           instruction: objective,
         })
         const qid = Date.now().toString(36)
-        state.taskQueue.push({ id: qid, objective })
+        state.taskQueue.push({ id: qid, objective, mode })
         state.submitting = false
         return
       }
-      await _startRun(objective)
+      await _startRun(objective, mode)
     } catch (error) {
       state.error = error instanceof Error ? error.message : '创建运行失败'
       throw error
@@ -572,7 +573,7 @@ export function useWorkspace() {
     if (idx < 0) return
     const item = state.taskQueue[idx]
     state.taskQueue.splice(idx, 1)
-    cancelActiveRun().then(() => _startRun(item.objective))
+    cancelActiveRun().then(() => _startRun(item.objective, item.mode))
   }
 
   function beginNewRun() {

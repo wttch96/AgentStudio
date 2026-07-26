@@ -18,7 +18,7 @@ import { useTimeoutDetection } from '../composables/useTimeoutDetection'
 import { useInterrupt } from '../composables/useInterrupt'
 import { useRunTimeline } from '../composables/useRunTimeline'
 import { api } from '../api/client'
-import type { Project, NodeStatus } from '../types'
+import type { Project, NodeStatus, ConversationMode } from '../types'
 
 const workspace = useWorkspace()
 const composer = ref<InstanceType<typeof PromptComposer> | null>(null)
@@ -30,15 +30,9 @@ const projects = computed(() => workspace.state.projects)
 const currentProject = computed(() =>
   workspace.state.projectId
     ? workspace.state.projects.find(p => p.id === workspace.state.projectId)
-      || { id: workspace.state.projectId, name: workspace.state.projectName || workspace.state.projectId.slice(0, 8), root_dir: '', description: '', mode: 'auto' } as Project
+      || { id: workspace.state.projectId, name: workspace.state.projectName || workspace.state.projectId.slice(0, 8), root_dir: '', description: '' } as Project
     : null
 )
-const currentModeLabel = computed(() => ({
-  manual: 'Manual',
-  editAutomatically: 'Edit Automatically',
-  plan: 'Plan',
-  auto: 'Auto',
-}[currentProject.value?.mode || 'auto']))
 
 const allEvents = computed(() => {
   const convEvents = workspace.state.conversationEvents
@@ -75,7 +69,7 @@ const subtitle = computed(() => {
   return labels[run.status] || run.status
 })
 
-async function submit(objective: string) {
+async function submit(objective: string, mode: ConversationMode = 'auto') {
   if (workspace.isRunning.value && objective.startsWith('/') && workspace.state.activeRun) {
     const [targetToken, ...parts] = objective.trim().split(/\s+/)
     const instruction = parts.join(' ')
@@ -92,7 +86,7 @@ async function submit(objective: string) {
     })
     return
   }
-  await workspace.createRun(objective)
+  await workspace.createRun(objective, mode)
 }
 
 function onProjectCreated(project: Project) {
@@ -212,7 +206,6 @@ onMounted(async () => {
           <div class="p-4">
             <div class="d-flex gap-2 mb-2">
               <ElTag type="info">{{ currentProject?.name }}</ElTag>
-              <ElTag type="primary">{{ currentModeLabel }}</ElTag>
             </div>
             <h1 style="font-size:1.5rem;font-weight:600">今天想让 Agent 团队完成什么？</h1>
             <p class="text-secondary">{{ subtitle }}</p>
@@ -319,7 +312,6 @@ onMounted(async () => {
       v-if="showProjectDialog"
       :projects="projects"
       @created="onProjectCreated"
-      @updated="workspace.loadProjects()"
       @close="showProjectDialog = false; workspace.refreshConfiguration()"
     />
   </ElContainer>

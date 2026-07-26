@@ -185,7 +185,7 @@ npm run build
 - [技术架构](docs/technical-architecture.md)
 - [自举与本地启动](docs/bootstrap.md)
 - [Agent 与 Skill 模版](docs/agent-skill-templates.md)
-- [Project Mode](docs/project-modes.md)
+- [Conversation Mode](docs/project-modes.md)
 - [Flow 管理](docs/flow-management.md)
 - [Flow YAML 参考](docs/flow-yaml-reference.md)
 - [项目数据目录模板](templates/project/README.md)

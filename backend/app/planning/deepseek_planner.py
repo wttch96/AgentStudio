@@ -6,12 +6,16 @@ import json
 import logging
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from openai import OpenAI
 
 from app.config import Settings
 from app.domain.models import AgentResult, DagTask, TaskDag
 from app.services.brain_settings import BrainSettings
+
+if TYPE_CHECKING:
+    from app.planning.execution_plan import ExecutionPlan
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +73,9 @@ STRUCTURE_GUARD_BASE = """
 24. 公共接口（API 契约、数据模型）应在前后端并行实现前先确定。
 25. 高风险修改需要审查步骤。
 26. 不要过度拆分——简单任务一个 Agent 即可完成。
+27. 先判断 RAG/知识库是“操作工具”还是“被修改的软件模块”。只有用户明确要求检索、
+    查询、召回、录入或导入知识时才使用 RAG Agent；如果用户要求更新、修复、实现或重构
+    RAG 模块、接口或代码，必须交给编码 Agent，绝不能把它改写成知识检索任务。
 """.strip()
 
 PROJECT_MODE_GUIDANCE = {
@@ -145,6 +152,36 @@ class DeepSeekPlanner:
         self.brain = brain or BrainSettings()
         self.knowledge_store = knowledge_store
 
+    @staticmethod
+    def _rag_is_code_subject(objective: str) -> bool:
+        """RAG 是待修改的软件对象，而不是本轮要调用的检索工具。"""
+        lowered = objective.lower().replace(" ", "")
+        mentions_rag = any(word in lowered for word in ("rag", "知识库"))
+        code_actions = (
+            "更新", "修改", "修复", "实现", "开发", "重构", "适配", "新增",
+            "接口", "模块", "代码", "api", "endpoint", "refactor", "implement",
+            "update", "modify", "fix",
+        )
+        explicit_knowledge_actions = (
+            "查询知识库", "检索知识库", "搜索知识库", "查找知识库",
+            "知识库召回", "录入知识", "导入知识", "写入知识库",
+            "更新知识库中的", "修改知识库中的", "更新知识条目",
+            "修改知识条目", "删除知识条目", "从知识库",
+            "queryknowledge", "searchknowledge", "retrieveknowledge",
+        )
+        return (
+            mentions_rag
+            and any(action in lowered for action in code_actions)
+            and not any(action in lowered for action in explicit_knowledge_actions)
+        )
+
+    @staticmethod
+    def _has_rag_agent(project_agents: list | None) -> bool:
+        return any(
+            getattr(agent, "agent_type", "") == "rag"
+            for agent in (project_agents or [])
+        )
+
     def create_discovery_dag(self, objective: str,
                               project_agents: list | None = None) -> TaskDag:
         """创建只读项目发现图；相关专业 Agent 会在所选工作空间内并行过滤候选项目。
@@ -167,6 +204,9 @@ class DeepSeekPlanner:
             domain for domain, words in domain_keywords.items()
             if any(word in lowered for word in words)
         }
+        if self._rag_is_code_subject(objective):
+            requested_domains.discard("rag")
+            requested_domains.add("backend")
         if "前后端" in lowered:
             requested_domains.update({"frontend", "backend"})
         if any(word in lowered for word in ("不用netty", "不要netty", "不需要netty")):
@@ -215,7 +255,6 @@ class DeepSeekPlanner:
         for agent_obj in selected:
             agent_name = agent_obj.name if hasattr(agent_obj, 'name') else str(agent_obj)
             label = getattr(agent_obj, 'display_name', agent_name)
-            sub_dir = getattr(agent_obj, 'sub_dir', '.')
             tasks.append(
                 DagTask(
                     id=f"workspace-discovery-{agent_name}",
@@ -262,6 +301,7 @@ class DeepSeekPlanner:
         if not self.settings.deepseek_api_key:
             dag = self._enrich_dag(self._demo_dag(objective, project_agents), project_agents)
             dag = self._enforce_requested_agents(dag, objective, project_agents)
+            dag = self._repair_rag_code_routing(dag, objective, project_agents)
             logger.info(
                 "planner.finished run_id=%s source=demo tasks=%s duration_ms=%.1f",
                 run_id or "-",
@@ -316,7 +356,11 @@ class DeepSeekPlanner:
 
         # 从知识库中检索与目标相关的内容，注入主脑规划上下文
         knowledge_context = ""
-        if self.knowledge_store:
+        if (
+            self.knowledge_store
+            and self._has_rag_agent(project_agents)
+            and not self._rag_is_code_subject(objective)
+        ):
             try:
                 kb_results = self.knowledge_store.search(
                     objective, top_k=3, project_id=project_id
@@ -340,6 +384,8 @@ class DeepSeekPlanner:
                         "【最重要规则】你是主脑编排器，不是执行 Agent。\n"
                         "用户问你问题、让你分析结果、闲聊、解释概念 → 直接纯文本回答，绝不输出 JSON。\n"
                         "用户让你读写文件、运行命令、搜索代码、操作知识库 → 输出 JSON 任务图。\n"
+                        "RAG/知识库若是被更新、修复、实现或重构的软件模块，属于代码任务，"
+                        "必须交给编码 Agent；不要调用 RAG Agent 查询。\n"
                         "拿不准时选择纯文本。\n\n"
                         f"{guard}\n\n"
                         "【输出格式】\n"
@@ -397,6 +443,7 @@ class DeepSeekPlanner:
             )
         dag = self._enrich_dag(dag, project_agents)
         dag = self._enforce_requested_agents(dag, objective, project_agents)
+        dag = self._repair_rag_code_routing(dag, objective, project_agents)
         logger.info(
             "planner.finished run_id=%s source=deepseek tasks=%s direct_answer=%s "
             "duration_ms=%.1f",
@@ -406,6 +453,43 @@ class DeepSeekPlanner:
             (time.perf_counter() - started_at) * 1000,
         )
         return dag
+
+    @classmethod
+    def _repair_rag_code_routing(
+        cls,
+        dag: TaskDag,
+        objective: str,
+        project_agents: list | None,
+    ) -> TaskDag:
+        """确定性阻止“修改 RAG 代码”被误路由为知识检索。"""
+        if not dag.tasks or not cls._rag_is_code_subject(objective):
+            return dag
+
+        rag_names = {
+            getattr(agent, "name", "")
+            for agent in (project_agents or [])
+            if getattr(agent, "agent_type", "") == "rag"
+        }
+        rag_names.update({"rag", "rag-agent", "knowledge-agent"})
+        target = cls._resolve_agent_name("backend-agent", project_agents)
+        if not target:
+            return dag
+
+        repaired: list[DagTask] = []
+        for task in dag.tasks:
+            if task.agent not in rag_names:
+                repaired.append(task)
+                continue
+            repaired.append(task.model_copy(update={
+                "title": "更新 RAG 相关代码",
+                "objective": (
+                    f"把 RAG 视为当前要修改的软件模块，而不是检索工具。"
+                    f"完成用户原始目标：{objective}。检查并修改相关代码与接口，"
+                    "验证变更；不要执行知识库检索来替代代码更新。"
+                )[:4000],
+                "agent": target,
+            }))
+        return dag.model_copy(update={"tasks": repaired})
 
     @staticmethod
     def _enrich_dag(dag: TaskDag, project_agents: list | None) -> TaskDag:

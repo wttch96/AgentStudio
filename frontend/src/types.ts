@@ -51,7 +51,7 @@ export interface AgentProfile {
   max_iterations?: number
 }
 
-export type ProjectMode = 'manual' | 'editAutomatically' | 'plan' | 'auto'
+export type ConversationMode = 'manual' | 'editAutomatically' | 'plan' | 'auto'
 
 export interface AgentDetail extends AgentProfile {
   prompt: string
@@ -409,7 +409,6 @@ export interface Project {
   name: string
   root_dir: string
   description: string
-  mode: ProjectMode
   created_at?: string
   updated_at?: string
 }

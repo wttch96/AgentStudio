@@ -61,23 +61,17 @@ def test_only_expected_execution_agents_are_registered(client):
     assert all("capabilities" in agent and "priority" in agent for agent in agents)
 
 
-def test_project_mode_can_be_updated_and_is_validated(client):
-    updated = client.put(
-        "/api/projects/test-project",
-        json={"mode": "plan"},
-    )
-    assert updated.status_code == 200
-    assert updated.json["mode"] == "plan"
-
+def test_project_has_no_persistent_mode(client):
     detail = client.get("/api/projects/test-project")
     assert detail.status_code == 200
-    assert detail.json["mode"] == "plan"
+    assert "mode" not in detail.json
 
     invalid = client.put(
         "/api/projects/test-project",
         json={"mode": "unsafe"},
     )
     assert invalid.status_code == 400
+    assert "不能保存为项目属性" in invalid.json["error"]
 
 
 def test_http_requests_include_request_id_and_lifecycle_logs(client, caplog):
@@ -92,18 +86,13 @@ def test_http_requests_include_request_id_and_lifecycle_logs(client, caplog):
     assert any("http.completed" in message and "status=200" in message for message in messages)
 
 
-def test_plan_project_mode_creates_plan_without_starting_agents(client):
-    updated = client.put(
-        "/api/projects/test-project",
-        json={"mode": "plan"},
-    )
-    assert updated.status_code == 200
-
+def test_plan_conversation_mode_creates_plan_without_starting_agents(client):
     response = client.post(
         "/api/runs",
         json={
             "objective": "修改前后端并补充自动化测试",
             "project_id": "test-project",
+            "mode": "plan",
         },
     )
     assert response.status_code == 202
@@ -119,9 +108,21 @@ def test_plan_project_mode_creates_plan_without_starting_agents(client):
     assert run["status"] == "completed"
     assert "Plan 模式" in run["final_answer"]
     event_types = [event["type"] for event in run["events"]]
-    assert "project.mode" in event_types
+    assert "conversation.mode" in event_types
     assert "plan.created" in event_types
     assert "agent.started" not in event_types
+
+
+def test_invalid_conversation_mode_is_rejected(client):
+    response = client.post(
+        "/api/runs",
+        json={
+            "objective": "修改一个接口",
+            "project_id": "test-project",
+            "mode": "unsafe",
+        },
+    )
+    assert response.status_code == 400
 
 
 def test_skill_creation_and_agent_assignment(client):

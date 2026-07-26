@@ -101,7 +101,7 @@ class RunManager:
 
     def start(self, objective: str, parent_run_id: str | None = None,
               project_id: str | None = None, flow_name: str | None = None,
-              flow_inputs: dict | None = None) -> dict:
+              flow_inputs: dict | None = None, mode: str = "auto") -> dict:
         command = parse_run_command(objective)
         parent = self.store.get_run(parent_run_id) if parent_run_id else None
         if parent_run_id and not parent:
@@ -116,7 +116,7 @@ class RunManager:
         if not root.is_dir():
             raise ValueError(f"工作目录不存在：{root}")
         scheduler = self.scheduler_settings.current(project_id or "")
-        project_mode = self._project_mode(project_id)
+        project_mode = mode
         run_id = uuid.uuid4().hex
         continuation_context = self._continuation_context(parent_run_id)
         preset_dag = self._preset_dag(command, parent_run_id, project_id or "")
@@ -161,22 +161,6 @@ class RunManager:
         )
         thread.start()
         return run
-
-    def _project_mode(self, project_id: str | None) -> str:
-        """读取项目级工作模式；旧项目和无项目运行保持 Auto 行为。"""
-        if not project_id:
-            return "auto"
-        config_reader = getattr(self.executor.registry, "config_reader", None)
-        if config_reader is None:
-            return "auto"
-        try:
-            project = config_reader.for_project(project_id).load_project()
-            mode = project.get("mode", "auto")
-            if mode in {"manual", "editAutomatically", "plan", "auto"}:
-                return mode
-        except (FileNotFoundError, ValueError):
-            pass
-        return "auto"
 
     def _continuation_context(self, parent_run_id: str | None) -> str:
         """把最近上游输出压缩为有界上下文，供规划器和执行 Agent 使用。"""
@@ -240,13 +224,23 @@ class RunManager:
                 self.memory_manager,
                 new_run_id,  # conversation_id = 新分支
                 project_id,
-                self._project_mode(project_id),
+                self._run_mode(source_run_id),
             ),
             name=f"run-{new_run_id[:8]}",
             daemon=True,
         )
         thread.start()
         return run
+
+    def _run_mode(self, run_id: str) -> str:
+        """分叉运行沿用源对话已选择的模式。"""
+        for event in reversed(self.store.list_events(run_id)):
+            if event.get("type") != "conversation.mode":
+                continue
+            mode = event.get("payload", {}).get("mode")
+            if mode in {"manual", "editAutomatically", "plan", "auto"}:
+                return mode
+        return "auto"
 
     def cancel(self, run_id: str) -> bool:
         run = self.store.get_run(run_id)
@@ -323,11 +317,7 @@ class RunManager:
                     "project_mode": project_mode,
                 },
             )
-            self.events.emit(
-                run_id,
-                "project.mode",
-                payload={"mode": project_mode},
-            )
+            self.events.emit(run_id, "conversation.mode", payload={"mode": project_mode})
             if project_mode == "plan":
                 flow_name = None
                 flow_inputs = None

@@ -286,11 +286,14 @@
 {
   "objective": "用户目标描述",
   "parent_run_id": null,
-  "project_id": null
+  "project_id": null,
+  "mode": "auto"
 }
 ```
 
-**字段约束**: `objective` [2, 20000] 字符
+**字段约束**: `objective` [2, 20000] 字符；`mode` 可选值为 `manual`、
+`editAutomatically`、`plan`、`auto`，不传时默认为 `auto`。Mode 属于本轮
+对话，不写入项目配置。
 
 **Response** (202): `Run`
 
@@ -642,8 +645,7 @@ data: {"run_id":"...","sequence":42,"type":"agent_message","timestamp":"...","ag
   "name": "My Project",
   "project_name": "my-project",
   "root_dir": "/path/to/project",
-  "description": "Project description",
-  "mode": "auto"
+  "description": "Project description"
 }
 ```
 
@@ -651,9 +653,6 @@ data: {"run_id":"...","sequence":42,"type":"agent_message","timestamp":"...","ag
 的稳定目录名，只允许小写字母、数字和连字符。
 
 **Response** (201): `Project`
-
-`mode` 可选值：`manual`、`editAutomatically`、`plan`、`auto`；不传时默认为
-`auto`。
 
 #### `GET /api/projects/{id}`
 
@@ -665,10 +664,10 @@ data: {"run_id":"...","sequence":42,"type":"agent_message","timestamp":"...","ag
 
 #### `PUT /api/projects/{id}`
 
-更新项目名称、描述或 Project Mode。
+更新项目名称或描述。
 
 ```json
-{ "mode": "plan" }
+{ "description": "Updated description" }
 ```
 
 #### `DELETE /api/projects/{id}`

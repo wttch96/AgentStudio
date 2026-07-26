@@ -238,7 +238,7 @@ function title(event: RunEvent) {
   }
   const titles: Record<string, string> = {
     'run.started': '运行已启动',
-    'project.mode': 'Project Mode',
+    'conversation.mode': '对话 Mode',
     'workspace.discovery_started': '正在搜索所选工作空间',
     'planner.started': 'DeepSeek 正在规划',
     'planner.bypassed': '已直接选择 Claude Agent',
@@ -267,7 +267,7 @@ function detail(event: RunEvent) {
     return `已等待 ${elapsed} 秒 · DeepSeek 或模型代理响应较慢，系统仍在等待；你可以继续等待或停止本次运行。`
   }
   if (event.type === 'planner.bypassed') return '已跳过 DeepSeek 规划，直接执行指定 Agent'
-  if (event.type === 'project.mode') {
+  if (event.type === 'conversation.mode') {
     const modeDescriptions: Record<string, string> = {
       manual: 'Manual · 主脑仅规划用户明确要求的操作',
       editAutomatically: 'Edit Automatically · 主脑可自动完成必要修改',

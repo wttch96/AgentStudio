@@ -8,31 +8,30 @@ import SchedulerConfigEditor from '../components/config/SchedulerConfigEditor.vu
 import SkillConfigEditor from '../components/config/SkillConfigEditor.vue'
 import WorkspaceConfigEditor from '../components/config/WorkspaceConfigEditor.vue'
 import MemoryConfigEditor from '../components/config/MemoryConfig.vue'
-import RAGConfigEditor from '../components/config/RAGConfigEditor.vue'
 import KnowledgeConfig from '../components/config/KnowledgeConfig.vue'
 import { useWorkspace } from '../composables/useWorkspace'
 
 const route = useRoute()
 const workspace = useWorkspace()
 
-const tab = ref<'brain' | 'rag' | 'knowledge' | 'agents' | 'skills' | 'workspace' | 'scheduler' | 'memory'>('agents')
+const tab = ref<'brain' | 'knowledge' | 'agents' | 'skills' | 'workspace' | 'scheduler' | 'memory'>('agents')
 const loading = ref(true)
-
-const tabs = [
-  { key: 'agents' as const, label: 'Agent 配置', icon: '🤖' },
-  { key: 'skills' as const, label: 'Skill 编辑', icon: '🔧' },
-  { key: 'brain' as const, label: '主脑配置', icon: '🧠' },
-  { key: 'rag' as const, label: 'RAG 配置', icon: '📚' },
-  { key: 'knowledge' as const, label: '知识库', icon: '📖' },
-  { key: 'workspace' as const, label: '工作目录', icon: '📁' },
-  { key: 'scheduler' as const, label: '调度配置', icon: '⚙️' },
-  { key: 'memory' as const, label: '记忆配置', icon: '💾' },
-]
 
 // Use workspace unified state — project is selected via AppHeader
 const projectId = computed(() => workspace.state.projectId)
 const agents = computed(() => workspace.state.agents)
 const skills = computed(() => workspace.state.skills)
+
+const hasRagAgent = computed(() => agents.value.some(agent => agent.agent_type === 'rag'))
+const tabs = computed(() => [
+  { key: 'agents' as const, label: 'Agent 配置', icon: '🤖' },
+  { key: 'skills' as const, label: 'Skill 编辑', icon: '🔧' },
+  { key: 'brain' as const, label: '主脑配置', icon: '🧠' },
+  ...(hasRagAgent.value ? [{ key: 'knowledge' as const, label: '知识库', icon: '📖' }] : []),
+  { key: 'workspace' as const, label: '工作目录', icon: '📁' },
+  { key: 'scheduler' as const, label: '调度配置', icon: '⚙️' },
+  { key: 'memory' as const, label: '记忆配置', icon: '💾' },
+])
 
 async function loadData() {
   loading.value = true
@@ -49,7 +48,11 @@ function onSaved() {
 }
 
 watch(() => route.query.tab, (t) => {
-  if (t && tabs.some(tb => tb.key === t)) tab.value = t as typeof tab.value
+  if (t && tabs.value.some(tb => tb.key === t)) tab.value = t as typeof tab.value
+})
+
+watch(hasRagAgent, (enabled) => {
+  if (!enabled && tab.value === 'knowledge') tab.value = 'agents'
 })
 
 // Watch projectId changes from AppHeader to reload config
@@ -94,7 +97,6 @@ onMounted(() => {
 
       <template v-else>
         <BrainConfigEditor v-if="tab === 'brain'" @saved="onSaved" />
-        <RAGConfigEditor v-else-if="tab === 'rag'" :agents="agents" :project-id="projectId" @saved="onSaved" />
         <KnowledgeConfig v-else-if="tab === 'knowledge'" :project-id="projectId" />
         <AgentConfigEditor v-else-if="tab === 'agents'" :agents="agents" :skills="skills" :project-id="projectId" @saved="onSaved" />
         <SkillConfigEditor v-else-if="tab === 'skills'" :skills="skills" :project-id="projectId" @saved="onSaved" />

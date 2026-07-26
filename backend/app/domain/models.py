@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field, model_validator
 
 
 
-ProjectMode: TypeAlias = Literal["manual", "editAutomatically", "plan", "auto"]
+ConversationMode: TypeAlias = Literal["manual", "editAutomatically", "plan", "auto"]
 
 
 class DagTask(BaseModel):
@@ -147,6 +147,7 @@ class CreateRunRequest(BaseModel):
     objective: str = Field(min_length=2, max_length=20_000)
     parent_run_id: str | None = Field(default=None, min_length=1, max_length=100)
     project_id: str | None = Field(default=None)
+    mode: ConversationMode = "auto"
 
 
 # ==================== 分层记忆模型 ====================
@@ -275,7 +276,6 @@ class Project(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     root_dir: str = Field(min_length=1, max_length=4096)
     description: str = ""
-    mode: ProjectMode = "auto"
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
@@ -328,7 +328,6 @@ class CreateProjectRequest(BaseModel):
     )
     root_dir: str = Field(min_length=1, max_length=4096)
     description: str = ""
-    mode: ProjectMode = "auto"
 
 
 # ==================== Blackboard 黑板系统模型 ====================

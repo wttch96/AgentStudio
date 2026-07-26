@@ -94,10 +94,10 @@ export const api = {
     }),
   deepseekBalance: (refresh = false) =>
     request<DeepSeekBalance>(`/deepseek/balance${refresh ? '?refresh=1' : ''}`),
-  createRun: (objective: string, parentRunId?: string, projectId?: string) =>
+  createRun: (objective: string, parentRunId?: string, projectId?: string, mode: import("../types").ConversationMode = 'auto') =>
     request<Run>('/runs', {
       method: 'POST',
-      body: JSON.stringify({ objective, parent_run_id: parentRunId, project_id: projectId }),
+      body: JSON.stringify({ objective, parent_run_id: parentRunId, project_id: projectId, mode }),
     }),
   cancelRun: (id: string) => request<{ accepted: boolean }>(`/runs/${id}/cancel`, { method: 'POST' }),
   forkRun: (runId: string, objective?: string) =>
@@ -165,9 +165,9 @@ export const api = {
     return request<import('../types').KnowledgeStats>('/knowledge-stats' + p)
   },
   projects: () => request<{ items: import("../types").Project[] }>("/projects"),
-  createProject: (name: string, root_dir: string, description?: string, project_name?: string, mode?: import("../types").ProjectMode) =>
-    request<import("../types").Project>("/projects", { method: "POST", body: JSON.stringify({ name, root_dir, description, project_name, mode }) }),
-  updateProject: (id: string, updates: { name?: string; description?: string; mode?: import("../types").ProjectMode }) =>
+  createProject: (name: string, root_dir: string, description?: string, project_name?: string) =>
+    request<import("../types").Project>("/projects", { method: "POST", body: JSON.stringify({ name, root_dir, description, project_name }) }),
+  updateProject: (id: string, updates: { name?: string; description?: string }) =>
     request<import("../types").Project>("/projects/" + id, { method: "PUT", body: JSON.stringify(updates) }),
   deleteProject: (id: string) =>
     fetch(API_BASE + "/projects/" + id, { method: "DELETE" }).then(r => { if (!r.ok) throw new Error("delete failed") }),

@@ -1,25 +1,32 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import type { ActiveAgent, AgentProfile } from '../types'
+import type { ActiveAgent, AgentProfile, ConversationMode } from '../types'
 
 const props = defineProps<{
   submitting: boolean; autofocus?: boolean; isRunning: boolean
-  queueItems: { id: string; objective: string }[]
+  queueItems: { id: string; objective: string; mode: ConversationMode }[]
   activeAgents: ActiveAgent[]; activeRunId: string | null
   agents: AgentProfile[]
 }>()
 const emit = defineEmits<{
-  submit: [objective: string]; interrupt: []
+  submit: [objective: string, mode: ConversationMode]; interrupt: []
   promoteQueue: [qid: string]; removeQueue: [qid: string]
   interruptAgent: [agent: string, action: string, instruction?: string]
 }>()
 
 const objective = ref('')
+const mode = ref<ConversationMode>('auto')
 const input = ref<InstanceType<typeof HTMLTextAreaElement> | any>(null)
 const showInterruptMenu = ref(false)
 const isComposing = ref(false)
 const activeCommandIndex = ref(0)
 const commandMenu = ref<HTMLElement | null>(null)
+const modeOptions: Array<{ value: ConversationMode; label: string }> = [
+  { value: 'manual', label: 'Manual' },
+  { value: 'editAutomatically', label: 'Edit Automatically' },
+  { value: 'plan', label: 'Plan' },
+  { value: 'auto', label: 'Auto' },
+]
 
 const commandOptions = computed(() => [
   { command: '/brain', label: props.isRunning ? '引导主脑并按需重规划' : '由主脑规划任务' },
@@ -49,7 +56,7 @@ watch(visibleCommands, (commands) => {
 async function submit() {
   const value = objective.value.trim()
   if (!value || props.submitting) return
-  emit('submit', value); objective.value = ''
+  emit('submit', value, mode.value); objective.value = ''
 }
 
 async function moveCommand(delta: number) {
@@ -179,6 +186,16 @@ function onInterruptBlur() { setTimeout(() => { if (showInterruptMenu.value) sho
       </div>
 
       <div class="d-flex gap-1">
+        <ElSelect
+          v-if="!isRunning"
+          v-model="mode"
+          size="small"
+          aria-label="本轮对话模式"
+          title="选择本轮对话的执行模式"
+          style="width: 160px"
+        >
+          <ElOption v-for="item in modeOptions" :key="item.value" :label="item.label" :value="item.value" />
+        </ElSelect>
         <!-- Interrupt -->
         <div v-if="isRunning" class="position-relative">
           <ElButton type="danger" size="small" plain @click="showInterruptMenu = !showInterruptMenu" @blur="onInterruptBlur">中断</ElButton>

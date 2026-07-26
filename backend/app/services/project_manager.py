@@ -6,7 +6,6 @@ import logging
 import uuid
 import re
 import shutil
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -170,7 +169,6 @@ class ProjectManager:
         root_dir: str,
         description: str = "",
         project_name: str | None = None,
-        mode: str = "auto",
     ) -> dict:
         root = Path(root_dir).resolve()
         if not root.is_dir():
@@ -185,7 +183,6 @@ class ProjectManager:
             "name": name,
             "description": description,
             "root_dir": str(root),
-            "mode": mode,
         }
         if self.config_reader:
             project_cfg = self.config_reader.for_project(project_id)
@@ -232,12 +229,7 @@ class ProjectManager:
                     target = project_cfg.flows_dir / source.name
                     if not target.exists():
                         shutil.copy2(source, target)
-        logger.info(
-            "project.created project_id=%s mode=%s root=%s",
-            project_id,
-            mode,
-            root,
-        )
+        logger.info("project.created project_id=%s root=%s", project_id, root)
         return data
 
     @staticmethod
@@ -258,7 +250,7 @@ class ProjectManager:
         if self.config_reader:
             projects = self.config_reader.list_projects()
             for project in projects:
-                project.setdefault("mode", "auto")
+                project.pop("mode", None)
             return projects
         return []
 
@@ -267,7 +259,7 @@ class ProjectManager:
             try:
                 project_cfg = self.config_reader.for_project(project_id)
                 project = project_cfg.load_project()
-                project.setdefault("mode", "auto")
+                project.pop("mode", None)
                 return project
             except Exception:
                 pass
@@ -281,17 +273,17 @@ class ProjectManager:
             existing = project_cfg.load_project()
         except (FileNotFoundError, ValueError):
             return None
-        for key in ("name", "description", "mode"):
+        for key in ("name", "description"):
             if key in updates and updates[key] is not None:
                 existing[key] = updates[key]
+        existing.pop("mode", None)
         validated = Project.model_validate(existing)
         data = validated.model_dump(exclude={"created_at"})
         project_cfg.save_project(data)
         logger.info(
-            "project.updated project_id=%s fields=%s mode=%s",
+            "project.updated project_id=%s fields=%s",
             project_id,
-            ",".join(sorted(set(updates) & {"name", "description", "mode"})) or "-",
-            data.get("mode", "auto"),
+            ",".join(sorted(set(updates) & {"name", "description"})) or "-",
         )
         return data
 

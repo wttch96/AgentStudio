@@ -34,12 +34,12 @@ class Settings:
     anthropic_auth_token: str = ""
     anthropic_base_url: str = ""
     claude_model: str = "claude-sonnet-4-5"
-    max_concurrent_agents: int = 3
-    agent_max_turns: int = 12
-    agent_timeout_seconds: int = 900
+    max_concurrent_agents: int = 5
+    agent_max_turns: int = 20
+    agent_timeout_seconds: int = 1200
     # ── 迭代与停止条件 ──
-    max_graph_iterations: int = 20
-    max_replan_iterations: int = 3
+    max_graph_iterations: int = 30
+    max_replan_iterations: int = 5
     max_task_revisions: int = 2
     workspace_root: Path = WORKSPACE_ROOT
     # Explicit override is useful for tests and embedded deployments. Runtime
