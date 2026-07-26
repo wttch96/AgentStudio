@@ -398,12 +398,15 @@ cmd_status() {
   is_running "${bk_pid}" || bk_pid=""
   is_running "${fe_pid}" || fe_pid=""
 
+  local runtime_env="${run_dir}/runtime.env"
+  local port_env="${SANDBOX_DIR}/.env"
+  [[ -f "${runtime_env}" ]] && port_env="${runtime_env}"
   local backend_port frontend_port
   backend_port="$(
-    sed -n 's/^BACKEND_PORT=//p' "${SANDBOX_DIR}/.env" 2>/dev/null | tail -1
+    sed -n 's/^BACKEND_PORT=//p' "${port_env}" 2>/dev/null | tail -1
   )"
   frontend_port="$(
-    sed -n 's/^FRONTEND_PORT=//p' "${SANDBOX_DIR}/.env" 2>/dev/null | tail -1
+    sed -n 's/^FRONTEND_PORT=//p' "${port_env}" 2>/dev/null | tail -1
   )"
   backend_port="${backend_port:-5000}"
   frontend_port="${frontend_port:-5173}"

@@ -30,7 +30,7 @@ matches_service() {
   cmdline="$(proc_cmdline "${pid}")"
   case "${name}" in
     backend)
-      [[ "${cmdline}" == *"${PROJECT_DIR}/backend/.venv/"* && "${cmdline}" == *"run.py"* ]]
+      [[ "${cmdline}" == *"run.py"* ]]
       ;;
     frontend)
       [[ "${cmdline}" == *"${PROJECT_DIR}/frontend/node_modules/vite/bin/vite.js"* ]]
@@ -41,6 +41,17 @@ matches_service() {
   esac
 }
 
+matches_start_identity() {
+  local name="$1"
+  local pid="$2"
+  local started_file="${RUN_DIR}/${name}.started"
+  [[ -f "${started_file}" ]] || return 1
+  local expected actual
+  expected="$(<"${started_file}")"
+  actual="$(ps -p "${pid}" -o lstart= 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  [[ -n "${actual}" && "${actual}" == "${expected}" ]]
+}
+
 stop_one() {
   local name="$1"
   local pid_file="${RUN_DIR}/${name}.pid"
@@ -49,12 +60,14 @@ stop_one() {
   local pid
   pid="$(tr -cd '0-9' < "${pid_file}")"
   if [[ -z "${pid}" ]]; then
-    rm -f "${pid_file}"
+    rm -f "${pid_file}" "${RUN_DIR}/${name}.started"
     return 0
   fi
 
   if kill -0 "${pid}" 2>/dev/null; then
-    if ! belongs_to_current_user "${pid}" || ! matches_service "${name}" "${pid}"; then
+    if ! belongs_to_current_user "${pid}" \
+      || ! matches_start_identity "${name}" "${pid}" \
+      || ! matches_service "${name}" "${pid}"; then
       echo "[stop] 拒绝停止 ${name}：PID ${pid} 不属于当前项目服务。" >&2
       return 1
     fi
@@ -67,11 +80,16 @@ stop_one() {
       kill -KILL "${pid}" 2>/dev/null || true
     fi
   fi
-  rm -f "${pid_file}"
+  rm -f "${pid_file}" "${RUN_DIR}/${name}.started"
 }
 
 STATUS=0
 stop_one backend || STATUS=1
 stop_one frontend || STATUS=1
-[[ "${QUIET}" == "1" ]] || echo "本地服务已停止。"
+if [[ "${STATUS}" == "0" ]]; then
+  rm -f "${RUN_DIR}/runtime.env"
+  [[ "${QUIET}" == "1" ]] || echo "本地服务已停止。"
+elif [[ "${QUIET}" != "1" ]]; then
+  echo "部分服务未停止，请检查上述安全校验错误。" >&2
+fi
 exit "${STATUS}"

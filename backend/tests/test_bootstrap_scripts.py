@@ -3,7 +3,11 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
+import time
 from pathlib import Path
+
+import pytest
 
 
 REPOSITORY = Path(__file__).resolve().parents[2]
@@ -63,6 +67,10 @@ def test_stop_script_refuses_pid_that_is_not_current_project_service(tmp_path: P
     shutil.copy2(REPOSITORY / "scripts" / "stop-local.sh", scripts_dir / "stop-local.sh")
     pid_file = run_dir / "backend.pid"
     pid_file.write_text(f"{os.getpid()}\n", encoding="utf-8")
+    (run_dir / "backend.started").write_text(
+        "not the current process start time\n",
+        encoding="utf-8",
+    )
 
     result = run(
         "bash",
@@ -86,7 +94,68 @@ def test_stop_script_removes_stale_pid_file(tmp_path: Path):
     shutil.copy2(REPOSITORY / "scripts" / "stop-local.sh", scripts_dir / "stop-local.sh")
     pid_file = run_dir / "frontend.pid"
     pid_file.write_text("99999999\n", encoding="utf-8")
+    started_file = run_dir / "frontend.started"
+    started_file.write_text("stale\n", encoding="utf-8")
 
     run("bash", "scripts/stop-local.sh", "--quiet", cwd=tmp_path)
 
     assert not pid_file.exists()
+    assert not started_file.exists()
+
+
+def test_stop_script_stops_matching_backend_process(tmp_path: Path):
+    scripts_dir = tmp_path / "scripts"
+    run_dir = tmp_path / ".run"
+    backend_dir = tmp_path / "backend"
+    scripts_dir.mkdir()
+    run_dir.mkdir()
+    backend_dir.mkdir()
+    shutil.copy2(REPOSITORY / "scripts" / "stop-local.sh", scripts_dir / "stop-local.sh")
+    (backend_dir / "run.py").write_text(
+        "import time\nwhile True:\n    time.sleep(1)\n",
+        encoding="utf-8",
+    )
+
+    process = subprocess.Popen(
+        [sys.executable, "run.py"],
+        cwd=backend_dir,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        (run_dir / "backend.pid").write_text(f"{process.pid}\n", encoding="utf-8")
+        started = ""
+        for _ in range(20):
+            try:
+                started = run(
+                    "ps",
+                    "-p",
+                    str(process.pid),
+                    "-o",
+                    "lstart=",
+                    cwd=tmp_path,
+                ).stdout.strip()
+            except PermissionError:
+                pytest.skip("当前测试沙箱禁止调用 ps")
+            if started:
+                break
+            time.sleep(0.05)
+        assert started
+        (run_dir / "backend.started").write_text(f"{started}\n", encoding="utf-8")
+
+        result = run(
+            "bash",
+            "scripts/stop-local.sh",
+            "--quiet",
+            cwd=tmp_path,
+            check=False,
+        )
+
+        assert result.returncode == 0, result.stderr
+        process.wait(timeout=3)
+        assert not (run_dir / "backend.pid").exists()
+        assert not (run_dir / "backend.started").exists()
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=3)

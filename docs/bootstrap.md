@@ -84,7 +84,8 @@ Vite 的 `/api` 和 `/health` 代理会自动跟随实际 `BACKEND_HOST` 和
 停止脚本只处理 `.run/backend.pid` 和 `.run/frontend.pid`，并在发送信号前检查：
 
 - PID 属于当前用户；
-- 后端命令使用当前项目的 venv 并运行 `run.py`；
+- PID 的进程启动时间与启动时记录的指纹一致；
+- 后端命令运行 `run.py`；
 - 前端命令使用当前项目的 Vite 入口。
 
 归属不匹配时脚本拒绝停止进程并保留 PID 文件，避免陈旧 PID 误伤其他程序。正常

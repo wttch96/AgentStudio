@@ -155,6 +155,22 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+record_process_identity() {
+  local name="$1"
+  local pid="$2"
+  local started
+  started="$(ps -p "${pid}" -o lstart= 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  [[ -n "${started}" ]] || die "无法读取 ${name} 进程启动时间。"
+  printf '%s\n' "${started}" > "${RUN_DIR}/${name}.started"
+}
+
+printf 'BACKEND_HOST=%s\nBACKEND_PORT=%s\nFRONTEND_HOST=%s\nFRONTEND_PORT=%s\n' \
+  "${BACKEND_HOST}" \
+  "${BACKEND_PORT}" \
+  "${FRONTEND_HOST}" \
+  "${FRONTEND_PORT}" \
+  > "${RUN_DIR}/runtime.env"
+
 echo "[start] 启动后端 http://${BACKEND_URL_HOST}:${BACKEND_PORT}"
 (
   cd "${BACKEND_DIR}"
@@ -162,6 +178,7 @@ echo "[start] 启动后端 http://${BACKEND_URL_HOST}:${BACKEND_PORT}"
 ) >"${RUN_DIR}/backend.log" 2>&1 &
 BACKEND_PID=$!
 printf '%s\n' "${BACKEND_PID}" > "${RUN_DIR}/backend.pid"
+record_process_identity backend "${BACKEND_PID}"
 
 echo "[start] 启动前端 http://${FRONTEND_URL_HOST}:${FRONTEND_PORT}"
 (
@@ -173,6 +190,7 @@ echo "[start] 启动前端 http://${FRONTEND_URL_HOST}:${FRONTEND_PORT}"
 ) >"${RUN_DIR}/frontend.log" 2>&1 &
 FRONTEND_PID=$!
 printf '%s\n' "${FRONTEND_PID}" > "${RUN_DIR}/frontend.pid"
+record_process_identity frontend "${FRONTEND_PID}"
 
 READY=0
 for _ in {1..120}; do
