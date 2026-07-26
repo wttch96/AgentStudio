@@ -61,7 +61,6 @@ capabilities: [backend, api, database]
 limitations: [不负责前端视觉设计]
 preferred_tasks: [接口, 后端]
 forbidden_tasks: [修改前端代码]
-tools: [Read, Write, Edit, Glob, Grep, Bash]
 skills: []
 input_contract: {}
 output_contract: {}
@@ -72,7 +71,8 @@ system_prompt: |
   ...
 ```
 
-主脑选择 Agent 时综合能力、限制、禁止项、工具、任务偏好、优先级和当前负载，不只匹配名称。
+主脑选择 Agent 时综合能力、限制、禁止项、已关联 Skill、任务偏好、优先级和当前负载，
+不只匹配名称。
 
 ## 上下文与看板
 
@@ -84,7 +84,9 @@ system_prompt: |
 - 协调契约、已有决策、产物和阻塞；
 - 当前 Blackboard 和 Todo 状态。
 
-执行结果写回 Blackboard；Todo 保存任务状态。Prompt 提供行为软约束，Pydantic Schema 约束结构，LangGraph 约束流程，工具权限约束真实能力，Reviewer 约束质量。
+执行结果写回 Blackboard；Todo 保存任务状态。Prompt 提供行为软约束，Pydantic Schema
+约束结构，LangGraph 约束流程，项目 Mode、任务写入范围和执行器约束真实操作，
+Reviewer 约束质量。
 
 ## 执行可视化
 
@@ -166,6 +168,13 @@ project_id: agent-studio
 | LangGraph checkpoint | `db/checkpoints.db` |
 
 SQLite 使用 WAL 和 FTS5。知识检索优先 BM25；向量扩展或 embedding 不可用时安全降级。
+
+## 日志与排障
+
+`start.sh` 从后端进程启动起把日志同步输出到终端，并写入 `.run/backend.log`。日志包含
+线程、模块、Request ID、项目与运行 ID、HTTP 耗时、规划、Flow/DAG、Agent 生命周期、
+重试及异常堆栈；不记录请求正文和密钥。默认 `INFO`，`LOG_LEVEL=DEBUG` 会记录每条内部
+事件。启动时轮换并保留最近五份历史日志，详细开关见[自举与本地启动](bootstrap.md)。
 
 ## 本机安全边界
 

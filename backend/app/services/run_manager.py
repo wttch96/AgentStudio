@@ -6,7 +6,9 @@ HTTP 请求只负责创建任务；LangGraph 在守护线程中执行，避免�
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
+import time
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -25,6 +27,8 @@ from app.services.run_commands import RunCommand, parse_run_command
 from app.services.scheduler_settings import SchedulerSettings
 from app.services.workspace_settings import WorkspaceSettings
 from app.storage.sqlite_store import SQLiteStore
+
+logger = logging.getLogger(__name__)
 
 
 async def _ainvoke_graph(
@@ -112,10 +116,23 @@ class RunManager:
         if not root.is_dir():
             raise ValueError(f"工作目录不存在：{root}")
         scheduler = self.scheduler_settings.current(project_id or "")
+        project_mode = self._project_mode(project_id)
         run_id = uuid.uuid4().hex
         continuation_context = self._continuation_context(parent_run_id)
         preset_dag = self._preset_dag(command, parent_run_id, project_id or "")
         run = self.store.create_run(run_id, objective, str(root), parent_run_id, project_id)
+        logger.info(
+            "run.queued run_id=%s project_id=%s mode=%s parent_run_id=%s "
+            "flow=%s command=%s objective_chars=%s workspace=%s",
+            run_id,
+            project_id or "-",
+            project_mode,
+            parent_run_id or "-",
+            flow_name or "-",
+            command.kind,
+            len(objective),
+            root,
+        )
         cancel_event = threading.Event()
         with self._lock:
             self._cancel_events[run_id] = cancel_event
@@ -135,6 +152,7 @@ class RunManager:
                 self.memory_manager,
                 self.store.get_run(run_id).get("conversation_id", run_id),
                 project_id,
+                project_mode,
                 flow_name,
                 flow_inputs,
             ),
@@ -143,6 +161,22 @@ class RunManager:
         )
         thread.start()
         return run
+
+    def _project_mode(self, project_id: str | None) -> str:
+        """读取项目级工作模式；旧项目和无项目运行保持 Auto 行为。"""
+        if not project_id:
+            return "auto"
+        config_reader = getattr(self.executor.registry, "config_reader", None)
+        if config_reader is None:
+            return "auto"
+        try:
+            project = config_reader.for_project(project_id).load_project()
+            mode = project.get("mode", "auto")
+            if mode in {"manual", "editAutomatically", "plan", "auto"}:
+                return mode
+        except (FileNotFoundError, ValueError):
+            pass
+        return "auto"
 
     def _continuation_context(self, parent_run_id: str | None) -> str:
         """把最近上游输出压缩为有界上下文，供规划器和执行 Agent 使用。"""
@@ -179,6 +213,7 @@ class RunManager:
         if source.get("status") not in ("completed", "failed", "cancelled"):
             raise RuntimeError("源任务尚未结束，请等待完成后再分叉")
 
+        project_id = project_id or source.get("project_id")
         import uuid
         new_run_id = uuid.uuid4().hex
         objective = (objective_override or source.get("objective", "")).strip()
@@ -205,6 +240,7 @@ class RunManager:
                 self.memory_manager,
                 new_run_id,  # conversation_id = 新分支
                 project_id,
+                self._project_mode(project_id),
             ),
             name=f"run-{new_run_id[:8]}",
             daemon=True,
@@ -256,11 +292,25 @@ class RunManager:
         memory_manager: MemoryManager | None = None,
         conversation_id: str = "",
         project_id: str | None = None,
+        project_mode: str = "auto",
         flow_name: str | None = None,
         flow_inputs: dict | None = None,
     ) -> None:
+        started_at = time.perf_counter()
         started_at_iso = datetime.now(timezone.utc).isoformat()
         self.store.update_run(run_id, "running", started_at=started_at_iso)
+        logger.info(
+            "run.started run_id=%s project_id=%s mode=%s direct=%s preset_dag=%s "
+            "flow=%s concurrency=%s recursion_limit=%s",
+            run_id,
+            project_id or "-",
+            project_mode,
+            direct_mode,
+            preset_dag is not None,
+            flow_name or "-",
+            scheduler.max_concurrent_agents,
+            scheduler.recursion_limit,
+        )
         try:
             self.events.emit(
                 run_id,
@@ -270,20 +320,44 @@ class RunManager:
                     "workspace_root": str(workspace_root),
                     "scheduler": scheduler.model_dump(),
                     "parent_run_id": self.store.get_run(run_id).get("parent_run_id"),
+                    "project_mode": project_mode,
                 },
             )
-            if not flow_name and preset_dag is None and self.flow_store is not None:
+            self.events.emit(
+                run_id,
+                "project.mode",
+                payload={"mode": project_mode},
+            )
+            if project_mode == "plan":
+                flow_name = None
+                flow_inputs = None
+            if (
+                project_mode != "plan"
+                and not flow_name
+                and preset_dag is None
+                and self.flow_store is not None
+            ):
                 try:
                     flow_name = self.planner.classify_intent(
                         objective, self.flow_store.list_all()
                     )
                     if flow_name:
+                        logger.info(
+                            "run.flow_selected run_id=%s flow=%s",
+                            run_id,
+                            flow_name,
+                        )
                         flow_inputs = {"prompt": objective}
                         self.events.emit(
                             run_id, "planner.flow_selected",
                             payload={"flow_name": flow_name, "inputs": flow_inputs},
                         )
                 except Exception:
+                    logger.warning(
+                        "run.flow_classification_failed run_id=%s",
+                        run_id,
+                        exc_info=True,
+                    )
                     flow_name = None
             # ---- Flow engine path (deterministic YAML pipeline) ----
             if flow_name and self.flow_engine:
@@ -382,7 +456,11 @@ class RunManager:
                                 ],
                             )
                         except Exception:
-                            pass
+                            logger.warning(
+                                "run.memory_update_failed run_id=%s path=flow",
+                                run_id,
+                                exc_info=True,
+                            )
                     self.store.update_run(run_id, status, final_answer=final_answer)
                     self.events.emit(run_id, f"run.{status}", payload={"text": final_answer})
                     return
@@ -402,7 +480,12 @@ class RunManager:
                         if p.agent_type not in ('brain',)
                     ]
             except Exception:
-                pass
+                logger.warning(
+                    "run.agent_registry_load_failed run_id=%s project_id=%s",
+                    run_id,
+                    project_id or "-",
+                    exc_info=True,
+                )
 
             def graph_factory(checkpointer: Any):
                 return build_graph(
@@ -449,6 +532,7 @@ class RunManager:
                         "agent_max_turns": scheduler.agent_max_turns,
                         "agent_timeout_seconds": scheduler.agent_timeout_seconds,
                         "project_id": project_id or "",
+                        "project_mode": project_mode,
                         "results": [],
                     },
                     {
@@ -478,13 +562,21 @@ class RunManager:
                         ],
                     )
                 except Exception:
-                    pass  # 长期记忆提取失败不影响主流程
+                    logger.warning(
+                        "run.memory_update_failed run_id=%s path=graph",
+                        run_id,
+                        exc_info=True,
+                    )
             self.store.update_run(run_id, status, final_answer=final_answer)
             self.events.emit(run_id, f"run.{status}", payload={"text": final_answer})
         except Exception as error:
-            import traceback
             error_detail = f"{type(error).__name__}: {str(error) or repr(error)}"
-            traceback.print_exc()
+            logger.exception(
+                "run.failed run_id=%s project_id=%s error=%s",
+                run_id,
+                project_id or "-",
+                error_detail,
+            )
             self.store.update_run(run_id, "failed", error=error_detail)
             self.events.emit(
                 run_id,
@@ -497,6 +589,16 @@ class RunManager:
         finally:
             with self._lock:
                 self._cancel_events.pop(run_id, None)
+            current = self.store.get_run(run_id) or {}
+            logger.info(
+                "run.finished run_id=%s project_id=%s status=%s duration_ms=%.1f "
+                "error=%s",
+                run_id,
+                project_id or "-",
+                current.get("status", "unknown"),
+                (time.perf_counter() - started_at) * 1000,
+                current.get("error") or "-",
+            )
 
     def _preset_dag(
         self, command: RunCommand, parent_run_id: str | None, project_id: str = ""

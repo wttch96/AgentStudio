@@ -3,8 +3,8 @@ import threading
 
 from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
 
-from app.agents.registry import AgentProfile
 from app.agents.claude_executor import ClaudeAgentExecutor
+from app.agents.registry import AgentProfile
 from app.config import Settings
 from app.domain.models import DagTask
 
@@ -141,7 +141,11 @@ def test_live_execution_resumes_same_session_after_transient_error(
     assert result.summary == "恢复完成"
     assert len(calls) == 2
     assert calls[0][1].resume is None
+    assert calls[0][1].permission_mode == "auto"
+    assert calls[0][1].allowed_tools == []
     assert calls[1][1].resume == "3d8f1ee7-a56e-4ff5-966f-307c89e94a8d"
+    prompt_events = [item for item in emitted if item[0] == "agent.prompt"]
+    assert prompt_events[0][1]["payload"]["sdk_permission_mode"] == "auto"
     retry_events = [item for item in emitted if item[0] == "agent.retrying"]
     assert len(retry_events) == 1
     assert retry_events[0][1]["payload"]["resume_session"] is True

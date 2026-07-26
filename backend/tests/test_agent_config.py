@@ -1,8 +1,9 @@
 """Agent 配置模型测试 —— 旧配置兼容 + 新字段生效。"""
 
 import pytest
+from pydantic import ValidationError
 
-from app.domain.models import ProjectAgent, ReviewDecision
+from app.domain.models import Project, ProjectAgent, ReviewDecision
 
 
 class TestAgentConfigBackwardCompat:
@@ -105,6 +106,30 @@ class TestAgentConfigEnhanced:
                 system_prompt="Agent with max_iterations exceeding limit for validation test",
                 max_iterations=21,
             )
+
+
+@pytest.mark.parametrize(
+    "mode",
+    ["manual", "editAutomatically", "plan", "auto"],
+)
+def test_project_modes_are_valid(mode):
+    project = Project(
+        id="mode-project",
+        name="Mode Project",
+        root_dir="/tmp/mode-project",
+        mode=mode,
+    )
+    assert project.mode == mode
+
+
+def test_unknown_project_mode_is_rejected():
+    with pytest.raises(ValidationError):
+        Project(
+            id="bad-mode-project",
+            name="Bad Mode",
+            root_dir="/tmp/bad-mode",
+            mode="dangerously-skip-everything",
+        )
 
 
 class TestReviewDecision:

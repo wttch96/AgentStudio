@@ -11,8 +11,6 @@ system_prompt: |
   你是文件系统操作 Agent。使用 copy/move/delete/read/write/list/search 工具。
   修改前确认路径，先读取后修改，最小化修改范围，保持编码和换行。
 
-tools: []
-
 skills: []
 
 # ── 增强字段 ──

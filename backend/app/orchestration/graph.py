@@ -60,6 +60,7 @@ class GraphState(TypedDict, total=False):
     agent_max_turns: int
     agent_timeout_seconds: int
     project_id: str
+    project_mode: str
     final_answer: str
     session_summary: str
     blackboard: dict[str, Any]
@@ -127,7 +128,6 @@ def build_graph(
                 choice = agent_selector.select(
                     project_id,
                     task.objective,
-                    required_tools=task.allowed_tools,
                     required_capabilities=required,
                     workload_counts=workloads,
                 )
@@ -165,6 +165,7 @@ def build_graph(
 
     def plan(state: GraphState) -> GraphState:
         run_id = state["run_id"]
+        project_mode = state.get("project_mode", "auto")
         if state.get("preset_dag"):
             dag = TaskDag.model_validate(state["preset_dag"])
             stage = "execution"
@@ -175,7 +176,10 @@ def build_graph(
                 "create_discovery_dag",
                 state["objective"],
                 project_agents=project_agents,
-            ) if hasattr(planner, "create_discovery_dag") else TaskDag(
+            ) if (
+                project_mode != "plan"
+                and hasattr(planner, "create_discovery_dag")
+            ) else TaskDag(
                 summary="跳过项目发现", tasks=[]
             )
             if discovery.tasks:
@@ -192,6 +196,7 @@ def build_graph(
                     continuation_context=state.get("guidance", ""),
                     project_agents=project_agents,
                     project_id=state.get("project_id", ""),
+                    project_mode=project_mode,
                 )
                 stage = "execution"
 
@@ -400,6 +405,8 @@ def build_graph(
         }
 
     def route_tasks(state: GraphState):
+        if state.get("project_mode") == "plan":
+            return "synthesize"
         dag = TaskDag.model_validate(state["dag"])
         task_by_id = {task.id: task for task in dag.tasks}
         active_task_ids = state.get("active_task_ids", [])
@@ -851,7 +858,22 @@ def build_graph(
         if not results:
             dag_raw = state.get("dag", {})
             dag = TaskDag.model_validate(dag_raw) if dag_raw else None
-            final_answer = dag.summary if dag else "无执行结果"
+            if state.get("project_mode") == "plan" and dag and dag.tasks:
+                task_lines = [
+                    (
+                        f"{index}. {task.title}（{task.agent}）\n"
+                        f"   目标：{task.objective}\n"
+                        f"   依赖：{', '.join(task.depends_on) if task.depends_on else '无'}\n"
+                        f"   写入范围：{', '.join(task.write_scope) if task.write_scope else '只读或待确认'}"
+                    )
+                    for index, task in enumerate(dag.tasks, start=1)
+                ]
+                final_answer = (
+                    f"当前为 Plan 模式，仅生成计划，未启动执行 Agent。\n\n"
+                    f"{dag.summary}\n\n" + "\n\n".join(task_lines)
+                )
+            else:
+                final_answer = dag.summary if dag else "无执行结果"
         else:
             parts: list[str] = []
             for r in results:
@@ -869,6 +891,7 @@ def build_graph(
                         run_id=state["run_id"],
                         guidance=state.get("guidance", ""),
                         continuation_context=state.get("guidance", ""),
+                        project_mode=state.get("project_mode", "auto"),
                     )
             except Exception as exc:
                 events.emit(state["run_id"], "summary.fallback",
@@ -992,6 +1015,7 @@ def build_graph(
             discovery_results=discovery_results,
             project_agents=project_agents,
             project_id=state.get("project_id", ""),
+            project_mode=state.get("project_mode", "auto"),
         )
         successful_discovery_ids = [
             r.task_id for r in discovery_results if r.status == "completed"

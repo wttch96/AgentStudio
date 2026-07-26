@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import time
 from pathlib import Path
 
 from openai import OpenAI
@@ -10,6 +12,8 @@ from openai import OpenAI
 from app.config import Settings
 from app.domain.models import AgentResult, DagTask, TaskDag
 from app.services.brain_settings import BrainSettings
+
+logger = logging.getLogger(__name__)
 
 
 STRUCTURE_GUARD_BASE = """
@@ -51,7 +55,7 @@ STRUCTURE_GUARD_BASE = """
 
 ## Agent 选择规则（增强）
 
-16. 选择 Agent 时综合考虑：capabilities（能力）、limitations（限制）、preferred_tasks（偏好）、tools（工具）。
+16. 选择 Agent 时综合考虑：capabilities（能力）、limitations（限制）、preferred_tasks（偏好）、skills（专项规范）。
 17. 如果 Agent 的 forbidden_tasks 中包含任务关键词，绝不能分配该任务给此 Agent。
 18. 优先选择 capabilities 和 preferred_tasks 与任务最匹配的 Agent。
 19. 避免将所有任务集中分配给同一个 Agent，尽量利用团队的多样性。
@@ -66,6 +70,25 @@ STRUCTURE_GUARD_BASE = """
 25. 高风险修改需要审查步骤。
 26. 不要过度拆分——简单任务一个 Agent 即可完成。
 """.strip()
+
+PROJECT_MODE_GUIDANCE = {
+    "manual": (
+        "当前项目工作模式为 Manual。只规划用户明确要求的操作，不主动扩大修改范围，"
+        "不添加可选优化；任务边界和验收条件必须具体。"
+    ),
+    "editAutomatically": (
+        "当前项目工作模式为 Edit Automatically。可以为完成目标自动规划必要的文件修改，"
+        "但不得加入与目标无关的重构或高风险操作。"
+    ),
+    "plan": (
+        "当前项目工作模式为 Plan。只生成可执行的任务计划和 DAG，不假设任务已经执行，"
+        "重点写明依赖、影响范围、验收标准和风险。"
+    ),
+    "auto": (
+        "当前项目工作模式为 Auto。可以自主完成规划、执行、验证和必要返工，"
+        "同时仍需遵守 Agent 能力、写入范围和安全边界。"
+    ),
+}
 
 
 def _fallback_dag(objective: str, project_agents: list | None = None) -> TaskDag:
@@ -220,12 +243,32 @@ class DeepSeekPlanner:
         discovery_results: list[AgentResult] | None = None,
         project_agents: list | None = None,
         project_id: str = "",
+        project_mode: str = "auto",
     ) -> TaskDag:
         """基于项目发现结果生成实施 DAG；未设置密钥时返回代表性演示图。"""
 
+        started_at = time.perf_counter()
+        logger.info(
+            "planner.started run_id=%s project_id=%s mode=%s objective_chars=%s "
+            "agents=%s discovery_results=%s demo=%s",
+            run_id or "-",
+            project_id or "-",
+            project_mode,
+            len(objective),
+            len(project_agents or []),
+            len(discovery_results or []),
+            not bool(self.settings.deepseek_api_key),
+        )
         if not self.settings.deepseek_api_key:
             dag = self._enrich_dag(self._demo_dag(objective, project_agents), project_agents)
-            return self._enforce_requested_agents(dag, objective, project_agents)
+            dag = self._enforce_requested_agents(dag, objective, project_agents)
+            logger.info(
+                "planner.finished run_id=%s source=demo tasks=%s duration_ms=%.1f",
+                run_id or "-",
+                len(dag.tasks),
+                (time.perf_counter() - started_at) * 1000,
+            )
+            return dag
 
         client = OpenAI(
             api_key=self.settings.deepseek_api_key,
@@ -255,7 +298,7 @@ class DeepSeekPlanner:
                     f"  limitations: {list(getattr(a, 'limitations', ()))}\n"
                     f"  preferred_tasks: {list(getattr(a, 'preferred_tasks', ()))}\n"
                     f"  forbidden_tasks: {list(getattr(a, 'forbidden_tasks', ()))}\n"
-                    f"  tools: {list(getattr(a, 'tools', ()))}\n"
+                    f"  skills: {list(getattr(a, 'skills', ()))}\n"
                     f"  priority: {getattr(a, 'priority', 0)}; "
                     f"max_iterations: {getattr(a, 'max_iterations', 3)}"
                 )
@@ -266,6 +309,10 @@ class DeepSeekPlanner:
                 "不要使用 frontend-agent、backend-agent 等占位名称。"
             )
         guard = STRUCTURE_GUARD_BASE + "\n\n" + agent_guard
+        mode_guidance = PROJECT_MODE_GUIDANCE.get(
+            project_mode,
+            PROJECT_MODE_GUIDANCE["auto"],
+        )
 
         # 从知识库中检索与目标相关的内容，注入主脑规划上下文
         knowledge_context = ""
@@ -289,6 +336,7 @@ class DeepSeekPlanner:
                     "role": "system",
                     "content": (
                         f"{brain.orchestration_prompt}\n\n"
+                        f"{mode_guidance}\n\n"
                         "【最重要规则】你是主脑编排器，不是执行 Agent。\n"
                         "用户问你问题、让你分析结果、闲聊、解释概念 → 直接纯文本回答，绝不输出 JSON。\n"
                         "用户让你读写文件、运行命令、搜索代码、操作知识库 → 输出 JSON 任务图。\n"
@@ -318,6 +366,11 @@ class DeepSeekPlanner:
             temperature=0.1,
         )
         content = response.choices[0].message.content
+        logger.info(
+            "planner.response_received run_id=%s response_chars=%s",
+            run_id or "-",
+            len(content or ""),
+        )
         # 尝试解析 JSON 任务图；如果返回的是纯文本或混合内容，提取 JSON 部分
         content_stripped = content.strip()
         # DeepSeek 有时会在 JSON 前加文字说明，或在 JSON 后追加
@@ -329,6 +382,12 @@ class DeepSeekPlanner:
             try:
                 dag = TaskDag.model_validate_json(json_part)
             except Exception:
+                logger.warning(
+                    "planner.invalid_dag_json run_id=%s json_chars=%s; using fallback",
+                    run_id or "-",
+                    len(json_part),
+                    exc_info=True,
+                )
                 dag = _fallback_dag(objective, project_agents)
         else:
             # 纯文本：主脑选择直接回答，不创建任务
@@ -337,7 +396,16 @@ class DeepSeekPlanner:
                 tasks=[],
             )
         dag = self._enrich_dag(dag, project_agents)
-        return self._enforce_requested_agents(dag, objective, project_agents)
+        dag = self._enforce_requested_agents(dag, objective, project_agents)
+        logger.info(
+            "planner.finished run_id=%s source=deepseek tasks=%s direct_answer=%s "
+            "duration_ms=%.1f",
+            run_id or "-",
+            len(dag.tasks),
+            not dag.tasks,
+            (time.perf_counter() - started_at) * 1000,
+        )
+        return dag
 
     @staticmethod
     def _enrich_dag(dag: TaskDag, project_agents: list | None) -> TaskDag:
@@ -361,9 +429,6 @@ class DeepSeekPlanner:
             }
             if profile is not None:
                 updates.update({
-                    "allowed_tools": task.allowed_tools or list(
-                        getattr(profile, "tools", ())
-                    ),
                     "max_iterations": min(
                         task.max_iterations,
                         getattr(profile, "max_iterations", task.max_iterations),
@@ -556,6 +621,7 @@ class DeepSeekPlanner:
         results: list[AgentResult],
         run_id: str | None = None,
         guidance: str = "",
+        project_mode: str = "auto",
     ) -> str:
         """由 DeepSeek 主脑验收并汇总执行结果；演示模式使用确定性汇总。"""
 
@@ -569,13 +635,20 @@ class DeepSeekPlanner:
         response = client.chat.completions.create(
             model=self.settings.deepseek_model,
             messages=[
-                {"role": "system", "content": self.brain.current().orchestration_prompt},
+                {
+                    "role": "system",
+                    "content": (
+                        f"{self.brain.current().orchestration_prompt}\n\n"
+                        f"{PROJECT_MODE_GUIDANCE.get(project_mode, PROJECT_MODE_GUIDANCE['auto'])}"
+                    ),
+                },
                 {
                     "role": "user",
                     "content": json.dumps(
                         {
                             "objective": objective,
                             "upstream_context": guidance,
+                            "project_mode": project_mode,
                             "dag": dag.model_dump(),
                             "results": [result.model_dump() for result in results],
                         },
@@ -714,6 +787,7 @@ class DeepSeekPlanner:
         run_id: str | None = None,
         guidance: str = "",
         project_agents: list | None = None,
+        project_mode: str = "auto",
     ) -> "ExecutionPlan":
         """创建结构化执行计划 — 包装 create_dag() 并升级为 AgentTask。
 
@@ -724,6 +798,7 @@ class DeepSeekPlanner:
         dag = self.create_dag(
             objective, workspace_root, run_id, guidance,
             project_agents=project_agents,
+            project_mode=project_mode,
         )
 
         # 推断请求类型

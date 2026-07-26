@@ -10,14 +10,14 @@ from app.storage.sqlite_store import SQLiteStore
 class AgentProfile:
     """运行时 Agent 配置快照。"""
     __slots__ = ("id", "name", "display_name", "description", "role", "agent_type",
-                 "tools", "skills", "prompt", "sub_dir", "is_required", "model",
+                 "skills", "prompt", "sub_dir", "is_required", "model",
                  "capabilities", "limitations", "preferred_tasks", "forbidden_tasks",
                  "input_contract", "output_contract", "dependencies_info",
                  "priority", "max_iterations")
 
     def __init__(self, agent_id: str = "", name: str = "", display_name: str = "", description: str = "",
                  role: str = "implementation_agent",
-                 agent_type: str = "", tools: list[str] = None, skills: list[str] = None,
+                 agent_type: str = "", skills: list[str] = None,
                  prompt: str = "", sub_dir: str = "", is_required: bool = False, model: str = None,
                  capabilities: list[str] = None, limitations: list[str] = None,
                  preferred_tasks: list[str] = None, forbidden_tasks: list[str] = None,
@@ -30,7 +30,6 @@ class AgentProfile:
         self.description = description
         self.role = role
         self.agent_type = agent_type
-        self.tools = tuple(tools) if tools else ()
         self.skills = tuple(skills) if skills else ()
         self.prompt = prompt
         self.sub_dir = sub_dir
@@ -73,7 +72,6 @@ class AgentRegistry:
                 description=a.get("description", ""),
                 role=a.get("role", "implementation_agent"),
                 agent_type=a.get("agent_type", "claude"),
-                tools=a.get("tools", []),
                 skills=a.get("skills", []),
                 prompt=a.get("system_prompt", ""),
                 sub_dir=a.get("sub_dir", ""),
@@ -117,7 +115,6 @@ class AgentRegistry:
                 "description": p.description,
                 "role": p.role,
                 "agent_type": p.agent_type,
-                "tools": list(p.tools),
                 "skills": list(p.skills),
                 "skill_count": len(p.skills),
                 "is_required": p.is_required,

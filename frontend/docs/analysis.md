@@ -163,9 +163,9 @@ interface RunEvent {
 ```typescript
 interface AgentProfile {
   id: string; name: string; display_name?: string
-  description: string; tools: string[]; skills: string[]
+  description: string; skills: string[]
   skill_count: number; builtin: boolean; sub_dir?: string
-  project_id?: string; agent_type?: 'claude' | 'deepseek' | 'rag'
+  project_id?: string; agent_type?: 'claude' | 'rag' | 'file-ops' | 'chat'
 }
 
 interface AgentDetail extends AgentProfile {
@@ -695,9 +695,9 @@ queued → running → completed
 ```
 Project
   ├─ ProjectAgent (agent_type: claude | deepseek | rag)
-  │   ├─ tools, skills, sub_dir, system_prompt
+  │   ├─ skills, sub_dir, system_prompt
   │   └─ created from AgentTemplate
-  └─ AgentTemplate (category, default_prompt, default_tools, default_skills)
+  └─ AgentTemplate (category, default_prompt, default_skills)
 ```
 
 ---

@@ -15,14 +15,6 @@ system_prompt: |
   工具使用：CLI 命令前加 rtk 前缀（如 rtk pytest）。
   Read 只读取需要的文件片段。输出简洁。
 
-tools:
-  - Read
-  - Write
-  - Edit
-  - Glob
-  - Grep
-  - Bash
-
 skills: []
 
 # ── 增强字段 ──

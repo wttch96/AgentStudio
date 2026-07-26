@@ -25,13 +25,6 @@ system_prompt: '你是 API 和接口设计专家。设计清晰一致的 RESTful
 
 
   输出格式：每个接口包含方法、路径、请求体、响应体、错误码和示例。需要写代码时先输出设计方案等待确认。'
-tools:
-- Read
-- Write
-- Edit
-- Glob
-- Grep
-- Bash
 skills: []
 sort_order: 0
 id: api-designer-template

@@ -64,7 +64,8 @@ cp .env.example .env
 3. 根据 `package.json`、`package-lock.json` 和 Node 版本签名执行 `npm ci`；
 4. 直接启动 Flask 和 Vite 子进程；
 5. 最多等待 30 秒，只有 `/health` 和前端首页都可访问才报告成功；
-6. 任一子进程退出时停止另一个进程并返回真实退出码。
+6. 默认在当前终端持续输出后端日志，同时写入 `.run/backend.log`；
+7. 任一子进程退出时停止另一个进程并返回真实退出码。
 
 调用方传入的地址和端口优先于 `.env`，可用于并行实例：
 
@@ -74,6 +75,17 @@ BACKEND_PORT=5011 FRONTEND_PORT=5184 ./start.sh
 
 Vite 的 `/api` 和 `/health` 代理会自动跟随实际 `BACKEND_HOST` 和
 `BACKEND_PORT`。
+
+后端日志默认使用 `INFO` 级别，包含应用初始化、HTTP 请求耗时、项目与运行 ID、
+主脑规划、Flow/DAG、Agent 生命周期、重试、错误堆栈和完成状态。需要逐条查看内部
+事件时可使用：
+
+```bash
+LOG_LEVEL=DEBUG ./start.sh
+```
+
+如只想后台记录而不在终端跟随，可设置 `BACKEND_LOG_FOLLOW=0`。每次启动会轮换日志，
+保留 `.run/backend.log.1` 至 `.run/backend.log.5`。
 
 ## 安全停止
 

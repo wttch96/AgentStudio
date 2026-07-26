@@ -5,13 +5,6 @@ category: netty
 agent_type: claude
 sub_dir: netty
 system_prompt: 你是 Java Netty 数据传输专家。负责 TCP/UDP 连接管理、数据接收、粘包拆包处理、协议编解码、ByteBuf 管理和传输层测试。
-tools:
-- Read
-- Write
-- Edit
-- Glob
-- Grep
-- Bash
 skills: []
 sort_order: 0
 id: springboot-netty-template

@@ -23,7 +23,7 @@ templates/project/skills/*.yaml  新项目的 Skill 种子实例
 
 | 模版 | 类型 | 默认目录 | 用途 | 源文件 |
 | --- | --- | --- | --- | --- |
-| DeepSeek 主脑 | `brain` | 项目根目录 | 目标理解、规划、DAG 和验收 | [brain.yaml](../templates/agents/brain.yaml) |
+| DeepSeek 主脑 | 项目配置 | 项目根目录 | 目标理解、规划、DAG 和验收 | [brain.yaml](../templates/project/brain.yaml) |
 | RAG | `rag` | 项目根目录 | 知识检索、录入和来源整理 | [rag.yaml](../templates/agents/rag.yaml) |
 | Vue 前端 | `claude` | `frontend` | Vue 3、TypeScript 和前端验证 | [vue-frontend.yaml](../templates/agents/vue-frontend.yaml) |
 | React 前端 | `claude` | `frontend` | React、TypeScript 和前端验证 | [react-frontend.yaml](../templates/agents/react-frontend.yaml) |
@@ -55,7 +55,6 @@ role: implementation_agent
 agent_type: claude
 sub_dir: frontend
 system_prompt: 你是 Vue 3 前端专家……
-tools: [Read, Write, Edit, Glob, Grep, Bash]
 skills:
   - collaboration-protocol
   - board-operations
@@ -76,8 +75,8 @@ max_iterations: 6
 
 - `agent_type` 决定执行器，常用值为 `brain`、`claude`、`rag` 和 `file-ops`。
 - `sub_dir` 是相对项目代码根目录的默认工作目录，空字符串表示项目根目录。
-- `tools` 限制 Agent 可调用的工具；只读 Agent 不应配置写入工具。
-- `skills` 按名称引用当前项目 `skills/` 目录中的 Skill。
+- `skills` 按名称引用当前项目 `skills/` 目录中的 Skill，专项规范直接以这里的选择为准。
+- Claude SDK 的工具权限不在 Agent 模板中预批准，由项目 Mode、任务写入范围和执行器统一控制。
 - `capabilities`、`preferred_tasks` 和 `priority` 参与主脑选人及调度。
 - `limitations` 与 `forbidden_tasks` 描述不可逾越的任务边界。
 - `input_contract`、`output_contract` 和 `max_iterations` 用于约束交接与返工。

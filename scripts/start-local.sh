@@ -72,6 +72,8 @@ BACKEND_HOST="${BACKEND_HOST:-127.0.0.1}"
 BACKEND_PORT="${BACKEND_PORT:-5000}"
 FRONTEND_HOST="${FRONTEND_HOST:-127.0.0.1}"
 FRONTEND_PORT="${FRONTEND_PORT:-5173}"
+BACKEND_LOG_FOLLOW="${BACKEND_LOG_FOLLOW:-1}"
+BACKEND_LOG_LINES="${BACKEND_LOG_LINES:-40}"
 
 case "${BACKEND_HOST}" in
   127.0.0.1|localhost|::1) ;;
@@ -83,6 +85,9 @@ case "${FRONTEND_HOST}" in
 esac
 [[ "${BACKEND_PORT}" =~ ^[0-9]+$ ]] || die "BACKEND_PORT 必须是数字。"
 [[ "${FRONTEND_PORT}" =~ ^[0-9]+$ ]] || die "FRONTEND_PORT 必须是数字。"
+[[ "${BACKEND_LOG_FOLLOW}" == "0" || "${BACKEND_LOG_FOLLOW}" == "1" ]] \
+  || die "BACKEND_LOG_FOLLOW 必须是 0 或 1。"
+[[ "${BACKEND_LOG_LINES}" =~ ^[0-9]+$ ]] || die "BACKEND_LOG_LINES 必须是数字。"
 BACKEND_URL_HOST="${BACKEND_HOST}"
 FRONTEND_URL_HOST="${FRONTEND_HOST}"
 [[ "${BACKEND_HOST}" == "::1" ]] && BACKEND_URL_HOST="[::1]"
@@ -150,7 +155,12 @@ if ! "${PROJECT_DIR}/scripts/stop-local.sh" --quiet; then
   die "检测到无法验证归属的 PID 文件，请人工检查 ${RUN_DIR}。"
 fi
 
+LOG_TAIL_PID=""
 cleanup() {
+  if [[ -n "${LOG_TAIL_PID}" ]] && kill -0 "${LOG_TAIL_PID}" 2>/dev/null; then
+    kill "${LOG_TAIL_PID}" 2>/dev/null || true
+    wait "${LOG_TAIL_PID}" 2>/dev/null || true
+  fi
   "${PROJECT_DIR}/scripts/stop-local.sh" --quiet >/dev/null 2>&1 || true
 }
 trap cleanup EXIT INT TERM
@@ -164,12 +174,28 @@ record_process_identity() {
   printf '%s\n' "${started}" > "${RUN_DIR}/${name}.started"
 }
 
+rotate_log() {
+  local path="$1"
+  local index
+  for index in 5 4 3 2; do
+    if [[ -f "${path}.$((index - 1))" ]]; then
+      mv -f "${path}.$((index - 1))" "${path}.${index}"
+    fi
+  done
+  if [[ -f "${path}" ]]; then
+    mv -f "${path}" "${path}.1"
+  fi
+}
+
 printf 'BACKEND_HOST=%s\nBACKEND_PORT=%s\nFRONTEND_HOST=%s\nFRONTEND_PORT=%s\n' \
   "${BACKEND_HOST}" \
   "${BACKEND_PORT}" \
   "${FRONTEND_HOST}" \
   "${FRONTEND_PORT}" \
   > "${RUN_DIR}/runtime.env"
+
+rotate_log "${RUN_DIR}/backend.log"
+rotate_log "${RUN_DIR}/frontend.log"
 
 echo "[start] 启动后端 http://${BACKEND_URL_HOST}:${BACKEND_PORT}"
 (
@@ -179,6 +205,12 @@ echo "[start] 启动后端 http://${BACKEND_URL_HOST}:${BACKEND_PORT}"
 BACKEND_PID=$!
 printf '%s\n' "${BACKEND_PID}" > "${RUN_DIR}/backend.pid"
 record_process_identity backend "${BACKEND_PID}"
+
+if [[ "${BACKEND_LOG_FOLLOW}" == "1" ]]; then
+  echo "[logs] 正在输出后端日志（最近 ${BACKEND_LOG_LINES} 行）："
+  tail -n "${BACKEND_LOG_LINES}" -F "${RUN_DIR}/backend.log" &
+  LOG_TAIL_PID=$!
+fi
 
 echo "[start] 启动前端 http://${FRONTEND_URL_HOST}:${FRONTEND_PORT}"
 (

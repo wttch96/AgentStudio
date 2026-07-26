@@ -25,10 +25,6 @@ system_prompt: '你是专业代码审查专家。你的职责是审查代码质�
 
 
   输出格式：每个问题标注严重程度（严重/重要/建议）、位置、说明和修复建议。严格只读，不修改任何文件。'
-tools:
-- Read
-- Glob
-- Grep
 skills: []
 sort_order: 0
 id: code-reviewer-template

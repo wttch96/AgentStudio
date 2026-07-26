@@ -5,7 +5,7 @@ Agent Studio 是一个仅在本机运行的多 Agent 协作工作台。用户描
 系统遵循一套明确的协作边界：
 
 - 主脑拥有规划、委派、冲突处理和验收权，不代替专业 Agent 大量执行。
-- 执行 Agent 按能力、限制、工具、任务偏好、负载和依赖接受任务。
+- 执行 Agent 按能力、限制、已关联 Skill、任务偏好、负载和依赖接受任务。
 - 看板保存共享事实、决策、产物和阻塞。
 - Reviewer 对照验收条件检查结果，失败时生成有限次数的修正任务。
 - 所有服务固定绑定 `127.0.0.1`，项目数据保存在本机。
@@ -23,7 +23,8 @@ Agent Studio 是一个仅在本机运行的多 Agent 协作工作台。用户描
 ### Agent 团队与配置
 
 - 支持 Claude、RAG、文件操作、Chat、文档对比、Blackboard 和 Todo Agent。
-- Agent 配置包含 `role`、`capabilities`、`limitations`、`preferred_tasks`、`forbidden_tasks`、`tools`、`skills`、输入/输出契约、优先级和迭代上限。
+- 项目可选择 `Manual`、`Edit Automatically`、`Plan` 或 `Auto` 工作模式，由主脑统一控制规划与执行。
+- Agent 配置包含 `role`、`capabilities`、`limitations`、`preferred_tasks`、`forbidden_tasks`、`skills`、输入/输出契约、优先级和迭代上限。
 - 配置中心可创建 Agent、关联项目 Skill、调整工作目录、调度、记忆和主脑提示词。
 - Agent 模板与 Flow 模板可复用，项目实例数据彼此隔离。
 
@@ -99,6 +100,9 @@ CLAUDE_MODEL=claude-sonnet-4-5
 ./start.sh
 ```
 
+启动后默认在终端持续输出后端日志，并同步保存到 `.run/backend.log`；设置
+`LOG_LEVEL=DEBUG` 可查看逐条内部事件。日志轮换和关闭跟随方式见[自举与本地启动](docs/bootstrap.md)。
+
 需要稳定运行 `main`、同时在本地继续开发时使用自举沙箱：
 
 ```bash
@@ -125,7 +129,7 @@ http://127.0.0.1:5173
 ## 使用流程
 
 1. 在项目管理中创建项目，填写显示名称、稳定的项目标识和代码根目录。
-2. 从模板添加 Agent，或按能力、限制、工具和任务边界手动配置。
+2. 从模板添加 Agent，或按能力、限制、Skill 和任务边界手动配置。
 3. 在配置中心维护项目 Skill、知识库、主脑、调度和记忆策略。
 4. 输入目标；主脑会按复杂度直接回答、调用单 Agent 或生成多 Agent DAG。
 5. 在 DAG、连续时间轴、并发时序图和看板中观察执行、审查及返工。
@@ -181,6 +185,7 @@ npm run build
 - [技术架构](docs/technical-architecture.md)
 - [自举与本地启动](docs/bootstrap.md)
 - [Agent 与 Skill 模版](docs/agent-skill-templates.md)
+- [Project Mode](docs/project-modes.md)
 - [Flow 管理](docs/flow-management.md)
 - [Flow YAML 参考](docs/flow-yaml-reference.md)
 - [项目数据目录模板](templates/project/README.md)

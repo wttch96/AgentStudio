@@ -1,5 +1,6 @@
 """显式依赖容器，避免在各模块散布全局单例。"""
 
+import logging
 from dataclasses import dataclass
 
 from app.agents.chat_executor import ChatExecutor
@@ -34,6 +35,8 @@ from app.services.run_manager import RunManager
 from app.services.scheduler_settings import SchedulerSettings
 from app.services.workspace_settings import WorkspaceSettings
 from app.storage.sqlite_store import SQLiteStore
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -72,8 +75,17 @@ class ServiceContainer:
 
     @classmethod
     def build(cls, settings: Settings) -> "ServiceContainer":
+        logger.info(
+            "services.building database=%s current_project=%s deepseek=%s claude_route=%s",
+            settings.database_path,
+            settings._read_current_project() or "-",
+            bool(settings.deepseek_api_key),
+            settings.claude_route,
+        )
         store = SQLiteStore(settings.database_path)
-        store.recover_interrupted_runs()
+        recovered = store.recover_interrupted_runs()
+        if recovered:
+            logger.warning("services.recovered_interrupted_runs count=%s", recovered)
         events = EventPublisher(store)
 
         # File-first configuration layer (.workspace/<project-id>/)
@@ -174,7 +186,7 @@ class ServiceContainer:
             agent_selector=agent_selector,
             settings=settings,
         )
-        return cls(
+        container = cls(
             settings,
             store,
             events,
@@ -206,3 +218,10 @@ class ServiceContainer:
             reviewer=reviewer,
             conflict_detector=conflict_detector,
         )
+        logger.info(
+            "services.ready rag_executor=%s chat_executor=%s file_executor=%s",
+            rag_executor is not None,
+            chat_executor is not None,
+            file_agent_executor is not None,
+        )
+        return container

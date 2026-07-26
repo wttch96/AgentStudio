@@ -26,7 +26,6 @@ class AgentExecutionContext:
     agent_type: str = ""
     agent_capabilities: tuple[str, ...] = ()
     agent_limitations: tuple[str, ...] = ()
-    agent_tools: tuple[str, ...] = ()
 
     # 看板上下文
     board_task: dict[str, Any] | None = None
@@ -166,10 +165,9 @@ class AgentExecutionContext:
             )
 
         # 可用工具
-        if self.allowed_tools or self.agent_tools:
-            tools_list = self.allowed_tools if self.allowed_tools else list(self.agent_tools)
+        if self.allowed_tools:
             sections.append(
-                f"<available_tools>\n  {', '.join(tools_list)}\n</available_tools>"
+                f"<allowed_tools>\n  {', '.join(self.allowed_tools)}\n</allowed_tools>"
             )
 
         # 输出要求
@@ -268,13 +266,11 @@ class AgentContextBuilder:
         agent_type = "claude"
         capabilities: tuple[str, ...] = ()
         limitations: tuple[str, ...] = ()
-        tools: tuple[str, ...] = ()
 
         if agent_profile is not None:
             agent_type = getattr(agent_profile, "agent_type", "claude")
             capabilities = getattr(agent_profile, "capabilities", ())
             limitations = getattr(agent_profile, "limitations", ())
-            tools = getattr(agent_profile, "tools", ())
 
         # 上游依赖结果
         results_raw = state.get("results", [])
@@ -349,7 +345,6 @@ class AgentContextBuilder:
             agent_type=agent_type,
             agent_capabilities=capabilities,
             agent_limitations=limitations,
-            agent_tools=tools,
             board_task=board_task,
             board_snapshot=board_snapshot,
             upstream_results=upstream,

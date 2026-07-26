@@ -1,7 +1,7 @@
 """Agent 选择器 —— 基于规则过滤 + 多维度评分。
 
 选择流程:
-    规则过滤 → 能力匹配 → 工具匹配 → 偏好匹配 →
+    规则过滤 → 能力匹配 → 偏好匹配 →
     限制检查 → 负载评分 → 返回最佳候选
 """
 
@@ -20,7 +20,6 @@ class SelectionScore:
     agent_name: str
     score: float = 0.0
     capability_match: float = 0.0
-    tool_match: float = 0.0
     preference_match: float = 0.0
     priority_bonus: float = 0.0
     workload_penalty: float = 0.0
@@ -37,15 +36,13 @@ class AgentSelector:
 
     强制规则:
         1. forbidden_tasks 命中 → 直接排除
-        2. 缺少必需工具 → 直接排除
-        3. limitations 与任务核心需求冲突 → 直接排除
+        2. limitations 与任务核心需求冲突 → 直接排除
 
     评分维度:
-        - 能力匹配 (35%)
-        - 工具匹配 (25%)
-        - 任务偏好 (15%)
+        - 能力匹配 (50%)
+        - 任务偏好 (20%)
         - 优先级 (15%)
-        - 上下文亲和 (10%)
+        - 基础分 (15%)
         - 负载惩罚 (扣分)
         - 限制惩罚 (扣分)
     """
@@ -57,7 +54,6 @@ class AgentSelector:
         self,
         project_id: str,
         task_objective: str,
-        required_tools: list[str] | None = None,
         required_capabilities: list[str] | None = None,
         candidate_names: list[str] | None = None,
         workload_counts: dict[str, int] | None = None,
@@ -67,7 +63,6 @@ class AgentSelector:
         Args:
             project_id: 项目 ID
             task_objective: 任务目标描述
-            required_tools: 任务必需的工具列表
             required_capabilities: 任务需要的能力
             candidate_names: 候选 Agent 名称列表，None 表示所有
             workload_counts: Agent → 当前负载任务数
@@ -85,7 +80,6 @@ class AgentSelector:
 
         workloads = workload_counts or {}
         obj_lower = task_objective.lower()
-        required_tools_set = set(required_tools or [])
         required_capabilities_set = set(required_capabilities or [])
 
         scores: list[SelectionScore] = []
@@ -98,8 +92,7 @@ class AgentSelector:
                 continue
 
             score = self._score_agent(
-                profile, obj_lower, required_tools_set,
-                required_capabilities_set, workloads,
+                profile, obj_lower, required_capabilities_set, workloads,
             )
             scores.append(score)
 
@@ -133,7 +126,6 @@ class AgentSelector:
 
         obj_lower = task_objective.lower()
         workloads = kwargs.get("workload_counts", {})
-        required_tools = set(kwargs.get("required_tools", []))
         required_capabilities = set(kwargs.get("required_capabilities", []))
 
         scores: list[SelectionScore] = []
@@ -141,8 +133,7 @@ class AgentSelector:
             if profile.agent_type in ("brain",):
                 continue
             score = self._score_agent(
-                profile, obj_lower, required_tools,
-                required_capabilities, workloads,
+                profile, obj_lower, required_capabilities, workloads,
             )
             scores.append(score)
 
@@ -242,7 +233,6 @@ class AgentSelector:
         self,
         profile: AgentProfile,
         obj_lower: str,
-        required_tools: set[str],
         required_capabilities: set[str],
         workloads: dict[str, int],
     ) -> SelectionScore:
@@ -272,18 +262,6 @@ class AgentSelector:
         else:
             score.capability_match = sum(1 for c in caps if c in obj_lower) / max(len(caps), 1) if caps else 0.3
 
-        # ── 工具匹配 (0-1) ──
-        agent_tools = {t.lower() for t in profile.tools}
-        if required_tools:
-            matched_tools = required_tools & agent_tools
-            score.tool_match = len(matched_tools) / len(required_tools) if required_tools else 0.5
-            if len(matched_tools) < len(required_tools):
-                score.excluded = True
-                score.exclusion_reason = f"缺少必要工具: {required_tools - agent_tools}"
-                return score
-        else:
-            score.tool_match = 0.5  # 无要求时中性
-
         # ── 任务偏好匹配 (0-1) ──
         prefs = [p.lower() for p in profile.preferred_tasks]
         if prefs:
@@ -300,11 +278,10 @@ class AgentSelector:
 
         # ── 综合评分 ──
         score.score = (
-            score.capability_match * 0.35 +
-            score.tool_match * 0.25 +
-            score.preference_match * 0.15 +
+            score.capability_match * 0.50 +
+            score.preference_match * 0.20 +
             score.priority_bonus +
-            0.10  # 基础分
+            0.15  # 基础分
             - score.workload_penalty
         )
         score.score = max(0.0, min(1.0, score.score))
