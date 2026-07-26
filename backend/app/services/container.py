@@ -8,11 +8,19 @@ from app.agents.file_agent_executor import FileAgentExecutor
 from app.agents.rag_executor import RAGAgentExecutor
 from app.agents.registry import AgentRegistry
 from app.agents.skill_registry import SkillRegistry
+from app.agents.todo_agent import TodoStore
+from app.agents.agent_context import AgentContextBuilder
+from app.agents.agent_selector import AgentSelector
 from app.config import Settings
 from app.domain.configuration import SchedulerConfiguration
 from app.events.publisher import EventPublisher
 from app.flow_engine.engine import FlowEngine
+from app.flow_engine.yaml_compiler import YamlCompiler
+from app.flow_engine.templates import FlowTemplateRenderer
+from app.orchestration.reviewer import WaveReviewer
+from app.orchestration.concurrency import ConflictDetector
 from app.planning.deepseek_planner import DeepSeekPlanner
+from app.services.blackboard_store import BlackboardStore
 from app.services.brain_settings import BrainSettings
 from app.services.config_reader import ConfigReader
 from app.services.deepseek_balance import DeepSeekBalanceService
@@ -33,7 +41,6 @@ class ServiceContainer:
     settings: Settings
     store: SQLiteStore
     events: EventPublisher
-    # File-backed configuration
     config_reader: ConfigReader
     registry: AgentRegistry
     skills: SkillRegistry
@@ -51,9 +58,17 @@ class ServiceContainer:
     knowledge_store: KnowledgeStore
     flow_store: FlowStore
     flow_engine: FlowEngine
+    blackboard_store: BlackboardStore
+    todo_store: TodoStore
+    yaml_compiler: YamlCompiler
     rag_executor: RAGAgentExecutor | None
     chat_executor: ChatExecutor | None
     file_agent_executor: FileAgentExecutor | None
+    # ── 新增组件 ──
+    agent_selector: AgentSelector | None = None
+    agent_context_builder: AgentContextBuilder | None = None
+    reviewer: WaveReviewer | None = None
+    conflict_detector: ConflictDetector | None = None
 
     @classmethod
     def build(cls, settings: Settings) -> "ServiceContainer":
@@ -97,7 +112,41 @@ class ServiceContainer:
         rag_executor = RAGAgentExecutor(settings, registry, events, knowledge_store) if settings.deepseek_api_key else None
         chat_executor = ChatExecutor(settings, registry, events) if settings.deepseek_api_key else None
         file_agent_executor = FileAgentExecutor(settings, registry, events) if settings.deepseek_api_key else None
+
+        # ---- New infrastructure: Blackboard + Todo + YamlCompiler ----
+        blackboard_store = BlackboardStore(store)
+        todo_store = TodoStore(blackboard_store)
+        # ── 新增组件 ──
+        agent_selector = AgentSelector(registry)
+        agent_context_builder = AgentContextBuilder(
+            blackboard_store=blackboard_store,
+            todo_store=todo_store,
+            agent_registry=registry,
+        )
+        reviewer = WaveReviewer(
+            planner=planner,
+            blackboard_store=blackboard_store,
+            events=events,
+            enable_llm_review=False,
+        )
+        conflict_detector = ConflictDetector()
+
+        template_renderer = FlowTemplateRenderer()
+        yaml_compiler = YamlCompiler(
+            executor=executor,
+            rag_executor=rag_executor,
+            chat_executor=chat_executor,
+            file_agent_executor=file_agent_executor,
+            events=events,
+            flow_store=flow_store,
+            blackboard_store=blackboard_store,
+            todo_store=todo_store,
+            template_renderer=template_renderer,
+        )
+
+        # Legacy flow engine (kept as fallback)
         flow_engine = FlowEngine(executor, events, store, flow_store=flow_store, rag_executor=rag_executor, chat_executor=chat_executor, file_agent_executor=file_agent_executor)
+
         runs = RunManager(
             store,
             events,
@@ -111,6 +160,14 @@ class ServiceContainer:
             chat_executor=chat_executor,
             file_agent_executor=file_agent_executor,
             flow_engine=flow_engine,
+            blackboard_store=blackboard_store,
+            todo_store=todo_store,
+            yaml_compiler=yaml_compiler,
+            flow_store=flow_store,
+            reviewer=reviewer,
+            agent_context_builder=agent_context_builder,
+            conflict_detector=conflict_detector,
+            settings=settings,
         )
         return cls(
             settings,
@@ -133,7 +190,14 @@ class ServiceContainer:
             knowledge_store,
             flow_store,
             flow_engine,
+            blackboard_store,
+            todo_store,
+            yaml_compiler,
             rag_executor,
             chat_executor,
             file_agent_executor,
+            agent_selector=agent_selector,
+            agent_context_builder=agent_context_builder,
+            reviewer=reviewer,
+            conflict_detector=conflict_detector,
         )

@@ -471,3 +471,69 @@ export interface FlowTrace {
   completed_at: string | null
   duration_ms: number | null
 }
+
+// ==================== Blackboard 黑板 ====================
+
+export interface BlackboardEntry {
+  key: string
+  value: unknown
+  updated_by: string
+  updated_at: string
+  version: number
+}
+
+export interface BlackboardState {
+  run_id: string
+  entries: Record<string, BlackboardEntry>
+  revision: number
+}
+
+// ==================== Todo 任务跟踪 ====================
+
+export interface TodoItem {
+  id: string
+  content: string
+  assigned_to: string | null
+  status: 'pending' | 'in_progress' | 'completed' | 'blocked'
+  depends_on: string[]
+  created_at: string
+  completed_at: string | null
+}
+
+// ==================== Flow 扩展类型 ====================
+
+export type FlowBlockType = 'node' | 'condition' | 'loop' | 'parallel'
+
+export interface ConditionBlock {
+  id: string
+  condition: string
+  then_branch: string
+  else_branch: string | null
+}
+
+export interface LoopBlock {
+  id: string
+  condition: string
+  body: string
+  max_iterations: number
+}
+
+export interface ParallelBlock {
+  id: string
+  items: string[]
+  max_concurrency: number | null
+}
+
+// 扩展 FlowDefinition（已有定义在流相关文件，此处仅添加新字段的接口）
+export interface FlowDefinitionExtended {
+  name: string
+  description: string
+  version: string
+  keywords: string[]
+  nodes: FlowNode[]
+  conditions?: ConditionBlock[]
+  loops?: LoopBlock[]
+  parallels?: ParallelBlock[]
+  steps?: string[]
+  synthesize?: { template: string } | null
+}

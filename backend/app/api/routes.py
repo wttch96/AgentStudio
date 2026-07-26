@@ -438,8 +438,6 @@ def cancel_run(run_id: str):
     return jsonify({"accepted": accepted}), 202 if accepted else 409
 
 
-@api.get("/runs/<run_id>/events")
-
 @api.post("/runs/<run_id>/fork")
 def fork_run(run_id: str):
     """从已完成的任务中分叉（fork），携带记忆上下文开启新对话分支。"""
@@ -563,6 +561,90 @@ def get_flow_traces(run_id: str):
         return jsonify({"error": "运行不存在"}), 404
     traces = services().store.list_flow_traces(run_id)
     return jsonify({"items": traces})
+
+
+# ==================== 黑板 (Blackboard) ====================
+
+@api.get("/runs/<run_id>/blackboard")
+def get_blackboard(run_id: str):
+    """获取运行的黑板状态快照。"""
+    if not services().store.get_run(run_id):
+        return jsonify({"error": "运行不存在"}), 404
+    try:
+        state = services().blackboard_store.snapshot(run_id)
+        return jsonify({
+            "run_id": state.run_id,
+            "entries": {
+                k: {
+                    "key": v.key,
+                    "value": v.value,
+                    "updated_by": v.updated_by,
+                    "updated_at": v.updated_at,
+                    "version": v.version,
+                }
+                for k, v in state.entries.items()
+            },
+            "revision": state.revision,
+        })
+    except Exception as exc:
+        return jsonify({"error": f"获取黑板状态失败: {exc}"}), 500
+
+
+# ==================== Todo ====================
+
+@api.get("/runs/<run_id>/todos")
+def get_todos(run_id: str):
+    """获取运行的 todo 列表。"""
+    if not services().store.get_run(run_id):
+        return jsonify({"error": "运行不存在"}), 404
+    try:
+        todos = services().todo_store.list(run_id)
+        return jsonify({"items": [t.model_dump() for t in todos]})
+    except Exception as exc:
+        return jsonify({"error": f"获取 Todo 列表失败: {exc}"}), 500
+
+
+@api.put("/runs/<run_id>/todos/<todo_id>")
+def update_todo(run_id: str, todo_id: str):
+    """更新单个 todo 项的状态。"""
+    if not services().store.get_run(run_id):
+        return jsonify({"error": "运行不存在"}), 404
+    try:
+        data = request.get_json(silent=True) or {}
+        status = data.get("status", "completed")
+        todo = services().todo_store.update_status(run_id, todo_id, status)
+        if todo is None:
+            return jsonify({"error": f"Todo {todo_id} 不存在"}), 404
+        return jsonify(todo.model_dump())
+    except Exception as exc:
+        return jsonify({"error": f"更新 Todo 失败: {exc}"}), 500
+
+
+# ==================== Flow 校验 ====================
+
+@api.post("/flows/validate")
+def validate_flow():
+    """校验 YAML 流程定义。接收 { yaml_content: string }，返回校验结果。"""
+    try:
+        import yaml as yaml_lib
+        data = request.get_json(silent=True) or {}
+        yaml_content = data.get("yaml_content", "")
+        if not yaml_content:
+            return jsonify({"valid": False, "errors": ["YAML 内容不能为空"]}), 400
+
+        parsed = yaml_lib.safe_load(yaml_content)
+        if not isinstance(parsed, dict):
+            return jsonify({"valid": False, "errors": ["YAML 内容必须是字典/映射"]}), 400
+
+        from app.flow_engine.model import FlowDefinition
+        try:
+            FlowDefinition.model_validate(parsed)
+            return jsonify({"valid": True, "errors": [], "name": parsed.get("name", "")})
+        except ValidationError as ve:
+            errors = [f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in ve.errors()]
+            return jsonify({"valid": False, "errors": errors})
+    except Exception as exc:
+        return jsonify({"valid": False, "errors": [str(exc)]}), 500
 
 
 # ==================== 中断指令 ====================

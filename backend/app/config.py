@@ -37,11 +37,36 @@ class Settings:
     max_concurrent_agents: int = 3
     agent_max_turns: int = 12
     agent_timeout_seconds: int = 900
+    # ── 迭代与停止条件 ──
+    max_graph_iterations: int = 20
+    max_replan_iterations: int = 3
+    max_task_revisions: int = 2
     workspace_root: Path = WORKSPACE_ROOT
 
     @property
     def instance_dir(self) -> Path:
-        return self.workspace_root / ".workspace" / "db"
+        """数据库存放目录。
+
+        数据库跟随当前项目，保存在 .workspace/<current-project>/db/ 下。
+        从 current-project.yaml 读取当前项目名，无项目时使用 .workspace/.agent-studio/db/ 作为全局回退。
+        """
+        current = self._read_current_project()
+        if current:
+            return self.workspace_root / ".workspace" / current / "db"
+        return self.workspace_root / ".workspace" / ".agent-studio" / "db"
+
+    @staticmethod
+    def _read_current_project() -> str:
+        """从 .workspace/current-project.yaml 读取当前项目名称。"""
+        yaml_path = WORKSPACE_ROOT / ".workspace" / "current-project.yaml"
+        if not yaml_path.is_file():
+            return ""
+        try:
+            import yaml
+            data = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+            return str(data.get("project_id", "")).strip()
+        except Exception:
+            return ""
 
     @property
     def database_path(self) -> Path:
@@ -98,4 +123,7 @@ class Settings:
             max_concurrent_agents=max(1, int(os.getenv("MAX_CONCURRENT_AGENTS", "3"))),
             agent_max_turns=max(1, int(os.getenv("AGENT_MAX_TURNS", "12"))),
             agent_timeout_seconds=max(30, int(os.getenv("AGENT_TIMEOUT_SECONDS", "900"))),
+            max_graph_iterations=max(5, int(os.getenv("MAX_GRAPH_ITERATIONS", "20"))),
+            max_replan_iterations=max(1, int(os.getenv("MAX_REPLAN_ITERATIONS", "3"))),
+            max_task_revisions=max(1, int(os.getenv("MAX_TASK_REVISIONS", "2"))),
         )

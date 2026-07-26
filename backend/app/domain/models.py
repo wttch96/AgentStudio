@@ -64,6 +64,17 @@ class TaskDag(BaseModel):
         return self
 
 
+# ── 审查决策枚举 ──
+
+
+class ReviewDecision(str, Enum):
+    ACCEPT = "accepted"
+    ACCEPT_WITH_RISKS = "accepted_with_risks"
+    REVISION_REQUIRED = "revision_required"
+    REJECTED = "rejected"
+    BLOCKED = "blocked"
+
+
 class AgentResult(BaseModel):
     """Claude 专业 Agent 完成节点后返回给调度器的标准结果。"""
 
@@ -240,13 +251,23 @@ class ProjectAgent(BaseModel):
     display_name: str = Field(min_length=1, max_length=100)
     description: str = ""
     template_id: str | None = None
-    agent_type: Literal["brain", "rag", "claude", "file-ops"]
+    agent_type: Literal["brain", "rag", "claude", "file-ops", "chat", "todo", "blackboard", "doc-diff"]
     sub_dir: str = ""
     system_prompt: str = Field(min_length=10, max_length=30000)
     tools: list[str] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
     is_required: bool = False
     sort_order: int = 0
+    # ── 增强 Agent 配置字段（全部可选，向后兼容）──
+    capabilities: list[str] = Field(default_factory=list, description="Agent 擅长的能力领域")
+    limitations: list[str] = Field(default_factory=list, description="已知限制，不可逾越")
+    preferred_tasks: list[str] = Field(default_factory=list, description="偏好的任务关键词/类型")
+    forbidden_tasks: list[str] = Field(default_factory=list, description="绝对禁止的任务关键词/类型，优先级高于 preferred_tasks")
+    input_contract: dict[str, str] = Field(default_factory=dict, description="期望的输入结构说明")
+    output_contract: dict[str, str] = Field(default_factory=dict, description="期望的输出结构说明")
+    dependencies_info: list[str] = Field(default_factory=list, description="运行时前置依赖说明（如特定服务、SDK 版本）")
+    priority: int = Field(default=0, ge=0, le=10, description="调度优先级，数值越高越优先")
+    max_iterations: int = Field(default=3, ge=1, le=20, description="单个任务最大重试/返工次数")
 
 
 class AgentTemplate(BaseModel):
@@ -267,3 +288,51 @@ class CreateProjectRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     root_dir: str = Field(min_length=1, max_length=4096)
     description: str = ""
+
+
+# ==================== Blackboard 黑板系统模型 ====================
+
+
+class BlackboardEntry(BaseModel):
+    """单条黑板键值对，带 CAS 版本号用于并发冲突检测。"""
+
+    key: str
+    value: Any
+    updated_by: str  # agent name or "system"
+    updated_at: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+    version: int = 1  # monotonic counter for CAS conflict detection
+
+
+class BlackboardState(BaseModel):
+    """一次运行中的完整黑板快照。"""
+
+    run_id: str
+    entries: dict[str, BlackboardEntry] = Field(default_factory=dict)
+    revision: int = 0  # 任意 key 写入时自增
+
+
+class BlackboardWriteRequest(BaseModel):
+    """Agent 对黑板发起的一次写入请求。"""
+
+    key: str = Field(min_length=1, max_length=256)
+    value: Any
+    expected_version: int | None = None  # None = 无条件写入
+
+
+# ==================== Todo 任务跟踪模型 ====================
+
+
+class TodoItem(BaseModel):
+    """运行级别的待办项，由主脑自动生成或用户手动添加。"""
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    content: str = Field(min_length=1, max_length=500)
+    assigned_to: str | None = None
+    status: Literal["pending", "in_progress", "completed", "blocked"] = "pending"
+    depends_on: list[str] = Field(default_factory=list)
+    created_at: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+    completed_at: str | None = None

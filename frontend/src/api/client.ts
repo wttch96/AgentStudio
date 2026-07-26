@@ -214,4 +214,20 @@ export const api = {
   flowTraces: (runId: string) =>
     request<{ items: FlowTrace[] }>('/runs/' + runId + '/flow-traces'),
 
+  // ---- Blackboard ----
+  blackboard: (runId: string) =>
+    request<import("../types").BlackboardState>('/runs/' + runId + '/blackboard'),
+  todos: (runId: string) =>
+    request<{ items: import("../types").TodoItem[] }>('/runs/' + runId + '/todos'),
+  updateTodo: (runId: string, todoId: string, status: string) =>
+    request<import("../types").TodoItem>('/runs/' + runId + '/todos/' + todoId, {
+      method: 'PUT',
+      body: JSON.stringify({ status }),
+    }),
+  validateFlow: (yamlContent: string) =>
+    request<{ valid: boolean; errors: string[]; name?: string }>('/flows/validate', {
+      method: 'POST',
+      body: JSON.stringify({ yaml_content: yamlContent }),
+    }),
+
 }

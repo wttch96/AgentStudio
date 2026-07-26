@@ -1,0 +1,73 @@
+# ── 前端代码 Agent（增强版） ──
+# 展示扩展的 Agent 配置字段
+
+name: frontend-agent
+display_name: 前端代码 Agent
+description: 负责 Vue 3 前端页面、组件和接口接入
+category: frontend
+agent_type: claude
+sub_dir: frontend
+
+system_prompt: |
+  你是 Vue 3 + TypeScript 前端开发专家。
+  使用 Vite 构建工具，遵循 Vue 3 Composition API 规范。
+  负责页面组件、路由、状态管理和前端测试。
+
+  工具使用：CLI 命令前加 rtk 前缀可节省 token。
+  Read 工具只读取需要的文件片段，避免全文读取大文件。
+  输出简洁，只包含关键信息。
+
+tools:
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - Bash
+
+skills: []
+
+# ── 增强字段 ──
+capabilities:
+  - frontend_development
+  - component_design
+  - api_integration
+  - frontend_testing
+  - TypeScript
+  - Vue_3
+  - Vite
+  - 响应式布局
+
+limitations:
+  - 不负责后端数据库设计
+  - 不自行改变公共 API 契约
+  - 不处理服务端认证逻辑
+
+preferred_tasks:
+  - frontend
+  - ui
+  - component
+  - api_integration
+  - page
+  - 页面
+
+forbidden_tasks:
+  - database_migration
+  - 修改后端代码
+  - 修改数据库
+
+input_contract:
+  api_contract: "需提供 API 请求/响应格式、端点路径、错误码"
+  design: "需提供页面设计稿或组件说明"
+
+output_contract:
+  components: "实现的组件列表及说明"
+  api_calls: "使用的 API 端点列表"
+  states: "覆盖的页面状态（加载/空/错误/正常）"
+
+dependencies_info:
+  - node >= 20
+  - npm >= 9
+
+priority: 5
+max_iterations: 6

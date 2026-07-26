@@ -22,7 +22,8 @@ class ConfigReader:
         if project_id:
             self.root = self.workspace_root / ".workspace" / project_id
         else:
-            self.root = self.workspace_root / ".workspace" / ".agent-studio"  # 兼容旧默认路径
+            # 无 project_id 时使用全局配置目录（不在任何项目下）
+            self.root = self.workspace_root / ".workspace" / ".global"
         self._lock = threading.RLock()
 
     # ------------------------------------------------------------------
@@ -131,6 +132,16 @@ class ConfigReader:
     # ------------------------------------------------------------------
 
     def read_setting(self, key: str) -> dict | None:
+        # currentProject 特殊处理：读 .workspace/current-project.yaml
+        if key == "currentProject":
+            yaml_file = self.workspace_root / ".workspace" / "current-project.yaml"
+            with self._lock:
+                if yaml_file.is_file():
+                    try:
+                        return self._read_yaml(yaml_file)
+                    except Exception:
+                        return None
+            return None
         path = self.root / f"{key}.yaml"
         with self._lock:
             if path.is_file():
@@ -138,6 +149,13 @@ class ConfigReader:
         return None
 
     def write_setting(self, key: str, data: dict) -> None:
+        # currentProject 特殊处理：写 .workspace/current-project.yaml
+        if key == "currentProject":
+            yaml_file = self.workspace_root / ".workspace" / "current-project.yaml"
+            with self._lock:
+                yaml_file.parent.mkdir(parents=True, exist_ok=True)
+                self._write_yaml(yaml_file, data)
+            return
         with self._lock:
             self._ensure_dirs()
             self._write_yaml(self.root / f"{key}.yaml", data)

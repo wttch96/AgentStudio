@@ -40,6 +40,14 @@ class RunManager:
         chat_executor=None,
         file_agent_executor=None,
         flow_engine: Any = None,
+        blackboard_store: Any = None,
+        todo_store: Any = None,
+        yaml_compiler: Any = None,
+        flow_store: Any = None,
+        reviewer: Any = None,
+        agent_context_builder: Any = None,
+        conflict_detector: Any = None,
+        settings: Any = None,
     ) -> None:
         self.store = store
         self.events = events
@@ -53,6 +61,14 @@ class RunManager:
         self.chat_executor = chat_executor
         self.file_agent_executor = file_agent_executor
         self.flow_engine = flow_engine
+        self.blackboard_store = blackboard_store
+        self.todo_store = todo_store
+        self.yaml_compiler = yaml_compiler
+        self.flow_store = flow_store
+        self.reviewer = reviewer
+        self.agent_context_builder = agent_context_builder
+        self.conflict_detector = conflict_detector
+        self._settings = settings
         self._cancel_events: dict[str, threading.Event] = {}
         self._agent_pause_events: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
@@ -253,7 +269,24 @@ class RunManager:
             except Exception:
                 pass
 
-            graph = build_graph(self.planner, self.executor, self.events, cancel_event, None, interrupt_router, memory_manager, project_agents, rag_executor=self.rag_executor, chat_executor=self.chat_executor, file_agent_executor=self.file_agent_executor)
+            graph = build_graph(
+                self.planner, self.executor, self.events, cancel_event,
+                None, interrupt_router, memory_manager, project_agents,
+                rag_executor=self.rag_executor,
+                chat_executor=self.chat_executor,
+                file_agent_executor=self.file_agent_executor,
+                blackboard_store=self.blackboard_store,
+                todo_store=self.todo_store,
+                yaml_compiler=self.yaml_compiler,
+                flow_store=self.flow_store,
+                reviewer=self.reviewer,
+                agent_selector=None,
+                conflict_detector=self.conflict_detector,
+                context_builder=self.agent_context_builder,
+                max_graph_iterations=getattr(self._settings, 'max_graph_iterations', 20) if self._settings else 20,
+                max_replan_iterations=getattr(self._settings, 'max_replan_iterations', 3) if self._settings else 3,
+                max_task_revisions=getattr(self._settings, 'max_task_revisions', 2) if self._settings else 2,
+            )
             output = graph.invoke(
                 {
                     "run_id": run_id,

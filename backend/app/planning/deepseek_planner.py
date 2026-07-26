@@ -34,17 +34,37 @@ STRUCTURE_GUARD_BASE = """
 需要 Agent 操作时输出任务图，严格遵守以下协议：
 
 1. 只使用可用 Agent 列表中列出的精确名称，不要编造 agent 名。
-2. 分析和编码任务分配给 Claude/DeepSeek/文件操作 Agent；RAG Agent 用于知识检索。
-3. 主脑自主决策何时读写 RAG——可以在任务前检索已有知识，也可以在任务后存储新发现。
-4. 用户说"先...然后..."/"再..."时，then 后的任务 depends_on 于前面的任务。
-5. 无真实依赖的任务可以并行；有数据或逻辑依赖时建立 depends_on。
-6. write_scope 使用 Agent 声明的工作子目录，没有工作目录的 Agent 不限制写入范围。
-7. 每个 Agent 自己完成测试和自检，不创建独立测试 Agent。
-8. 不要把跨领域工作全部塞给一个 Agent；与目标无关的 Agent 不要调用。
-9. 上游上下文是已有任务的延续，结合上游理解指代；不要重复已完成的工作。
-10. 不要创建 workspace-discovery- 前缀的任务（发现阶段已完成）。
-11. 跨项目接口写入 coordination_contract。
-12. 输出 JSON 时不要用 markdown 代码块包裹，直接输出纯 JSON 对象。
+2. 分析和编码任务分配给编码类 Agent（claude/file-ops）；RAG Agent 用于知识检索。
+3. **BlackboardAgent** 用于 Agent 间共享信息——在需要多个 Agent 协作时，先让 BlackboardAgent 存储共享合约（api_contract、data_models、architecture_decisions 等 key），其他 Agent 通过依赖链获取。
+4. **含协调契约的多 Agent 项目，第一个任务应为 BlackboardAgent 存储合约**。
+5. 主脑自主决策何时读写 RAG——可以在任务前检索已有知识，也可以在任务后存储新发现。
+6. 用户说"先...然后..."/"再..."时，then 后的任务 depends_on 于前面的任务。
+7. 无真实依赖的任务可以并行；有数据或逻辑依赖时建立 depends_on。
+8. write_scope 使用 Agent 声明的工作子目录，没有工作目录的 Agent 不限制写入范围。
+9. 每个 Agent 自己完成测试和自检，不创建独立测试 Agent。
+10. 不要把跨领域工作全部塞给一个 Agent；与目标无关的 Agent 不要调用。
+11. 上游上下文是已有任务的延续，结合上游理解指代；不要重复已完成的工作。
+12. 不要创建 workspace-discovery- 前缀的任务（发现阶段已完成）。
+13. 跨项目接口写入 coordination_contract。
+14. 输出 JSON 时不要用 markdown 代码块包裹，直接输出纯 JSON 对象。
+15. 任务数 ≥ 3 时，考虑先输出一个 BlackboardAgent 共享契约任务，再并行执行。
+
+## Agent 选择规则（增强）
+
+16. 选择 Agent 时综合考虑：capabilities（能力）、limitations（限制）、preferred_tasks（偏好）、tools（工具）。
+17. 如果 Agent 的 forbidden_tasks 中包含任务关键词，绝不能分配该任务给此 Agent。
+18. 优先选择 capabilities 和 preferred_tasks 与任务最匹配的 Agent。
+19. 避免将所有任务集中分配给同一个 Agent，尽量利用团队的多样性。
+20. 每个任务都必须有一条明确的验收标准（在 objective 中说明如何判断完成）。
+
+## 任务拆分规则
+
+21. 每个任务目标必须单一、清晰、可独立验收。
+22. 任务名称应当描述具体动作和对象，如"定义用户登录 API 请求与响应结构"而非"处理后端"。
+23. 可以并行的任务不要无意义串行。
+24. 公共接口（API 契约、数据模型）应在前后端并行实现前先确定。
+25. 高风险修改需要审查步骤。
+26. 不要过度拆分——简单任务一个 Agent 即可完成。
 """.strip()
 
 
@@ -68,6 +88,27 @@ def _fallback_dag(objective: str, project_agents: list | None = None) -> TaskDag
             )
         ],
     )
+
+
+def _infer_acceptance_criteria(task: DagTask) -> list[str]:
+    """从任务目标推断验收标准。"""
+    obj = task.objective.lower()
+    criteria: list[str] = []
+    if any(w in obj for w in ("创建", "新建", "生成", "create", "generate")):
+        criteria.append("确认生成的文件存在且内容符合规范")
+    if any(w in obj for w in ("修改", "更新", "修复", "modify", "update", "fix")):
+        criteria.append("确认修改已保存且功能符合预期")
+    if any(w in obj for w in ("删除", "移除", "delete", "remove")):
+        criteria.append("确认指定内容已删除且无残留")
+    if any(w in obj for w in ("测试", "验证", "test", "verify")):
+        criteria.append("确认测试通过")
+    if any(w in obj for w in ("api", "接口", "endpoint")):
+        criteria.append("确认 API 契约不变或变更已记录")
+    if any(w in obj for w in ("文档", "document")):
+        criteria.append("确认文档内容准确")
+    if not criteria:
+        criteria.append("任务目标已达成，产物已生成")
+    return criteria
 
 
 class DeepSeekPlanner:
@@ -503,6 +544,76 @@ class DeepSeekPlanner:
         return "\n".join(lines)
 
     # ==================== Intent Classification ====================
+
+    def create_execution_plan(
+        self,
+        objective: str,
+        workspace_root: str | None = None,
+        run_id: str | None = None,
+        guidance: str = "",
+        project_agents: list | None = None,
+    ) -> "ExecutionPlan":
+        """创建结构化执行计划 — 包装 create_dag() 并升级为 AgentTask。
+
+        与 create_dag() 兼容，同时输出更丰富的任务定义。
+        """
+        from app.planning.execution_plan import AgentTask, ExecutionPlan
+
+        dag = self.create_dag(
+            objective, workspace_root, run_id, guidance,
+            project_agents=project_agents,
+        )
+
+        # 推断请求类型
+        obj_lower = objective.lower()
+        if not dag.tasks:
+            request_type = "direct_answer"
+        elif any(w in obj_lower for w in ("搜索", "检索", "查找", "知识库", "search", "find", "query")):
+            request_type = "retrieval"
+        elif any(w in obj_lower for w in ("复制", "移动", "删除", "文件", "copy", "move", "delete", "file")):
+            request_type = "file_operation"
+        elif any(w in obj_lower for w in ("文档", "说明", "document", "readme", "总结", "整理")):
+            request_type = "document_processing"
+        elif any(w in obj_lower for w in ("代码", "实现", "修改", "修复", "code", "implement", "fix", "开发")):
+            request_type = "coding"
+        elif len(dag.tasks) > 3:
+            request_type = "mixed"
+        else:
+            request_type = "planning"
+
+        # 推断策略
+        if not dag.tasks:
+            strategy = "direct"
+        elif len(dag.tasks) == 1:
+            strategy = "single_agent"
+        else:
+            has_deps = any(t.depends_on for t in dag.tasks)
+            has_parallel = len(dag.tasks) > len({t.id for t in dag.tasks if t.depends_on})
+            if has_deps and has_parallel:
+                strategy = "hybrid"
+            elif has_deps:
+                strategy = "sequential"
+            else:
+                strategy = "parallel"
+
+        # 升级 DagTask → AgentTask
+        agent_tasks = []
+        for task in dag.tasks:
+            at = AgentTask.from_dag_task(
+                task,
+                acceptance_criteria=_infer_acceptance_criteria(task),
+                status="ready" if not task.depends_on else "backlog",
+            )
+            agent_tasks.append(at)
+
+        return ExecutionPlan(
+            goal=objective,
+            request_type=request_type,  # type: ignore[arg-type]
+            tasks=agent_tasks,
+            execution_strategy=strategy,  # type: ignore[arg-type]
+            summary=dag.summary,
+            coordination_contract=dag.coordination_contract,
+        )
 
     def classify_intent(self, objective: str, available_flows: list[dict]) -> str | None:
         """Lightweight LLM call to match user intent to a known flow.

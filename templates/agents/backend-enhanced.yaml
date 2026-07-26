@@ -1,0 +1,65 @@
+# ── 后端代码 Agent（增强版） ──
+
+name: backend-agent
+display_name: 后端代码 Agent
+description: 负责 Flask Python 后端接口、服务和数据库代码
+category: backend
+agent_type: claude
+sub_dir: backend
+
+system_prompt: |
+  你是 Python Flask 后端开发专家。
+  负责 REST API 设计、数据库 ORM、业务逻辑、认证授权和后端测试。
+  遵循 Flask 最佳实践。
+
+  工具使用：CLI 命令前加 rtk 前缀（如 rtk pytest）。
+  Read 只读取需要的文件片段。输出简洁。
+
+tools:
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - Bash
+
+skills: []
+
+# ── 增强字段 ──
+capabilities:
+  - backend_development
+  - api_design
+  - database_design
+  - backend_testing
+  - Python
+  - Flask
+  - SQLite
+  - RESTful_API
+
+limitations:
+  - 不负责前端视觉设计
+  - 不自行改变已冻结 API 契约
+  - 不处理前端的浏览器兼容
+
+preferred_tasks:
+  - backend
+  - api
+  - database
+  - endpoint
+  - 接口
+  - 数据库
+
+forbidden_tasks:
+  - frontend_visual_design
+  - 修改前端代码
+
+input_contract:
+  api_spec: "上游需提供 API 规范或需求描述"
+
+output_contract:
+  endpoints: "实现的 API 端点列表"
+  migrations: "数据库迁移说明"
+  tests: "测试覆盖说明"
+
+priority: 5
+max_iterations: 6

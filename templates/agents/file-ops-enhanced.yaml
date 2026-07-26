@@ -1,0 +1,59 @@
+# ── 文件操作 Agent（增强版） ──
+
+name: file-ops-agent
+display_name: 文件操作 Agent
+description: 基于 LangChain FileManagementToolkit 的文件系统操作
+category: utility
+agent_type: file-ops
+sub_dir: ""
+
+system_prompt: |
+  你是文件系统操作 Agent。使用 copy/move/delete/read/write/list/search 工具。
+  修改前确认路径，先读取后修改，最小化修改范围，保持编码和换行。
+
+tools: []
+
+skills: []
+
+# ── 增强字段 ──
+capabilities:
+  - file_reading
+  - file_writing
+  - file_copy_move
+  - file_deletion
+  - directory_analysis
+  - file_diff
+  - format_conversion
+
+limitations:
+  - 不执行代码逻辑实现
+  - 不进行架构决策
+  - 删除/覆盖是高风险操作
+  - 禁止无授权递归删除
+
+preferred_tasks:
+  - file
+  - copy
+  - move
+  - delete
+  - list
+  - read
+  - 文件
+  - 复制
+  - 移动
+  - 删除
+
+forbidden_tasks:
+  - recursive_delete
+  - 递归删除
+  - 修改代码逻辑
+
+input_contract:
+  paths: "操作涉及的文件路径列表"
+
+output_contract:
+  files: "操作后的文件列表及状态"
+  diff: "关键文件的 diff 对比"
+
+priority: 4
+max_iterations: 3

@@ -34,6 +34,13 @@ class SQLiteStore:
         with self._connect() as connection:
             connection.executescript(
                 """
+                CREATE TABLE IF NOT EXISTS projects (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    root_dir TEXT NOT NULL DEFAULT '',
+                    description TEXT DEFAULT '',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
                 CREATE TABLE IF NOT EXISTS runs (
                     id TEXT PRIMARY KEY,
                     objective TEXT NOT NULL,
@@ -183,6 +190,15 @@ CREATE TABLE IF NOT EXISTS flow_traces (
                 );
                 CREATE INDEX IF NOT EXISTS idx_flow_traces_run
                 ON flow_traces(run_id);
+                CREATE TABLE IF NOT EXISTS blackboard (
+                    run_id TEXT NOT NULL,
+                    key TEXT NOT NULL,
+                    value TEXT NOT NULL,
+                    updated_by TEXT NOT NULL DEFAULT 'system',
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    PRIMARY KEY (run_id, key)
+                );
 
                 """
             )
