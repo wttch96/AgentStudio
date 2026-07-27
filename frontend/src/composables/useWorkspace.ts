@@ -8,7 +8,6 @@ import type {
   MemoryCompactionRecord,
   PlanTask,
   Project,
-  ConversationMode,
   Run,
   RunEvent,
   SkillProfile,
@@ -32,7 +31,7 @@ interface WorkspaceState {
   loading: boolean
   submitting: boolean
   error: string
-  taskQueue: { id: string; objective: string; mode: ConversationMode }[]
+  taskQueue: { id: string; objective: string }[]
   // 新增：conversation 级别状态
   conversationRootId: string | null
   conversationRuns: Run[]
@@ -446,8 +445,15 @@ export function useWorkspace() {
         // 自动推进队列中的下一个任务 — 作为当前 conversation 的下一轮
         if (state.taskQueue.length > 0) {
           const next = state.taskQueue.shift()!
-          void _startRun(next.objective, next.mode)
+          void _startRun(next.objective)
         }
+      } else if (terminal === 'awaiting_confirmation') {
+        if (state.activeRun) {
+          state.activeRun.status = 'awaiting_confirmation'
+          replaceRun(state.activeRun)
+        }
+        state.streamingState.isStreaming = false
+        closeStream()
       } else if (event.type === 'run.started') {
         if (state.activeRun) {
           state.activeRun.status = 'running'
@@ -494,7 +500,7 @@ export function useWorkspace() {
     }
   }
 
-  async function _startRun(objective: string, mode: ConversationMode) {
+  async function _startRun(objective: string, mode: string = 'auto') {
     try {
       // 关键：如果有 conversation 上下文，以最后一轮为 parent 继续
       let parentRunId: string | undefined
@@ -539,7 +545,7 @@ export function useWorkspace() {
     }
   }
 
-  async function createRun(objective: string, mode: ConversationMode = 'auto') {
+  async function createRun(objective: string, mode: string = 'auto') {
     state.submitting = true
     state.error = ''
     try {
@@ -551,7 +557,7 @@ export function useWorkspace() {
           instruction: objective,
         })
         const qid = Date.now().toString(36)
-        state.taskQueue.push({ id: qid, objective, mode })
+        state.taskQueue.push({ id: qid, objective })
         state.submitting = false
         return
       }
@@ -573,7 +579,7 @@ export function useWorkspace() {
     if (idx < 0) return
     const item = state.taskQueue[idx]
     state.taskQueue.splice(idx, 1)
-    cancelActiveRun().then(() => _startRun(item.objective, item.mode))
+    cancelActiveRun().then(() => _startRun(item.objective))
   }
 
   function beginNewRun() {
@@ -602,6 +608,32 @@ export function useWorkspace() {
       await api.cancelRun(state.activeRun.id)
     } catch (error) {
       state.error = error instanceof Error ? error.message : '取消失败'
+    }
+  }
+
+  async function confirmExecution(runId: string) {
+    try {
+      const result = await api.executeRun(runId)
+      if (result.run_id) {
+        await selectRun(result.run_id)
+      }
+      return result
+    } catch (error) {
+      state.error = error instanceof Error ? error.message : "确认执行失败"
+      throw error
+    }
+  }
+
+  async function sendChatMessage(runId: string, message: string) {
+    try {
+      const result = await api.chatRun(runId, message)
+      if (result.run_id) {
+        await selectRun(result.run_id)
+      }
+      return result
+    } catch (error) {
+      state.error = error instanceof Error ? error.message : "发送消息失败"
+      throw error
     }
   }
 
@@ -722,6 +754,7 @@ export function useWorkspace() {
     [...state.conversationEvents, ...state.events].filter((event) => event.agent_id),
   )
   const isRunning = computed(() => ['queued', 'running'].includes(state.activeRun?.status ?? ''))
+  const isAwaitingConfirmation = computed(() => state.activeRun?.status === "awaiting_confirmation")
 
   onBeforeUnmount(closeStream)
 
@@ -731,12 +764,15 @@ export function useWorkspace() {
     planContract,
     agentEvents,
     isRunning,
+    isAwaitingConfirmation,
     initialize,
     selectRun,
     createRun,
     beginNewRun,
     cancelActiveRun,
     deleteRun,
+    confirmExecution,
+    sendChatMessage,
     removeFromQueue,
     promoteQueueItem,
     refreshConfiguration,

@@ -166,6 +166,7 @@ def build_graph(
     def plan(state: GraphState) -> GraphState:
         run_id = state["run_id"]
         project_mode = state.get("project_mode", "auto")
+        llm_input = None  # populated when create_dag is called
         if state.get("preset_dag"):
             dag = TaskDag.model_validate(state["preset_dag"])
             stage = "execution"
@@ -188,7 +189,7 @@ def build_graph(
             else:
                 events.emit(run_id, "workspace.discovery_skipped",
                             payload={"reason": "no-discovery-agents"})
-                dag = call_planner(
+                result = call_planner(
                     "create_dag",
                     state["objective"], state["workspace_root"],
                     run_id=run_id,
@@ -199,10 +200,17 @@ def build_graph(
                     project_mode=project_mode,
                 )
                 stage = "execution"
+                dag = result.dag if hasattr(result, "dag") else result
+                llm_input = {
+                    "system_prompt": getattr(result, "system_prompt", ""),
+                    "user_prompt": getattr(result, "user_prompt", ""),
+                    "model": getattr(result, "model", ""),
+                    "duration_ms": getattr(result, "duration_ms", 0),
+                } if hasattr(result, "dag") else None
 
         dag = apply_agent_selection(dag, state.get("project_id", ""))
         events.emit(run_id, "plan.created",
-                    payload={**dag.model_dump(), "stage": stage})
+                    payload={**dag.model_dump(), "stage": stage, "llm_input": llm_input})
 
         # Blackboard + Todo 初始化
         if blackboard_store is not None:
@@ -308,6 +316,17 @@ def build_graph(
             events.emit(state["run_id"], "plan.validation_error",
                         payload={"error": str(exc)})
             return {}  # 不阻塞执行
+
+
+    def route_after_validate(state: GraphState):
+        """交互模式：计划生成后暂停等待用户确认。"""
+        project_mode = state.get("project_mode", "auto")
+        if project_mode == "interactive":
+            events.emit(state["run_id"], "run.awaiting_confirmation", payload={
+                "message": "计划已生成，请确认或修改后继续",
+            })
+            return END
+        return "interrupt_check"
 
     def interrupt_check(state: GraphState) -> GraphState:
         if interrupt_router is None:
@@ -1009,7 +1028,7 @@ def build_graph(
         ]
         events.emit(run_id, "planner.started",
                     payload={"model": "deepseek", "phase": "implementation"})
-        implementation_dag = call_planner(
+        result = call_planner(
             "create_dag",
             state["objective"], state["workspace_root"],
             run_id=run_id, guidance=state.get("guidance", ""),
@@ -1019,6 +1038,13 @@ def build_graph(
             project_id=state.get("project_id", ""),
             project_mode=state.get("project_mode", "auto"),
         )
+        implementation_dag = result.dag if hasattr(result, 'dag') else result
+        replan_llm_input = {
+            "system_prompt": getattr(result, 'system_prompt', ''),
+            "user_prompt": getattr(result, 'user_prompt', ''),
+            "model": getattr(result, 'model', ''),
+            "duration_ms": getattr(result, 'duration_ms', 0),
+        } if hasattr(result, 'dag') else None
         successful_discovery_ids = [
             r.task_id for r in discovery_results if r.status == "completed"
         ]
@@ -1051,7 +1077,8 @@ def build_graph(
             except Exception:
                 pass
         events.emit(run_id, "plan.created",
-                    payload={**combined_dag.model_dump(), "stage": "execution"})
+                    payload={**combined_dag.model_dump(), "stage": "execution",
+                             "llm_input": replan_llm_input})
         return {"dag": combined_dag.model_dump(), "stage": "execution"}
 
     # ═══════════════════════════════════════════════════════════════
@@ -1076,7 +1103,9 @@ def build_graph(
     # 拓扑: START → plan → validate_plan → interrupt_check → scheduler
     builder.add_edge(START, "plan")
     builder.add_edge("plan", "validate_plan")
-    builder.add_edge("validate_plan", "interrupt_check")
+    builder.add_conditional_edges(
+        "validate_plan", route_after_validate, {"interrupt_check": "interrupt_check", "__end__": END}
+    )
     builder.add_edge("interrupt_check", "scheduler")
 
     # scheduler → worker / flow_executor / synthesize

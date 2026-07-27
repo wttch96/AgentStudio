@@ -169,9 +169,14 @@ record_process_identity() {
   local name="$1"
   local pid="$2"
   local started
-  started="$(ps -p "${pid}" -o lstart= 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-  [[ -n "${started}" ]] || die "无法读取 ${name} 进程启动时间。"
-  printf '%s\n' "${started}" > "${RUN_DIR}/${name}.started"
+  started="$(ps -p "${pid}" -o lstart= 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true)"
+  if [[ -z "${started}" ]]; then
+    local stime
+    stime="$(ps -p "${pid}" -l 2>/dev/null | tail -1 | awk '{print $8}' || true)"
+    started="token:$(date +%s):${pid}:${stime}"
+  fi
+  printf '%s
+' "${started}" > "${RUN_DIR}/${name}.started"
 }
 
 rotate_log() {

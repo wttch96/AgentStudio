@@ -18,7 +18,7 @@ import { useTimeoutDetection } from '../composables/useTimeoutDetection'
 import { useInterrupt } from '../composables/useInterrupt'
 import { useRunTimeline } from '../composables/useRunTimeline'
 import { api } from '../api/client'
-import type { Project, NodeStatus, ConversationMode } from '../types'
+import type { Project, NodeStatus } from '../types'
 
 const workspace = useWorkspace()
 const composer = ref<InstanceType<typeof PromptComposer> | null>(null)
@@ -69,7 +69,7 @@ const subtitle = computed(() => {
   return labels[run.status] || run.status
 })
 
-async function submit(objective: string, mode: ConversationMode = 'auto') {
+async function submit(objective: string, mode?: string) {
   if (workspace.isRunning.value && objective.startsWith('/') && workspace.state.activeRun) {
     const [targetToken, ...parts] = objective.trim().split(/\s+/)
     const instruction = parts.join(' ')
@@ -86,7 +86,7 @@ async function submit(objective: string, mode: ConversationMode = 'auto') {
     })
     return
   }
-  await workspace.createRun(objective, mode)
+  await workspace.createRun(objective, mode || 'auto')
 }
 
 function onProjectCreated(project: Project) {
@@ -125,6 +125,24 @@ function handleInterruptNode(nodeId: string) {
   void api.interruptRun(workspace.state.activeRun.id, {
     target: 'task', action: 'abort', target_task: nodeId,
   })
+}
+
+async function handleConfirmExecute() {
+  if (!workspace.state.activeRun) return
+  try {
+    await workspace.confirmExecution(workspace.state.activeRun.id)
+  } catch {
+    // error surfaced via workspace state
+  }
+}
+
+async function handleChatRefine(message: string) {
+  if (!workspace.state.activeRun) return
+  try {
+    await workspace.sendChatMessage(workspace.state.activeRun.id, message)
+  } catch {
+    // error surfaced via workspace state
+  }
 }
 
 onMounted(async () => {
@@ -276,6 +294,7 @@ onMounted(async () => {
           ref="composer"
           :submitting="workspace.state.submitting"
           :is-running="workspace.isRunning.value"
+          :is-awaiting-confirmation="workspace.isAwaitingConfirmation.value"
           :queue-items="workspace.state.taskQueue"
           :active-agents="activeAgents"
           :active-run-id="workspace.state.activeRun?.id ?? null"
@@ -284,6 +303,8 @@ onMounted(async () => {
           @interrupt="workspace.cancelActiveRun()"
           @promote-queue="workspace.promoteQueueItem"
           @remove-queue="workspace.removeFromQueue"
+          @confirm-execute="handleConfirmExecute"
+          @chat-refine="handleChatRefine"
           @interrupt-agent="(agent: string, action: string, instruction?: string) => {
             if (workspace.state.activeRun) {
               api.interruptRun(workspace.state.activeRun.id, {

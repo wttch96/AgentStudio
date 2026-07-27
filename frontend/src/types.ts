@@ -1,4 +1,4 @@
-export type RunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timeout' | 'interrupted'
+export type RunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timeout' | 'interrupted' | 'awaiting_confirmation'
 
 export interface Run {
   id: string
@@ -50,8 +50,6 @@ export interface AgentProfile {
   priority?: number
   max_iterations?: number
 }
-
-export type ConversationMode = 'manual' | 'editAutomatically' | 'plan' | 'auto'
 
 export interface AgentDetail extends AgentProfile {
   prompt: string

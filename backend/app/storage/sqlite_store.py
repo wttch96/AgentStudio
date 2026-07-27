@@ -14,7 +14,7 @@ from typing import Any
 from app.domain.models import RunEvent
 
 
-TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
+TERMINAL_STATUSES = {"completed", "failed", "cancelled", "awaiting_confirmation"}
 
 
 class SQLiteStore:

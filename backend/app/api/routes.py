@@ -23,6 +23,7 @@ from app.domain.configuration import (
 from app.domain.models import (
     AgentTemplate,
     CreateProjectRequest,
+    ChatRunRequest,
     CreateRunRequest,
     InterruptAction,
     InterruptCommand,
@@ -332,7 +333,7 @@ def create_run():
         return jsonify(
             services().runs.start(payload.objective, payload.parent_run_id,
                                   project_id=payload.project_id,
-                                  mode=payload.mode)
+                                  mode=payload.mode or "auto")
         ), 202
     except RuntimeError as error:
         return jsonify({"error": str(error)}), 409
@@ -471,6 +472,39 @@ def cancel_run(run_id: str):
     accepted = services().runs.cancel(run_id)
     return jsonify({"accepted": accepted}), 202 if accepted else 409
 
+
+
+@api.post("/runs/<run_id>/chat")
+def chat_run(run_id: str):
+    """交互模式下向主脑发送对话消息，触发重新规划。"""
+    if not services().store.get_run(run_id):
+        return jsonify({"error": "运行不存在"}), 404
+    data = request.get_json(silent=True) or {}
+    try:
+        req = ChatRunRequest.model_validate(data)
+    except Exception as e:
+        return jsonify({"error": f"请求参数错误: {e}"}), 400
+    try:
+        result = services().runs.chat(run_id, req.message)
+        return jsonify(result), 202
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 409
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@api.post("/runs/<run_id>/execute")
+def execute_run(run_id: str):
+    """用户确认计划后继续执行 DAG。"""
+    if not services().store.get_run(run_id):
+        return jsonify({"error": "运行不存在"}), 404
+    try:
+        result = services().runs.execute(run_id)
+        return jsonify(result), 202
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 409
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 500
 
 @api.post("/runs/<run_id>/fork")
 def fork_run(run_id: str):

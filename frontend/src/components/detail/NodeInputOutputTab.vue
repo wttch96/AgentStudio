@@ -6,8 +6,24 @@ const props = defineProps<{
   node: ExecutionNode
 }>()
 
+const isLLMPrompt = computed(() => {
+  const input = props.node.input as Record<string, unknown> | null
+  return input?.llmPrompt != null
+})
+
+const llmPrompt = computed(() => {
+  const input = props.node.input as Record<string, unknown> | null
+  return input?.llmPrompt as {
+    system_prompt: string
+    user_prompt: string
+    model: string
+    duration_ms: number
+  } | null
+})
+
 const formattedInput = computed(() => {
   if (!props.node.input) return null
+  if (isLLMPrompt.value) return null
   try {
     return JSON.stringify(props.node.input, null, 2)
   } catch {
@@ -23,21 +39,49 @@ const formattedOutput = computed(() => {
     return String(props.node.output)
   }
 })
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`
+  return `${(ms / 60000).toFixed(1)}min`
+}
 </script>
 
 <template>
   <div class="io-tab">
-    <!-- 输入 -->
-    <div class="io-section">
-      <h3 class="io-heading">
-        <span class="io-badge in">IN</span>
-        输入
-      </h3>
-      <pre v-if="formattedInput" class="io-pre">{{ formattedInput }}</pre>
-      <p v-else class="io-empty">— 无输入数据 —</p>
-    </div>
-
-    <!-- 输出 -->
+    <template v-if="isLLMPrompt && llmPrompt">
+      <div class="io-section">
+        <h3 class="io-heading">
+          <span class="io-badge in">IN</span>
+          完整 LLM 输入
+          <span class="io-meta">模型: {{ llmPrompt.model }} · 耗时: {{ formatDuration(llmPrompt.duration_ms) }}</span>
+        </h3>
+        <details class="prompt-section" open>
+          <summary class="prompt-summary">
+            <span class="prompt-label system">SYSTEM</span>
+            系统提示词
+          </summary>
+          <pre class="io-pre">{{ llmPrompt.system_prompt }}</pre>
+        </details>
+        <details class="prompt-section" open>
+          <summary class="prompt-summary">
+            <span class="prompt-label user">USER</span>
+            用户消息
+          </summary>
+          <pre class="io-pre">{{ llmPrompt.user_prompt }}</pre>
+        </details>
+      </div>
+    </template>
+    <template v-else>
+      <div class="io-section">
+        <h3 class="io-heading">
+          <span class="io-badge in">IN</span>
+          输入
+        </h3>
+        <pre v-if="formattedInput" class="io-pre">{{ formattedInput }}</pre>
+        <p v-else class="io-empty">— 无输入数据 —</p>
+      </div>
+    </template>
     <div class="io-section">
       <h3 class="io-heading">
         <span class="io-badge out">OUT</span>
@@ -76,6 +120,15 @@ const formattedOutput = computed(() => {
   letter-spacing: 0.03em;
 }
 
+.io-meta {
+  font-size: var(--ui-font-sm);
+  font-weight: 400;
+  color: var(--tertiary);
+  text-transform: none;
+  letter-spacing: 0;
+  margin-left: 8px;
+}
+
 .io-badge {
   font-size: var(--ui-font-sm);
   font-weight: 700;
@@ -91,6 +144,39 @@ const formattedOutput = computed(() => {
 .io-badge.out {
   background: rgba(48, 209, 88, 0.15);
   color: var(--green);
+}
+
+.prompt-section {
+  margin-bottom: 8px;
+}
+
+.prompt-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  padding: 6px 0;
+  font-size: var(--ui-font-md);
+  color: var(--secondary);
+  user-select: none;
+}
+
+.prompt-label {
+  font-size: var(--ui-font-xs);
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 3px;
+  letter-spacing: 0.04em;
+}
+
+.prompt-label.system {
+  background: rgba(255, 159, 10, 0.18);
+  color: #ff9f0a;
+}
+
+.prompt-label.user {
+  background: rgba(10, 132, 255, 0.18);
+  color: #64d2ff;
 }
 
 .io-pre {

@@ -13,9 +13,6 @@ from pydantic import BaseModel, Field, model_validator
 
 
 
-ConversationMode: TypeAlias = Literal["manual", "editAutomatically", "plan", "auto"]
-
-
 class DagTask(BaseModel):
     """DeepSeek 生成、LangGraph 执行的最小任务单元。"""
 
@@ -147,7 +144,12 @@ class CreateRunRequest(BaseModel):
     objective: str = Field(min_length=2, max_length=20_000)
     parent_run_id: str | None = Field(default=None, min_length=1, max_length=100)
     project_id: str | None = Field(default=None)
-    mode: ConversationMode = "auto"
+    mode: str | None = Field(default=None, description="运行模式: auto / interactive / plan")
+
+
+class ChatRunRequest(BaseModel):
+    """交互模式下向主脑发送对话消息。"""
+    message: str = Field(min_length=1, max_length=10_000)
 
 
 # ==================== 分层记忆模型 ====================

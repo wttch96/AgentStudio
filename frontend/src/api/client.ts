@@ -94,10 +94,10 @@ export const api = {
     }),
   deepseekBalance: (refresh = false) =>
     request<DeepSeekBalance>(`/deepseek/balance${refresh ? '?refresh=1' : ''}`),
-  createRun: (objective: string, parentRunId?: string, projectId?: string, mode: import("../types").ConversationMode = 'auto') =>
+  createRun: (objective: string, parentRunId?: string, projectId?: string, mode?: string) =>
     request<Run>('/runs', {
       method: 'POST',
-      body: JSON.stringify({ objective, parent_run_id: parentRunId, project_id: projectId, mode }),
+      body: JSON.stringify({ objective, parent_run_id: parentRunId, project_id: projectId, mode: mode || 'auto' }),
     }),
   cancelRun: (id: string) => request<{ accepted: boolean }>(`/runs/${id}/cancel`, { method: 'POST' }),
   forkRun: (runId: string, objective?: string) =>
@@ -132,6 +132,17 @@ export const api = {
     request<Run>(`/flows/${name}/runs`, {
       method: 'POST',
       body: JSON.stringify(payload),
+    }),
+
+  chatRun: (runId: string, message: string) =>
+    request<{ run_id: string; message: string }>(`/runs/${runId}/chat`, {
+      method: 'POST',
+      body: JSON.stringify({ message }),
+    }),
+
+  executeRun: (runId: string) =>
+    request<{ run_id: string; message: string }>(`/runs/${runId}/execute`, {
+      method: 'POST',
     }),
 
   knowledgeSearch: (q: string, category?: string, topK?: number, projectId?: string) => {

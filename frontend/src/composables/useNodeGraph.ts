@@ -284,7 +284,7 @@ export function useNodeGraph(
       durationMs: null,
       objective: null,
       summary: (planEvent?.payload.summary as string) || null,
-      input: null,
+      input: planEvent?.payload.llm_input ? { llmPrompt: planEvent.payload.llm_input } : null,
       output: planEvent?.payload ? { tasks: planEvent.payload.tasks, summary: planEvent.payload.summary } : null,
       error: null,
       hasError: false,

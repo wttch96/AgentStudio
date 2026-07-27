@@ -12,14 +12,22 @@ proc_cmdline() {
   if [[ -f "/proc/${pid}/cmdline" ]]; then
     tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null || true
   else
-    ps -p "${pid}" -o command= 2>/dev/null || true
+    local out
+    out="$(ps -p "${pid}" -o command= 2>/dev/null || true)" && { printf '%s
+' "${out}"; return; }
+    # Cygwin/MinGW fallback: skip header + first 7 columns, keep COMMAND
+    ps -p "${pid}" 2>/dev/null | awk 'NR>1{for(i=1;i<=7;i++) $i=""; sub(/^[[:space:]]+/, ""); print}' || true
   fi
 }
 
 belongs_to_current_user() {
   local pid="$1"
   local owner
-  owner="$(ps -p "${pid}" -o uid= 2>/dev/null | tr -d '[:space:]')"
+  owner="$(ps -p "${pid}" -o uid= 2>/dev/null | tr -d '[:space:]' || true)"
+  if [[ -z "${owner}" ]]; then
+    # Cygwin/MinGW fallback: numeric UID is the 6th field in default ps output
+    owner="$(ps -p "${pid}" 2>/dev/null | awk 'NR>1{print $6}' || true)"
+  fi
   [[ -n "${owner}" && "${owner}" == "$(id -u)" ]]
 }
 
@@ -45,10 +53,19 @@ matches_start_identity() {
   local name="$1"
   local pid="$2"
   local started_file="${RUN_DIR}/${name}.started"
-  [[ -f "${started_file}" ]] || return 1
+  if [[ ! -f "${started_file}" ]]; then
+    # 缺少 .started 文件（可能被清理或上次启动失败）：回退到服务名检查
+    matches_service "${name}" "${pid}"
+    return
+  fi
   local expected actual
   expected="$(<"${started_file}")"
-  actual="$(ps -p "${pid}" -o lstart= 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  # 令牌格式（Cygwin/MinGW 回退）：文件由当前脚本创建，文件存在即验证通过
+  if [[ "${expected}" == token:* ]]; then
+    return 0
+  fi
+  # 原生 lstart 格式：验证进程启动时间匹配
+  actual="$(ps -p "${pid}" -o lstart= 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true)"
   [[ -n "${actual}" && "${actual}" == "${expected}" ]]
 }
 

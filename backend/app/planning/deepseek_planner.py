@@ -20,6 +20,24 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+
+class PlannerResult:
+    """规划器返回结果，包含 DAG 和完整 LLM 输入信息。"""
+    __slots__ = ("dag", "system_prompt", "user_prompt", "model", "duration_ms")
+
+    def __init__(
+        self,
+        dag: TaskDag,
+        system_prompt: str = "",
+        user_prompt: str = "",
+        model: str = "",
+        duration_ms: float = 0,
+    ):
+        self.dag = dag
+        self.system_prompt = system_prompt
+        self.user_prompt = user_prompt
+        self.model = model
+        self.duration_ms = duration_ms
 STRUCTURE_GUARD_BASE = """
 你是 Agent Studio 的主脑编排器。**少即是多**——不要为简单问题创建任务。
 
@@ -308,7 +326,11 @@ class DeepSeekPlanner:
                 len(dag.tasks),
                 (time.perf_counter() - started_at) * 1000,
             )
-            return dag
+            return PlannerResult(
+                dag=dag,
+                model='demo',
+                duration_ms=(time.perf_counter() - started_at) * 1000,
+            )
 
         client = OpenAI(
             api_key=self.settings.deepseek_api_key,
@@ -373,41 +395,38 @@ class DeepSeekPlanner:
             except Exception:
                 pass
 
+        system_prompt = (
+            f"{brain.orchestration_prompt}\n\n"
+            f"{mode_guidance}\n\n"
+            "【最重要规则】你是主脑编排器，不是执行 Agent。\n"
+            "用户问你问题、让你分析结果、闲聊、解释概念 → 直接纯文本回答，绝不输出 JSON。\n"
+            "用户让你读写文件、运行命令、搜索代码、操作知识库 → 输出 JSON 任务图。\n"
+            "RAG/知识库若是被更新、修复、实现或重构的软件模块，属于代码任务，"
+            "必须交给编码 Agent；不要调用 RAG Agent 查询。\n"
+            "拿不准时选择纯文本。\n\n"
+            f"{guard}\n\n"
+            "【输出格式】\n"
+            "- 纯文本回答：直接写中文/英文，一个自然段即可\n"
+            "- JSON 任务图：直接写 { ... } 对象，不要用 ``` 包裹\n"
+        )
+        user_prompt = (
+            f"用户目标：\n{objective}\n\n"
+            f"{knowledge_context}"
+            f"上游对话上下文：\n{guidance or '无，这是新任务'}\n\n"
+            f"专业 Agent 的工作空间搜索与项目过滤结果：\n{discovery_context or '[]'}\n\n"
+            f"工作区结构索引（仅用于补充，不得覆盖 Agent 的过滤证据）：\n"
+            f"{self._workspace_context(workspace_root)}\n\n"
+            f"现在判断：用户是否要求执行具体操作？\n"
+            f"如果没有 → 用纯文本直接回答（你说的话会直接展示给用户）。\n"
+            f"如果有 → 按以下 Schema 输出 JSON 任务图（只包含必要的 Agent）：\n"
+            f"{json.dumps(schema, ensure_ascii=False)}"
+        )
+
         response = client.chat.completions.create(
             model=self.settings.deepseek_model,
             messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        f"{brain.orchestration_prompt}\n\n"
-                        f"{mode_guidance}\n\n"
-                        "【最重要规则】你是主脑编排器，不是执行 Agent。\n"
-                        "用户问你问题、让你分析结果、闲聊、解释概念 → 直接纯文本回答，绝不输出 JSON。\n"
-                        "用户让你读写文件、运行命令、搜索代码、操作知识库 → 输出 JSON 任务图。\n"
-                        "RAG/知识库若是被更新、修复、实现或重构的软件模块，属于代码任务，"
-                        "必须交给编码 Agent；不要调用 RAG Agent 查询。\n"
-                        "拿不准时选择纯文本。\n\n"
-                        f"{guard}\n\n"
-                        "【输出格式】\n"
-                        "- 纯文本回答：直接写中文/英文，一个自然段即可\n"
-                        "- JSON 任务图：直接写 { ... } 对象，不要用 ``` 包裹\n"
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"用户目标：\n{objective}\n\n"
-                        f"{knowledge_context}"
-                        f"上游对话上下文：\n{guidance or '无，这是新任务'}\n\n"
-                        f"专业 Agent 的工作空间搜索与项目过滤结果：\n{discovery_context or '[]'}\n\n"
-                        f"工作区结构索引（仅用于补充，不得覆盖 Agent 的过滤证据）：\n"
-                        f"{self._workspace_context(workspace_root)}\n\n"
-                        f"现在判断：用户是否要求执行具体操作？\n"
-                        f"如果没有 → 用纯文本直接回答（你说的话会直接展示给用户）。\n"
-                        f"如果有 → 按以下 Schema 输出 JSON 任务图（只包含必要的 Agent）：\n"
-                        f"{json.dumps(schema, ensure_ascii=False)}"
-                    ),
-                },
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
             ],
             temperature=0.1,
         )
@@ -444,15 +463,22 @@ class DeepSeekPlanner:
         dag = self._enrich_dag(dag, project_agents)
         dag = self._enforce_requested_agents(dag, objective, project_agents)
         dag = self._repair_rag_code_routing(dag, objective, project_agents)
+        duration_ms = (time.perf_counter() - started_at) * 1000
         logger.info(
             "planner.finished run_id=%s source=deepseek tasks=%s direct_answer=%s "
             "duration_ms=%.1f",
             run_id or "-",
             len(dag.tasks),
             not dag.tasks,
-            (time.perf_counter() - started_at) * 1000,
+            duration_ms,
         )
-        return dag
+        return PlannerResult(
+            dag=dag,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            model=self.settings.deepseek_model,
+            duration_ms=duration_ms,
+        )
 
     @classmethod
     def _repair_rag_code_routing(

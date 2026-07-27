@@ -238,7 +238,6 @@ function title(event: RunEvent) {
   }
   const titles: Record<string, string> = {
     'run.started': '运行已启动',
-    'conversation.mode': '对话 Mode',
     'workspace.discovery_started': '正在搜索所选工作空间',
     'planner.started': 'DeepSeek 正在规划',
     'planner.bypassed': '已直接选择 Claude Agent',
@@ -267,15 +266,6 @@ function detail(event: RunEvent) {
     return `已等待 ${elapsed} 秒 · DeepSeek 或模型代理响应较慢，系统仍在等待；你可以继续等待或停止本次运行。`
   }
   if (event.type === 'planner.bypassed') return '已跳过 DeepSeek 规划，直接执行指定 Agent'
-  if (event.type === 'conversation.mode') {
-    const modeDescriptions: Record<string, string> = {
-      manual: 'Manual · 主脑仅规划用户明确要求的操作',
-      editAutomatically: 'Edit Automatically · 主脑可自动完成必要修改',
-      plan: 'Plan · 主脑只生成计划与 DAG，不启动执行 Agent',
-      auto: 'Auto · 主脑自主规划、执行、验收与返工',
-    }
-    return modeDescriptions[String(payload.mode)] ?? String(payload.mode ?? '')
-  }
   if (event.type === 'workspace.discovery_started') return '专业 Agent 将先递归搜索并过滤与目标相关的真实项目'
   if (event.type === 'brain.contract_created') return '前端、业务后端和 Netty 实施节点将共享同一份接口或协议定义'
   if (['run.completed', 'run.cancelled'].includes(event.type)) return ''

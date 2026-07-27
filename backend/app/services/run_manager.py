@@ -269,6 +269,44 @@ class RunManager:
     def is_active(self, run_id: str) -> bool:
         """判断运行是否确实由当前进程中的后台线程持有。"""
 
+
+    def chat(self, run_id: str, message: str) -> dict:
+        """交互模式：向主脑发送对话消息，触发重新规划。"""
+        run = self.store.get_run(run_id)
+        if not run:
+            raise ValueError("运行不存在")
+        status = run.get("status", "")
+        if status not in ("awaiting_confirmation", "completed"):
+            raise ValueError(f"当前状态 {status} 不支持对话，请等待计划生成完成")
+        objective = f"[修改计划] {message}"
+        project_id = run.get("project_id")
+        new_run = self.start(
+            objective=objective,
+            parent_run_id=run_id,
+            project_id=project_id,
+            mode="interactive",
+        )
+        self.events.emit(run_id, "run.chat_message", payload={
+            "message": message, "new_run_id": new_run.get("id"),
+        })
+        return {"run_id": new_run.get("id"), "message": "已发送对话消息，正在重新规划"}
+
+    def execute(self, run_id: str) -> dict:
+        """交互模式：用户确认计划后继续执行 DAG。"""
+        run = self.store.get_run(run_id)
+        if not run:
+            raise ValueError("运行不存在")
+        status = run.get("status", "")
+        if status not in ("awaiting_confirmation", "completed"):
+            raise ValueError(f"当前状态 {status} 不支持确认执行")
+        project_id = run.get("project_id")
+        new_run = self.start(
+            objective=run.get("objective", ""),
+            parent_run_id=run_id,
+            project_id=project_id,
+            mode="auto",
+        )
+        return {"run_id": new_run.get("id"), "message": "计划已确认，开始执行"}
         with self._lock:
             return run_id in self._cancel_events
 
@@ -533,7 +571,12 @@ class RunManager:
                 )
             )
             final_answer = output.get("final_answer", "")
-            status = "cancelled" if cancel_event.is_set() else "completed"
+            if cancel_event.is_set():
+                status = "cancelled"
+            elif project_mode == "interactive" and not final_answer:
+                status = "awaiting_confirmation"
+            else:
+                status = "completed"
             # 长期记忆：运行结束后用 LangMem 提取跨会话记忆
             if memory_manager and conversation_id:
                 try:
