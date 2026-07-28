@@ -5,7 +5,6 @@ from app.agents.skill_registry import SkillRegistry
 from app.config import Settings
 from app.services.config_reader import ConfigReader
 from app.services.project_manager import ProjectManager
-from app.storage.sqlite_store import SQLiteStore
 
 
 def test_new_project_uses_named_workspace_directory(tmp_path: Path):
@@ -16,10 +15,7 @@ def test_new_project_uses_named_workspace_directory(tmp_path: Path):
     repository = Path(__file__).resolve().parents[2]
     shutil.copytree(repository / "templates", workspace / "templates")
     reader = ConfigReader(workspace)
-    manager = ProjectManager(
-        SQLiteStore(tmp_path / "system.db"),
-        config_reader=reader,
-    )
+    manager = ProjectManager(config_reader=reader)
 
     project = manager.create_project(
         "Commerce Platform",
@@ -43,7 +39,7 @@ def test_new_project_uses_named_workspace_directory(tmp_path: Path):
     assert (project_dir / "flows" / "feature-implement.yaml").is_file()
 
 
-def test_current_project_selects_project_database(tmp_path: Path):
+def test_current_project_selects_project_rag_database(tmp_path: Path):
     workspace = tmp_path / "studio"
     current = workspace / ".workspace" / "current-project.yaml"
     current.parent.mkdir(parents=True)
@@ -52,7 +48,7 @@ def test_current_project_selects_project_database(tmp_path: Path):
     settings = Settings(workspace_root=workspace)
 
     assert settings.database_path == (
-        workspace / ".workspace" / "alpha-project" / "db" / "agents-manager.db"
+        workspace / ".workspace" / "alpha-project" / "db" / "rag.db"
     )
 
 

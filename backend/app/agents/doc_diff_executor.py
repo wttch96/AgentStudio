@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from app.domain.models import AgentResult, DagTask
-from app.services.blackboard_store import BlackboardStore
+from app.services.blackboard_state import BlackboardStateOps
 
 
 class DocDiffAgentExecutor:
@@ -31,10 +31,10 @@ class DocDiffAgentExecutor:
 
     def __init__(
         self,
-        blackboard_store: BlackboardStore,
+        blackboard: BlackboardStateOps,
         claude_executor: Any = None,
     ) -> None:
-        self._blackboard = blackboard_store
+        self._blackboard = blackboard
         self._claude = claude_executor
 
     def execute(
@@ -64,10 +64,10 @@ class DocDiffAgentExecutor:
             current_content = abs_path.read_text(encoding="utf-8")
 
         # 3. 读取旧版本
-        previous_content = self._blackboard.read(run_id, source_key)
+        previous_content = self._blackboard.read(source_key)
         if previous_content is None:
             # 没有旧版本，认为是首次检查
-            self._blackboard.write(run_id, source_key, current_content, "doc-diff")
+            self._blackboard.write(source_key, current_content, "doc-diff")
             return AgentResult(
                 task_id=task.id,
                 agent=task.agent,
@@ -90,10 +90,10 @@ class DocDiffAgentExecutor:
             diff_report = self._plain_diff(current_content, prev_text, file_path)
 
         # 5. 存储报告
-        self._blackboard.write(run_id, output_key, diff_report, "doc-diff")
+        self._blackboard.write(output_key, diff_report, "doc-diff")
 
         # 6. 更新快照为最新版本
-        self._blackboard.write(run_id, source_key, current_content, "doc-diff")
+        self._blackboard.write(source_key, current_content, "doc-diff")
 
         return AgentResult(
             task_id=task.id,

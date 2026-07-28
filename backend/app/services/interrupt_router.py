@@ -8,13 +8,13 @@ from datetime import datetime, timezone
 
 from app.domain.models import InterruptAction, InterruptCommand, InterruptTarget
 from app.events.publisher import EventPublisher
-from app.storage.sqlite_store import SQLiteStore
+from app.storage.runtime_store import RuntimeStore
 
 
 class InterruptRouter:
     """管理中断指令队列和执行信号。"""
 
-    def __init__(self, store: SQLiteStore, events: EventPublisher) -> None:
+    def __init__(self, store: RuntimeStore, events: EventPublisher) -> None:
         self.store = store
         self.events = events
         self._queues: dict[str, list[InterruptCommand]] = {}  # run_id -> pending

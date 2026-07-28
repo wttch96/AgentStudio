@@ -7,6 +7,8 @@ import yaml
 from app import create_app
 from app.config import Settings
 
+from fixtures.logger_fixture import logger  # noqa: F401
+
 
 @pytest.fixture()
 def app(tmp_path: Path):

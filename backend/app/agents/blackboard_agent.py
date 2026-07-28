@@ -12,7 +12,7 @@ import threading
 from datetime import datetime, timezone
 
 from app.domain.models import AgentResult, DagTask
-from app.services.blackboard_store import BlackboardStore
+from app.services.blackboard_state import BlackboardStateOps
 
 
 class BlackboardAgentExecutor:
@@ -27,8 +27,8 @@ class BlackboardAgentExecutor:
         r"\{\{\s*blackboard\.delete\s*\(\s*['\"](\w+)['\"]\s*\)\s*\}\}"
     )
 
-    def __init__(self, blackboard_store: BlackboardStore) -> None:
-        self._blackboard = blackboard_store
+    def __init__(self, blackboard: BlackboardStateOps) -> None:
+        self._blackboard = blackboard
 
     def execute(
         self,
@@ -55,14 +55,14 @@ class BlackboardAgentExecutor:
                 value = json.loads(raw_value)
             except (json.JSONDecodeError, ValueError):
                 value = raw_value.strip("'\"")
-            self._blackboard.write(run_id, key, value, task.agent)
+            self._blackboard.write(key, value, task.agent)
             updates[key] = str(value)[:200]
             messages.append(f"blackboard.{key} = {value}")
 
         # 2. 解析 delete 指令
         for m in self._DELETE_PATTERN.finditer(objective):
             key = m.group(1)
-            self._blackboard.write(run_id, key, None, task.agent)
+            self._blackboard.write(key, None, task.agent)
             messages.append(f"blackboard.{key} deleted")
 
         summary = "; ".join(messages) if messages else "黑板操作完成"

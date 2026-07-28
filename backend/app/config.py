@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import logging
+from logging import Logger
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,7 +12,10 @@ from dotenv import load_dotenv
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
+# WORKSPACE_ROOT 由 Settings.workspace_root 覆盖，默认是 BACKEND_ROOT.parent。
 WORKSPACE_ROOT = BACKEND_ROOT.parent
+
+WORKSPACE_NAME = ".workspace"
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,28 +46,30 @@ class Settings:
     max_graph_iterations: int = 30
     max_replan_iterations: int = 5
     max_task_revisions: int = 2
+    # 可以被覆盖，默认是 WORKSPACE_ROOT，backend的父目录。
     workspace_root: Path = WORKSPACE_ROOT
-    # Explicit override is useful for tests and embedded deployments. Runtime
-    # installations normally leave it unset so storage follows current-project.yaml.
+    # 显式覆盖对测试和嵌入式部署很有用。运行时安装通常不设置它，以便存储跟随 `current-project.yaml`。
     instance_dir: Path | None = None
+
+    _logger: Logger = logging.getLogger(__name__)
 
     @property
     def data_dir(self) -> Path:
         """数据库存放目录。
 
         数据库跟随当前项目，保存在 .workspace/<current-project>/db/ 下。
-        从 current-project.yaml 读取当前项目名；无项目时使用 .workspace/.system/db/。
+        从 current-project.yaml 读取当前项目名；
         """
         if self.instance_dir is not None:
             return Path(self.instance_dir)
         current = self._read_current_project()
         if current:
-            return self.workspace_root / ".workspace" / current / "db"
-        return self.workspace_root / ".workspace" / ".system" / "db"
+            return self.workspace_root / WORKSPACE_NAME / current / "db"
+        return self.workspace_root / WORKSPACE_NAME / ".system" / "db"
 
     def _read_current_project(self) -> str:
         """从 .workspace/current-project.yaml 读取当前项目名称。"""
-        yaml_path = self.workspace_root / ".workspace" / "current-project.yaml"
+        yaml_path = self.workspace_root / WORKSPACE_NAME / "current-project.yaml"
         if not yaml_path.is_file():
             return ""
         try:
@@ -73,8 +80,24 @@ class Settings:
             return ""
 
     @property
+    def project_data_dir(self) -> Path:
+        """当前项目的数据目录, 一般在 .workspace/<current-project>/ 下。"""
+        if self.instance_dir is not None:
+            return Path(self.instance_dir)
+        current = self._read_current_project()
+        if current:
+            return self.workspace_root / ".workspace" / current
+        return self.workspace_root / ".workspace" / ".system"
+
+    @property
     def database_path(self) -> Path:
-        return self.data_dir / "agents-manager.db"
+        """SQLite is reserved for the RAG full-text/vector index only."""
+        return self.project_data_dir / "db" / "rag.db"
+
+    @property
+    def runtime_dir(self) -> Path:
+        """Runtime records live directly below the current project directory."""
+        return self.project_data_dir
 
     @property
     def demo_mode(self) -> bool:
@@ -131,3 +154,6 @@ class Settings:
             max_replan_iterations=max(1, int(os.getenv("MAX_REPLAN_ITERATIONS", "3"))),
             max_task_revisions=max(1, int(os.getenv("MAX_TASK_REVISIONS", "2"))),
         )
+
+# 单例化配置对象，供全局使用。
+settings = Settings.from_env()

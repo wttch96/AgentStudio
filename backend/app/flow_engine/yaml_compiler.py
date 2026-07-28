@@ -38,8 +38,8 @@ from app.flow_engine.model import (
     ParallelBlock,
 )
 from app.flow_engine.templates import FlowTemplateRenderer
-from app.services.blackboard_store import BlackboardStore
-from app.agents.todo_agent import TodoStore
+from app.services.blackboard_state import BlackboardStateOps
+from app.services.todo_state import TodoStateOps
 
 
 # ------------------------------------------------------------------
@@ -88,6 +88,8 @@ class FlowGraphState(TypedDict, total=False):
     results: Annotated[list[dict[str, Any]], operator.add]
     context_results: list[dict[str, Any]]  # read-only results copied into Send branches
     blackboard: dict[str, Any]          # serialized BlackboardState
+    blackboard_revision: int
+    todos: dict[str, Any]
     loop_counters: dict[str, int]       # loop_id → remaining iterations
     cancel_event_ref: str               # reserved for interrupt support
     final_answer: str
@@ -109,8 +111,6 @@ class YamlCompiler:
         file_agent_executor: Any = None,
         events: EventPublisher | None = None,
         flow_store: Any = None,
-        blackboard_store: BlackboardStore | None = None,
-        todo_store: TodoStore | None = None,
         template_renderer: FlowTemplateRenderer | None = None,
     ) -> None:
         self.executor = executor
@@ -119,8 +119,6 @@ class YamlCompiler:
         self.file_agent_executor = file_agent_executor
         self.events = events
         self.flow_store = flow_store
-        self.blackboard_store = blackboard_store
-        self.todo_store = todo_store
         self.template_renderer = template_renderer or FlowTemplateRenderer()
 
     # ------------------------------------------------------------------
@@ -414,15 +412,14 @@ class YamlCompiler:
         deps: list[AgentResult] = []
 
         # Add blackboard snapshot
-        if self.blackboard_store:
-            bb_data = self.blackboard_store.read_all(run_id)
-            if bb_data:
-                deps.append(AgentResult(
-                    task_id="blackboard-snapshot",
-                    agent="system",
-                    status="completed",
-                    summary=json.dumps(bb_data, ensure_ascii=False),
-                ))
+        bb_data = BlackboardStateOps(state).read_all()
+        if bb_data:
+            deps.append(AgentResult(
+                task_id="blackboard-snapshot",
+                agent="system",
+                status="completed",
+                summary=json.dumps(bb_data, ensure_ascii=False),
+            ))
 
         # Render the objective template
         available_results = [
@@ -448,7 +445,7 @@ class YamlCompiler:
         )
 
         # Select executor
-        active_executor = self._resolve_executor(node.agent, project_id)
+        active_executor = self._resolve_executor(node.agent, project_id, state)
         max_turns = node.max_turns
         timeout_s = node.timeout_seconds
 
@@ -461,8 +458,7 @@ class YamlCompiler:
                 agent_id=node.agent, task_id=node.id,
                 payload={"title": node.title, "objective": rendered, "started_at": started_at},
             )
-        if self.todo_store:
-            self.todo_store.update_status(run_id, node.id, "in_progress", node.agent)
+        TodoStateOps(state).update_status(node.id, "in_progress", node.agent)
 
         try:
             result = active_executor.execute(
@@ -487,13 +483,7 @@ class YamlCompiler:
         if result is not None:
             result.started_at = started_at
             result.duration_ms = duration_ms
-            if self.todo_store:
-                self.todo_store.apply_result(
-                    run_id,
-                    node.id,
-                    result.model_dump(),
-                    node.agent,
-                )
+            TodoStateOps(state).apply_result(node.id, result.model_dump(), node.agent)
 
         if self.events:
             self.events.emit(
@@ -503,7 +493,12 @@ class YamlCompiler:
                 payload={**(result.model_dump() if result else {}), "duration_ms": duration_ms},
             )
 
-        return {"results": [result.model_dump()] if result else []}
+        return {
+            "results": [result.model_dump()] if result else [],
+            "blackboard": state.get("blackboard", {}),
+            "blackboard_revision": state.get("blackboard_revision", 0),
+            "todos": state.get("todos", {}),
+        }
 
     def _make_synthesize_node(self, flow: FlowDefinition) -> Callable:
         """Create the final synthesize node."""
@@ -541,9 +536,7 @@ class YamlCompiler:
     def _eval_condition(self, state: FlowGraphState, condition: ConditionBlock | LoopBlock) -> bool:
         """Evaluate a Jinja2 condition against the current blackboard state."""
         cond_str = condition.condition
-        blackboard_data = state.get("blackboard", {})
-        if self.blackboard_store and state.get("run_id"):
-            blackboard_data = self.blackboard_store.read_all(state["run_id"])
+        blackboard_data = BlackboardStateOps(state).read_all()
         loop_counters = state.get("loop_counters", {})
         results = {
             item["task_id"]: item
@@ -566,7 +559,9 @@ class YamlCompiler:
     # Executor Resolution
     # ------------------------------------------------------------------
 
-    def _resolve_executor(self, agent_name: str, project_id: str) -> Any:
+    def _resolve_executor(
+        self, agent_name: str, project_id: str, state: FlowGraphState
+    ) -> Any:
         """Select the right executor based on agent name/type."""
         # Try registry lookup
         if self.executor and hasattr(self.executor, "registry"):
@@ -581,7 +576,7 @@ class YamlCompiler:
                     return self.file_agent_executor
                 if agent_type == "blackboard":
                     from app.agents.blackboard_agent import BlackboardAgentExecutor
-                    return BlackboardAgentExecutor(self.blackboard_store)
+                    return BlackboardAgentExecutor(BlackboardStateOps(state))
             except (ValueError, Exception):
                 pass
         return self.executor

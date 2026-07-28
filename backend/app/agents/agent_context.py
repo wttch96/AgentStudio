@@ -244,12 +244,8 @@ class AgentContextBuilder:
 
     def __init__(
         self,
-        blackboard_store: Any = None,
-        todo_store: Any = None,
         agent_registry: Any = None,
     ) -> None:
-        self._bb = blackboard_store
-        self._todo = todo_store
         self._registry = agent_registry
 
     def build(
@@ -259,8 +255,6 @@ class AgentContextBuilder:
         agent_profile: Any = None,
     ) -> AgentExecutionContext:
         """从 GraphState 和 DagTask 构建完整上下文。"""
-        run_id = state.get("run_id", "")
-
         # Agent 信息
         agent_name = task.agent
         agent_type = "claude"
@@ -295,25 +289,16 @@ class AgentContextBuilder:
         ]
 
         # 看板快照
-        board_snapshot: dict[str, Any] = {}
-        if self._bb is not None:
-            try:
-                board_snapshot = self._bb.read_all(run_id)
-            except Exception:
-                pass
+        from app.services.blackboard_state import BlackboardStateOps
+        from app.services.todo_state import TodoStateOps
+
+        board_snapshot = BlackboardStateOps(state).read_all()
 
         # 看板中当前任务信息
         board_task: dict[str, Any] | None = None
-        if self._todo is not None:
-            try:
-                todos = self._todo.list(run_id)
-                for t in todos:
-                    td = t.model_dump() if hasattr(t, "model_dump") else t
-                    if td.get("id") == task.id:
-                        board_task = td
-                        break
-            except Exception:
-                pass
+        current_todo = TodoStateOps(state).get(task.id)
+        if current_todo is not None:
+            board_task = current_todo.model_dump()
 
         # 已有决策
         decisions_raw = board_snapshot.get("all_reviews", [])

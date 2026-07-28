@@ -33,6 +33,8 @@ from app.agents.claude_executor import ClaudeAgentExecutor
 from app.domain.models import AgentResult, DagTask, TaskDag, ReviewDecision
 from app.events.publisher import EventPublisher
 from app.planning.deepseek_planner import DeepSeekPlanner
+from app.services.blackboard_state import BlackboardStateOps
+from app.services.todo_state import TodoStateOps
 from typing import Protocol
 
 
@@ -41,6 +43,15 @@ class AgentExecutorProtocol(Protocol):
                 cancel_event: threading.Event, workspace_root: str,
                 max_turns: int | None = None, timeout_seconds: int | None = None,
                 project_id: str | None = None) -> AgentResult: ...
+
+
+def merge_state_mapping(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+    """Merge parallel node updates for mapping-shaped graph state."""
+    return {**(left or {}), **(right or {})}
+
+
+def merge_revision(left: int, right: int) -> int:
+    return max(left or 0, right or 0)
 
 
 class GraphState(TypedDict, total=False):
@@ -63,7 +74,9 @@ class GraphState(TypedDict, total=False):
     project_mode: str
     final_answer: str
     session_summary: str
-    blackboard: dict[str, Any]
+    blackboard: Annotated[dict[str, Any], merge_state_mapping]
+    blackboard_revision: Annotated[int, merge_revision]
+    todos: Annotated[dict[str, Any], merge_state_mapping]
     flow_name: str | None
     flow_inputs: dict[str, Any]
     # ── 增强字段 ──
@@ -87,8 +100,6 @@ def build_graph(
     rag_executor=None,
     file_agent_executor=None,
     chat_executor=None,
-    blackboard_store: object | None = None,
-    todo_store: object | None = None,
     yaml_compiler: object | None = None,
     flow_store: object | None = None,
     # ── 新增可选组件 ──
@@ -152,12 +163,9 @@ def build_graph(
         from app.orchestration.concurrency import NoOpConflictDetector
         conflict_detector = NoOpConflictDetector()
 
-    if context_builder is None and blackboard_store is not None:
+    if context_builder is None:
         from app.agents.agent_context import AgentContextBuilder
-        context_builder = AgentContextBuilder(
-            blackboard_store=blackboard_store,
-            todo_store=todo_store,
-        )
+        context_builder = AgentContextBuilder()
 
     # ═══════════════════════════════════════════════════════════════
     # 节点
@@ -212,12 +220,11 @@ def build_graph(
         events.emit(run_id, "plan.created",
                     payload={**dag.model_dump(), "stage": stage, "llm_input": llm_input})
 
-        # Blackboard + Todo 初始化
-        if blackboard_store is not None:
-            blackboard_store.init(run_id)
-        if todo_store is not None and dag.tasks:
+        # Blackboard + Todo are part of LangGraph State.
+        BlackboardStateOps(state).init()
+        if dag.tasks:
             try:
-                todo_store.init(run_id, [
+                TodoStateOps(state).init([
                     {**t.model_dump(), "content": t.title, "assigned_to": t.agent}
                     for t in dag.tasks
                 ])
@@ -243,6 +250,8 @@ def build_graph(
             "results": [],
             "stage": stage,
             "blackboard": {},
+            "blackboard_revision": 0,
+            "todos": state.get("todos", {}),
             "flow_name": None,
             "flow_inputs": {},
             "iteration_count": 0,
@@ -516,11 +525,10 @@ def build_graph(
         agent_type = _resolve_agent_type(task.agent)
 
         if agent_type == "todo":
-            if todo_store is not None:
-                try:
-                    todo_store.update_status(state["run_id"], task.id, "in_progress", task.agent)
-                except Exception:
-                    pass
+            try:
+                TodoStateOps(state).update_status(task.id, "in_progress", task.agent)
+            except Exception:
+                pass
             result = AgentResult(
                 task_id=task.id, agent=task.agent, status="completed",
                 summary=f"Todo [{task.title}] 已更新",
@@ -529,7 +537,7 @@ def build_graph(
         elif agent_type == "blackboard":
             try:
                 from app.agents.blackboard_agent import BlackboardAgentExecutor
-                bb_executor = BlackboardAgentExecutor(blackboard_store)
+                bb_executor = BlackboardAgentExecutor(BlackboardStateOps(state))
                 result = bb_executor.execute(
                     state["run_id"], task, dependencies,
                     cancel_event, state["workspace_root"],
@@ -544,7 +552,7 @@ def build_graph(
         elif agent_type == "doc-diff":
             try:
                 from app.agents.doc_diff_executor import DocDiffAgentExecutor
-                dd_executor = DocDiffAgentExecutor(blackboard_store, executor)
+                dd_executor = DocDiffAgentExecutor(BlackboardStateOps(state), executor)
                 result = dd_executor.execute(
                     state["run_id"], task, dependencies,
                     cancel_event, state["workspace_root"],
@@ -629,45 +637,35 @@ def build_graph(
                         payload=result.model_dump())
 
         # ── 结果写回看板 ──
-        if blackboard_store is not None and result is not None:
+        if result is not None:
             try:
-                blackboard_store.write(
-                    state["run_id"], f"result:{task.id}",
-                    result.model_dump(), task.agent,
-                )
+                board = BlackboardStateOps(state)
+                board.write(f"result:{task.id}", result.model_dump(), task.agent)
                 for artifact in result.artifacts:
-                    blackboard_store.write(
-                        state["run_id"],
-                        f"artifact:{task.id}:{len(blackboard_store.read_all(state['run_id']))}",
-                        artifact,
-                        task.agent,
-                    )
+                    board.write(f"artifact:{task.id}:{len(board.read_all())}", artifact, task.agent)
                 for decision in result.decisions:
-                    blackboard_store.write(
-                        state["run_id"],
-                        f"decision:{task.id}:{len(blackboard_store.read_all(state['run_id']))}",
-                        decision,
-                        task.agent,
-                    )
-                all_results = blackboard_store.read(state["run_id"], "all_results") or []
+                    board.write(f"decision:{task.id}:{len(board.read_all())}", decision, task.agent)
+                all_results = board.read("all_results") or []
                 all_results.append({
                     "task_id": task.id, "agent": task.agent,
                     "status": result.status, "summary": result.summary[:300],
                 })
-                blackboard_store.write(state["run_id"], "all_results", all_results, "system")
+                board.write("all_results", all_results, "system")
             except Exception:
                 pass
 
         # ── Todo 状态更新 ──
-        if todo_store is not None:
-            try:
-                todo_store.apply_result(
-                    state["run_id"], task.id, result.model_dump(), task.agent
-                )
-            except Exception:
-                pass
+        try:
+            TodoStateOps(state).apply_result(task.id, result.model_dump(), task.agent)
+        except Exception:
+            pass
 
-        return {"results": [result.model_dump()] if result else []}
+        return {
+            "results": [result.model_dump()] if result else [],
+            "blackboard": state.get("blackboard", {}),
+            "blackboard_revision": state.get("blackboard_revision", 0),
+            "todos": state.get("todos", {}),
+        }
 
     def barrier(state: GraphState) -> GraphState:
         active_task_ids = state.get("active_task_ids", [])
@@ -712,21 +710,20 @@ def build_graph(
             "decisions": [{"task_id": r.task_id, "decision": r.status.value}
                           for r in review_results],
         })
-        if todo_store is not None:
-            for item in review_results:
-                status_map = {
+        for item in review_results:
+            status_map = {
                     ReviewDecision.ACCEPTED: "completed",
                     ReviewDecision.ACCEPTED_WITH_RISKS: "completed",
                     ReviewDecision.BLOCKED: "blocked",
                     ReviewDecision.REJECTED: "failed",
                     ReviewDecision.REVISION_REQUIRED: "review",
-                }
-                try:
-                    todo_store.update_status(
-                        run_id, item.task_id, status_map[item.status], "reviewer"
-                    )
-                except Exception:
-                    pass
+            }
+            try:
+                TodoStateOps(state).update_status(
+                    item.task_id, status_map[item.status], "reviewer"
+                )
+            except Exception:
+                pass
 
         needs_replan = reviewer.should_replan(review_results)
 
@@ -736,14 +733,12 @@ def build_graph(
                 "max_replan": max_replan_iterations,
             })
             # 持久化审查结果供 replan 节点使用
-            if blackboard_store is not None:
-                try:
-                    blackboard_store.write(
-                        run_id, "review_decisions",
-                        [r.model_dump() for r in review_results], "reviewer",
-                    )
-                except Exception:
-                    pass
+            try:
+                BlackboardStateOps(state).write(
+                    "review_decisions", [r.model_dump() for r in review_results], "reviewer"
+                )
+            except Exception:
+                pass
             return {
                 "review_results": [r.model_dump() for r in review_results],
                 "stage": "replan_requested",
@@ -817,16 +812,15 @@ def build_graph(
                 })
 
                 # 更新 Todo
-                if todo_store is not None:
-                    try:
-                        for rt in revision_tasks:
-                            todo_store.add(run_id, {
+                try:
+                    for rt in revision_tasks:
+                        TodoStateOps(state).add({
                                 "id": rt.id, "content": rt.title,
                                 "assigned_to": rt.agent,
                                 "depends_on": rt.depends_on,
-                            }, "planner")
-                    except Exception:
-                        pass
+                        }, "planner")
+                except Exception:
+                    pass
 
                 return {
                     "dag": new_dag.model_dump(),
@@ -949,8 +943,7 @@ def build_graph(
             "node_count": len(flow.nodes),
         })
 
-        if blackboard_store is not None:
-            blackboard_store.init(state["run_id"])
+        BlackboardStateOps(state).init()
 
         try:
             compiled_graph = yaml_compiler.compile(flow)
@@ -1006,17 +999,16 @@ def build_graph(
                 task_id="upstream-conversation", agent="system",
                 status="completed", summary=context[-6000:],
             ))
-        if blackboard_store is not None:
-            try:
-                bb_data = blackboard_store.read_all(state["run_id"])
-                if bb_data:
-                    deps.append(AgentResult(
-                        task_id="blackboard-snapshot", agent="system",
-                        status="completed",
-                        summary=json.dumps(bb_data, ensure_ascii=False),
-                    ))
-            except Exception:
-                pass
+        try:
+            bb_data = BlackboardStateOps(state).read_all()
+            if bb_data:
+                deps.append(AgentResult(
+                    task_id="blackboard-snapshot", agent="system",
+                    status="completed",
+                    summary=json.dumps(bb_data, ensure_ascii=False),
+                ))
+        except Exception:
+            pass
         return deps
 
     def replan_after_discovery(state: GraphState) -> GraphState:
@@ -1062,20 +1054,15 @@ def build_graph(
         if combined_dag.coordination_contract:
             events.emit(run_id, "brain.contract_created",
                         payload={"text": combined_dag.coordination_contract})
-        if todo_store is not None:
-            try:
-                for task in implementation_tasks:
-                    todo_store.add(
-                        run_id,
-                        {
+        try:
+            for task in implementation_tasks:
+                TodoStateOps(state).add({
                             **task.model_dump(),
                             "content": task.title,
                             "assigned_to": task.agent,
-                        },
-                        "planner",
-                    )
-            except Exception:
-                pass
+                    }, "planner")
+        except Exception:
+            pass
         events.emit(run_id, "plan.created",
                     payload={**combined_dag.model_dump(), "stage": "execution",
                              "llm_input": replan_llm_input})

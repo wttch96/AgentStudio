@@ -400,14 +400,18 @@ def test_removed_retry_command_is_rejected(client):
 
 
 def test_single_task_can_be_aborted_without_cancelling_run(client):
+    from app.services.todo_state import TodoStateOps
+
     services = client.application.extensions["services"]
     run = services.store.create_run("task-abort-run", "并行任务", "/tmp")
-    services.todo_store.init(run["id"], [{
+    state = {"run_id": run["id"], "todos": {}, "blackboard": {}}
+    TodoStateOps(state).init([{
         "id": "frontend-task",
         "content": "实现前端",
         "assigned_to": "vue-frontend",
         "status": "in_progress",
     }])
+    services.runs.save_graph_state(run["id"], state)
 
     response = client.post(
         f"/api/runs/{run['id']}/interrupt",
@@ -416,7 +420,8 @@ def test_single_task_can_be_aborted_without_cancelling_run(client):
 
     assert response.status_code == 202
     assert services.interrupt_router.is_task_aborted(run["id"], "frontend-task")
-    assert services.todo_store.get(run["id"], "frontend-task").status == "cancelled"
+    saved = services.runs.load_graph_state(run["id"])
+    assert TodoStateOps(saved).get("frontend-task").status == "cancelled"
 
 
 def test_terminal_run_can_be_deleted_with_all_events(client):
@@ -435,7 +440,7 @@ def test_terminal_run_can_be_deleted_with_all_events(client):
     assert client.get(f"/api/runs/{run_id}").status_code == 404
 
     services = client.application.extensions["services"]
-    assert services.store.list_events(run_id) == []
+    assert services.events.list_events(run_id) == []
 
 
 def test_active_run_must_not_be_deleted(client):

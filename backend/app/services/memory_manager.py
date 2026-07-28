@@ -18,7 +18,7 @@ from langmem import create_memory_store_manager, create_thread_extractor
 from app.config import Settings
 from app.domain.configuration import MemoryConfiguration
 from app.domain.models import MemoryLevel
-from app.storage.sqlite_store import SQLiteStore
+from app.storage.runtime_store import RuntimeStore
 
 
 # LangMem 记忆提取 prompt — 从对话中提取长期有价值的记忆
@@ -77,7 +77,7 @@ class MemoryManager:
     def __init__(
         self,
         settings: Settings,
-        store: SQLiteStore,
+        store: RuntimeStore,
         memory_config: MemoryConfiguration,
     ) -> None:
         self.settings = settings

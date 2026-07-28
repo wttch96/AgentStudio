@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.storage.sqlite_store import SQLiteStore
 
 
 class AgentProfile:
@@ -49,8 +48,7 @@ class AgentProfile:
 class AgentRegistry:
     """从文件系统加载 Agent 配置。"""
 
-    def __init__(self, store: SQLiteStore, config_reader=None) -> None:
-        self.store = store
+    def __init__(self, config_reader=None) -> None:
         self.config_reader = config_reader
         self._cache: dict[str, dict[str, AgentProfile]] = {}  # project_id -> {name: profile}
 

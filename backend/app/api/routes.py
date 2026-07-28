@@ -33,7 +33,9 @@ from app.domain.models import (
     KnowledgeRelation,
 )
 from app.services.container import ServiceContainer
-from app.storage.sqlite_store import TERMINAL_STATUSES
+from app.services.blackboard_state import BlackboardStateOps
+from app.services.todo_state import TodoStateOps
+from app.storage.runtime_store import TERMINAL_STATUSES
 
 
 api = Blueprint("api", __name__)
@@ -41,6 +43,14 @@ api = Blueprint("api", __name__)
 
 def services() -> ServiceContainer:
     return current_app.extensions["services"]
+
+
+def graph_state(run_id: str) -> dict:
+    return services().runs.load_graph_state(run_id)
+
+
+def save_graph_state(run_id: str, state: dict) -> None:
+    services().runs.save_graph_state(run_id, state)
 
 
 @api.get("/status")
@@ -352,7 +362,7 @@ def get_run(run_id: str):
     run = services().store.get_run(run_id)
     if not run:
         return jsonify({"error": "运行不存在"}), 404
-    run["events"] = services().store.list_events(run_id)
+    run["events"] = services().events.list_events(run_id)
     # 如果是多轮对话，附加上下文 runs
     conversation_id = run.get("conversation_id")
     if conversation_id:
@@ -380,7 +390,7 @@ def get_conversation(conversation_id: str):
         return jsonify({"error": "对话不存在"}), 404
     items = []
     for run in runs:
-        events = services().store.list_events(run["id"])
+        events = services().events.list_events(run["id"])
         items.append({
             "id": run["id"],
             "objective": run["objective"],
@@ -405,12 +415,13 @@ def delete_run(run_id: str):
     # 数据库可能保留重启前的 running 状态；没有当前进程 worker 时可安全删除。
     result = services().store.delete_run(
         run_id,
-        allow_orphaned_active=not services().runs.is_active(run_id),
+        allow_orphaned_active=False,
     )
     if result == "not_found":
         return jsonify({"error": "运行不存在"}), 404
     if result == "active":
         return jsonify({"error": "运行仍在执行，请先停止并等待任务结束"}), 409
+    services().runs.delete_runtime_state(run_id)
     return "", 204
 
 
@@ -421,7 +432,7 @@ def index_run_to_knowledge(run_id: str):
     if not run:
         return jsonify({"error": "运行不存在"}), 404
 
-    events = services().store.list_events(run_id)
+    events = services().events.list_events(run_id)
     project_id = run.get("project_id", "")
     # 尝试从 workspace 读取当前项目 ID 作为 fallback
     if not project_id:
@@ -531,7 +542,7 @@ def fork_run(run_id: str):
 @api.get("/runs/<run_id>/events")
 def list_events(run_id: str):
     after = max(0, request.args.get("after", default=0, type=int))
-    return jsonify({"items": services().store.list_events(run_id, after)})
+    return jsonify({"items": services().events.list_events(run_id, after)})
 
 
 # ==================== 记忆配置 ====================
@@ -660,7 +671,7 @@ def get_blackboard(run_id: str):
     if not services().store.get_run(run_id):
         return jsonify({"error": "运行不存在"}), 404
     try:
-        state = services().blackboard_store.snapshot(run_id)
+        state = BlackboardStateOps(graph_state(run_id)).snapshot(run_id)
         return jsonify({
             "run_id": state.run_id,
             "entries": {
@@ -687,7 +698,7 @@ def get_todos(run_id: str):
     if not services().store.get_run(run_id):
         return jsonify({"error": "运行不存在"}), 404
     try:
-        todos = services().todo_store.list(run_id)
+        todos = TodoStateOps(graph_state(run_id)).list()
         return jsonify({"items": [t.model_dump() for t in todos]})
     except Exception as exc:
         return jsonify({"error": f"获取 Todo 列表失败: {exc}"}), 500
@@ -701,9 +712,11 @@ def update_todo(run_id: str, todo_id: str):
     try:
         data = request.get_json(silent=True) or {}
         status = data.get("status", "completed")
-        todo = services().todo_store.update_status(run_id, todo_id, status)
+        state = graph_state(run_id)
+        todo = TodoStateOps(state).update_status(todo_id, status)
         if todo is None:
             return jsonify({"error": f"Todo {todo_id} 不存在"}), 404
+        save_graph_state(run_id, state)
         return jsonify(todo.model_dump())
     except Exception as exc:
         return jsonify({"error": f"更新 Todo 失败: {exc}"}), 500
@@ -711,7 +724,7 @@ def update_todo(run_id: str, todo_id: str):
 
 @api.get("/runs/<run_id>/todos/<todo_id>")
 def get_todo(run_id: str, todo_id: str):
-    todo = services().todo_store.get(run_id, todo_id)
+    todo = TodoStateOps(graph_state(run_id)).get(todo_id)
     if todo is None:
         return jsonify({"error": "任务不存在"}), 404
     return jsonify(todo.model_dump())
@@ -719,7 +732,7 @@ def get_todo(run_id: str, todo_id: str):
 
 @api.get("/runs/<run_id>/todos/<todo_id>/related")
 def get_related_todos(run_id: str, todo_id: str):
-    related = services().todo_store.related(run_id, todo_id)
+    related = TodoStateOps(graph_state(run_id)).related(todo_id)
     return jsonify({
         key: [item.model_dump() for item in items]
         for key, items in related.items()
@@ -732,22 +745,24 @@ def add_todo_dependency(run_id: str, todo_id: str):
     dependency_id = str(data.get("dependency_id", "")).strip()
     if not dependency_id:
         return jsonify({"error": "缺少 dependency_id"}), 400
-    todo = services().todo_store.add_dependency(run_id, todo_id, dependency_id)
+    state = graph_state(run_id)
+    todo = TodoStateOps(state).add_dependency(todo_id, dependency_id)
     if todo is None:
         return jsonify({"error": "任务或依赖不存在"}), 404
+    save_graph_state(run_id, state)
     return jsonify(todo.model_dump())
 
 
 @api.get("/runs/<run_id>/todos/ready")
 def get_ready_todos(run_id: str):
     return jsonify({
-        "items": [item.model_dump() for item in services().todo_store.ready(run_id)]
+        "items": [item.model_dump() for item in TodoStateOps(graph_state(run_id)).ready()]
     })
 
 
 @api.get("/runs/<run_id>/agent-workload")
 def get_agent_workload(run_id: str):
-    return jsonify({"items": services().todo_store.workload(run_id)})
+    return jsonify({"items": TodoStateOps(graph_state(run_id)).workload()})
 
 
 @api.post("/runs/<run_id>/board/<kind>")
@@ -758,15 +773,17 @@ def append_board_record(run_id: str, kind: str):
     data = request.get_json(silent=True) or {}
     task_id = str(data.get("task_id", "run"))
     key = f"{kind}:{task_id}:{uuid.uuid4().hex[:10]}"
-    entry = services().blackboard_store.write(
-        run_id, key, data, str(data.get("agent", "user"))
-    )
+    state = graph_state(run_id)
+    entry = BlackboardStateOps(state).write(key, data, str(data.get("agent", "user")))
+    save_graph_state(run_id, state)
     return jsonify(entry.model_dump()), 201
 
 
 @api.put("/runs/<run_id>/board/blockers/<path:key>/resolve")
 def resolve_board_blocker(run_id: str, key: str):
-    value = services().blackboard_store.read(run_id, key)
+    state = graph_state(run_id)
+    board = BlackboardStateOps(state)
+    value = board.read(key)
     if value is None or not key.startswith("blocker:"):
         return jsonify({"error": "阻塞记录不存在"}), 404
     resolved = {
@@ -774,7 +791,8 @@ def resolve_board_blocker(run_id: str, key: str):
         "resolved": True,
         "resolved_at": datetime.now(timezone.utc).isoformat(),
     }
-    entry = services().blackboard_store.write(run_id, key, resolved, "user")
+    entry = board.write(key, resolved, "user")
+    save_graph_state(run_id, state)
     return jsonify(entry.model_dump())
 
 
@@ -825,9 +843,11 @@ def send_interrupt(run_id: str):
         command_id = services().interrupt_router.send(command)
 
         if command.target == InterruptTarget.TASK and command.action == InterruptAction.ABORT:
-            services().todo_store.update_status(
-                run_id, command.target_task or "", "cancelled", "user"
+            state = graph_state(run_id)
+            TodoStateOps(state).update_status(
+                command.target_task or "", "cancelled", "user"
             )
+            save_graph_state(run_id, state)
 
         # Flow-specific: handle per-node pause
         target_node = data.get("target_node")
@@ -951,8 +971,8 @@ def add_knowledge_feedback(entry_id: str):
         payload = KnowledgeFeedback.model_validate(request.get_json(silent=True) or {})
     except ValidationError as error:
         return jsonify({"error": "反馈无效", "details": error.errors()}), 400
-    services().knowledge_store.add_feedback(entry_id, payload.feedback)
-    return jsonify({"entry_id": entry_id})
+    score = services().knowledge_store.add_feedback(entry_id, payload.feedback)
+    return jsonify({"entry_id": entry_id, "score": score})
 
 
 @api.get("/knowledge-stats")
@@ -1222,7 +1242,7 @@ def stream_events(run_id: str):
         sequence = after
         idle_ticks = 0
         while True:
-            events = services().store.list_events(run_id, sequence)
+            events = services().events.list_events(run_id, sequence)
             for event in events:
                 sequence = event["sequence"]
                 yield f"id: {sequence}\nevent: run-event\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"

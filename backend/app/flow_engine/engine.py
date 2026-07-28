@@ -22,7 +22,7 @@ from app.events.publisher import EventPublisher
 from app.flow_engine.model import FlowDefinition, FlowNode, FlowTrace
 from app.flow_engine.templates import FlowTemplateRenderer
 from app.services.interrupt_router import InterruptRouter
-from app.storage.sqlite_store import SQLiteStore
+from app.storage.runtime_store import RuntimeStore
 
 
 class FlowEngine:
@@ -32,7 +32,7 @@ class FlowEngine:
         self,
         executor: ClaudeAgentExecutor,
         events: EventPublisher,
-        store: SQLiteStore,
+        store: RuntimeStore,
         flow_store: Any = None,
         rag_executor: RAGAgentExecutor | None = None,
         chat_executor: ChatExecutor | None = None,

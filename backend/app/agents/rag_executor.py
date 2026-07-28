@@ -16,7 +16,7 @@ from app.agents.registry import AgentRegistry
 from app.config import Settings
 from app.domain.models import AgentResult, DagTask
 from app.events.publisher import EventPublisher
-from app.services.knowledge_store import KnowledgeStore
+from app.services.rag._knowledge_store import KnowledgeStore
 
 
 class RAGAgentExecutor:

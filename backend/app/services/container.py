@@ -9,7 +9,6 @@ from app.agents.file_agent_executor import FileAgentExecutor
 from app.agents.rag_executor import RAGAgentExecutor
 from app.agents.registry import AgentRegistry
 from app.agents.skill_registry import SkillRegistry
-from app.agents.todo_agent import TodoStore
 from app.agents.agent_context import AgentContextBuilder
 from app.agents.agent_selector import AgentSelector
 from app.config import Settings
@@ -21,12 +20,11 @@ from app.flow_engine.templates import FlowTemplateRenderer
 from app.orchestration.reviewer import WaveReviewer
 from app.orchestration.concurrency import ConflictDetector
 from app.planning.deepseek_planner import DeepSeekPlanner
-from app.services.blackboard_store import BlackboardStore
 from app.services.brain_settings import BrainSettings
 from app.services.config_reader import ConfigReader
 from app.services.deepseek_balance import DeepSeekBalanceService
 from app.services.interrupt_router import InterruptRouter
-from app.services.knowledge_store import KnowledgeStore
+from app.services.rag._knowledge_store import KnowledgeStore
 from app.services.flow_store import FlowStore
 from app.services.memory_manager import MemoryManager
 from app.services.memory_settings import MemorySettings
@@ -34,7 +32,7 @@ from app.services.project_manager import ProjectManager
 from app.services.run_manager import RunManager
 from app.services.scheduler_settings import SchedulerSettings
 from app.services.workspace_settings import WorkspaceSettings
-from app.storage.sqlite_store import SQLiteStore
+from app.storage.runtime_store import RuntimeStore
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +40,7 @@ logger = logging.getLogger(__name__)
 @dataclass(slots=True)
 class ServiceContainer:
     settings: Settings
-    store: SQLiteStore
+    store: RuntimeStore
     events: EventPublisher
     config_reader: ConfigReader
     registry: AgentRegistry
@@ -61,8 +59,6 @@ class ServiceContainer:
     knowledge_store: KnowledgeStore
     flow_store: FlowStore
     flow_engine: FlowEngine
-    blackboard_store: BlackboardStore
-    todo_store: TodoStore
     yaml_compiler: YamlCompiler
     rag_executor: RAGAgentExecutor | None
     chat_executor: ChatExecutor | None
@@ -82,16 +78,16 @@ class ServiceContainer:
             bool(settings.deepseek_api_key),
             settings.claude_route,
         )
-        store = SQLiteStore(settings.database_path)
+        store = RuntimeStore(settings.runtime_dir)
         recovered = store.recover_interrupted_runs()
         if recovered:
             logger.warning("services.recovered_interrupted_runs count=%s", recovered)
-        events = EventPublisher(store)
+        events = EventPublisher(settings.runtime_dir)
 
         # File-first configuration layer (.workspace/<project-id>/)
         config_reader = ConfigReader(settings.workspace_root)
 
-        registry = AgentRegistry(store, config_reader=config_reader)
+        registry = AgentRegistry(config_reader=config_reader)
         skills = SkillRegistry(
             settings.workspace_root / ".claude" / "skills", config_reader=config_reader
         )
@@ -113,10 +109,9 @@ class ServiceContainer:
             defaults_path=settings.workspace_root / "templates" / "brain.default.json",
         )
         deepseek_balance = DeepSeekBalanceService(settings)
-        knowledge_store = KnowledgeStore(store, settings)
+        knowledge_store = KnowledgeStore()
         flow_store = FlowStore(
             config_reader.current().flows_dir,
-            store=store,
             fallback_dir=settings.workspace_root / "templates" / "flows",
         )
         planner = DeepSeekPlanner(settings, brain, knowledge_store=knowledge_store)
@@ -124,24 +119,19 @@ class ServiceContainer:
         memory_settings = MemorySettings(config_reader=config_reader)
         memory_manager = MemoryManager(settings, store, memory_settings.current())
         interrupt_router = InterruptRouter(store, events)
-        project_manager = ProjectManager(store, config_reader=config_reader)
+        project_manager = ProjectManager(config_reader=config_reader)
         rag_executor = RAGAgentExecutor(settings, registry, events, knowledge_store) if settings.deepseek_api_key else None
         chat_executor = ChatExecutor(settings, registry, events) if settings.deepseek_api_key else None
         file_agent_executor = FileAgentExecutor(settings, registry, events) if settings.deepseek_api_key else None
 
         # ---- New infrastructure: Blackboard + Todo + YamlCompiler ----
-        blackboard_store = BlackboardStore(store)
-        todo_store = TodoStore(blackboard_store)
         # ── 新增组件 ──
         agent_selector = AgentSelector(registry)
         agent_context_builder = AgentContextBuilder(
-            blackboard_store=blackboard_store,
-            todo_store=todo_store,
             agent_registry=registry,
         )
         reviewer = WaveReviewer(
             planner=planner,
-            blackboard_store=blackboard_store,
             events=events,
             enable_llm_review=False,
         )
@@ -155,8 +145,6 @@ class ServiceContainer:
             file_agent_executor=file_agent_executor,
             events=events,
             flow_store=flow_store,
-            blackboard_store=blackboard_store,
-            todo_store=todo_store,
             template_renderer=template_renderer,
         )
 
@@ -176,8 +164,6 @@ class ServiceContainer:
             chat_executor=chat_executor,
             file_agent_executor=file_agent_executor,
             flow_engine=flow_engine,
-            blackboard_store=blackboard_store,
-            todo_store=todo_store,
             yaml_compiler=yaml_compiler,
             flow_store=flow_store,
             reviewer=reviewer,
@@ -207,8 +193,6 @@ class ServiceContainer:
             knowledge_store,
             flow_store,
             flow_engine,
-            blackboard_store,
-            todo_store,
             yaml_compiler,
             rag_executor,
             chat_executor,

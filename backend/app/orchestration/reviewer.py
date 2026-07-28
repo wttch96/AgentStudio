@@ -25,12 +25,10 @@ class WaveReviewer:
     def __init__(
         self,
         planner: Any = None,
-        blackboard_store: Any = None,
         events: Any = None,
         enable_llm_review: bool = False,
     ) -> None:
         self._planner = planner
-        self._bb = blackboard_store
         self._events = events
         self._enable_llm = enable_llm_review
 
@@ -68,15 +66,6 @@ class WaveReviewer:
             review_results.append(review)
 
         # 写回看板
-        if self._bb is not None:
-            try:
-                all_reviews = self._bb.read(run_id, "all_reviews") or []
-                for rr in review_results:
-                    all_reviews.append(rr.model_dump())
-                self._bb.write(run_id, "all_reviews", all_reviews, "reviewer")
-            except Exception:
-                pass
-
         return review_results
 
     def should_replan(self, review_results: list[ReviewResult]) -> bool:

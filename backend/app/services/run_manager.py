@@ -26,7 +26,10 @@ from app.services.memory_manager import MemoryManager
 from app.services.run_commands import RunCommand, parse_run_command
 from app.services.scheduler_settings import SchedulerSettings
 from app.services.workspace_settings import WorkspaceSettings
-from app.storage.sqlite_store import SQLiteStore
+from app.storage.runtime_store import RuntimeStore
+from app.storage.runtime_files import RuntimeFiles
+from app.services.blackboard_state import BlackboardStateOps
+from app.services.todo_state import TodoStateOps
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +55,7 @@ async def _ainvoke_graph(
 class RunManager:
     def __init__(
         self,
-        store: SQLiteStore,
+        store: RuntimeStore,
         events: EventPublisher,
         planner: DeepSeekPlanner,
         executor: ClaudeAgentExecutor,
@@ -64,8 +67,6 @@ class RunManager:
         chat_executor=None,
         file_agent_executor=None,
         flow_engine: Any = None,
-        blackboard_store: Any = None,
-        todo_store: Any = None,
         yaml_compiler: Any = None,
         flow_store: Any = None,
         reviewer: Any = None,
@@ -86,11 +87,10 @@ class RunManager:
         self.chat_executor = chat_executor
         self.file_agent_executor = file_agent_executor
         self.flow_engine = flow_engine
-        self.blackboard_store = blackboard_store
-        self.todo_store = todo_store
         self.yaml_compiler = yaml_compiler
         self.flow_store = flow_store
         self.reviewer = reviewer
+        self.runtime_files = RuntimeFiles(settings.runtime_dir) if settings is not None else None
         self.agent_context_builder = agent_context_builder
         self.conflict_detector = conflict_detector
         self.agent_selector = agent_selector
@@ -98,6 +98,21 @@ class RunManager:
         self._cancel_events: dict[str, threading.Event] = {}
         self._agent_pause_events: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
+
+    def load_graph_state(self, run_id: str) -> dict[str, Any]:
+        if self.runtime_files is None:
+            return {"run_id": run_id, "blackboard": {}, "todos": {}}
+        return self.runtime_files.load_state(run_id) or {
+            "run_id": run_id, "blackboard": {}, "todos": {}
+        }
+
+    def save_graph_state(self, run_id: str, state: dict[str, Any]) -> None:
+        if self.runtime_files is not None:
+            self.runtime_files.save_state(run_id, state)
+
+    def delete_runtime_state(self, run_id: str) -> None:
+        if self.runtime_files is not None:
+            self.runtime_files.delete_run(run_id)
 
     def start(self, objective: str, parent_run_id: str | None = None,
               project_id: str | None = None, flow_name: str | None = None,
@@ -169,7 +184,7 @@ class RunManager:
         sections: list[str] = []
         for run in self.store.run_ancestry(parent_run_id):
             agent_summaries: list[str] = []
-            for event in self.store.list_events(run["id"]):
+            for event in self.events.list_events(run["id"]):
                 if event["type"] not in {"agent.completed", "agent.failed"}:
                     continue
                 payload = event["payload"]
@@ -234,7 +249,7 @@ class RunManager:
 
     def _run_mode(self, run_id: str) -> str:
         """分叉运行沿用源对话已选择的模式。"""
-        for event in reversed(self.store.list_events(run_id)):
+        for event in reversed(self.events.list_events(run_id)):
             if event.get("type") != "conversation.mode":
                 continue
             mode = event.get("payload", {}).get("mode")
@@ -426,10 +441,11 @@ class RunManager:
                                 "extended": True,
                             },
                         )
-                        if self.blackboard_store is not None:
-                            self.blackboard_store.init(run_id)
-                        if self.todo_store is not None:
-                            self.todo_store.init(run_id, [
+                        initial_state: dict[str, Any] = {
+                            "run_id": run_id, "blackboard": {}, "todos": {}
+                        }
+                        BlackboardStateOps(initial_state).init()
+                        TodoStateOps(initial_state).init([
                                 {
                                     **node.model_dump(),
                                     "content": node.title,
@@ -446,6 +462,8 @@ class RunManager:
                                 "project_id": project_id or "",
                                 "inputs": flow_inputs or {},
                                 "blackboard": {},
+                                "blackboard_revision": 0,
+                                "todos": initial_state["todos"],
                                 "loop_counters": {},
                             },
                             config={
@@ -455,6 +473,8 @@ class RunManager:
                                 ),
                             },
                         )
+                        if self.runtime_files is not None:
+                            self.runtime_files.save_state(run_id, dict(output))
                     else:
                         output = self.flow_engine.execute(
                             flow=flow,
@@ -522,8 +542,6 @@ class RunManager:
                     rag_executor=self.rag_executor,
                     chat_executor=self.chat_executor,
                     file_agent_executor=self.file_agent_executor,
-                    blackboard_store=self.blackboard_store,
-                    todo_store=self.todo_store,
                     yaml_compiler=self.yaml_compiler,
                     flow_store=self.flow_store,
                     reviewer=self.reviewer,
@@ -571,6 +589,8 @@ class RunManager:
                 )
             )
             final_answer = output.get("final_answer", "")
+            if self.runtime_files is not None:
+                self.runtime_files.save_state(run_id, dict(output))
             if cancel_event.is_set():
                 status = "cancelled"
             elif project_mode == "interactive" and not final_answer:

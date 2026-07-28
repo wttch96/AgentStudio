@@ -9,7 +9,6 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from app.storage.sqlite_store import SQLiteStore
 from app.domain.models import Project, ProjectAgent
 
 logger = logging.getLogger(__name__)
@@ -23,8 +22,7 @@ logger = logging.getLogger(__name__)
 class ProjectManager:
     """项目 + Agent 管理。文件优先，DB 为缓存。"""
 
-    def __init__(self, store: SQLiteStore, config_reader: Any = None) -> None:
-        self.store = store
+    def __init__(self, config_reader: Any = None) -> None:
         self.config_reader = config_reader
 
     # ── 项目 CRUD (file-backed) ──

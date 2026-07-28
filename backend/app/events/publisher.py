@@ -4,7 +4,7 @@ import logging
 from typing import Any
 
 from app.domain.models import RunEvent
-from app.storage.sqlite_store import SQLiteStore
+from app.storage.runtime_files import RuntimeFiles
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +23,8 @@ IMPORTANT_EVENTS = {
 
 
 class EventPublisher:
-    def __init__(self, store: SQLiteStore) -> None:
-        self.store = store
+    def __init__(self, runtime_dir) -> None:
+        self.files = RuntimeFiles(runtime_dir)
 
     def emit(
         self,
@@ -42,7 +42,12 @@ class EventPublisher:
             task_id=task_id,
             payload=payload or {},
         )
-        saved = self.store.append_event(event)
+        event.sequence = self.files.append_next_event(run_id, {
+            "run_id": event.run_id, "sequence": event.sequence, "type": event.type,
+            "timestamp": event.timestamp, "agent_id": event.agent_id,
+            "task_id": event.task_id, "payload": event.payload,
+        })
+        saved = event
         log = logger.info if event_type in IMPORTANT_EVENTS else logger.debug
         log(
             "event.emitted run_id=%s sequence=%s type=%s agent_id=%s task_id=%s payload_keys=%s",
@@ -54,3 +59,6 @@ class EventPublisher:
             ",".join(sorted(event.payload)) or "-",
         )
         return saved
+
+    def list_events(self, run_id: str, after: int = 0) -> list[dict[str, Any]]:
+        return [event for event in self.files.list_events(run_id) if event["sequence"] > after]
